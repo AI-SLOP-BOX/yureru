@@ -5,6 +5,7 @@ import AVFoundation
 
 class MainFlutterWindow: NSWindow {
   private var mediaPickerChannel: FlutterMethodChannel?
+  private var appExitChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -23,6 +24,7 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     registerMediaPicker(flutterViewController)
+    registerAppExit(flutterViewController)
 
     super.awakeFromNib()
 
@@ -32,6 +34,22 @@ class MainFlutterWindow: NSWindow {
       guard let self = self, self.frame.size.width < 1000 else { return }
       self.setFrame(windowFrame, display: true)
       self.center()
+    }
+  }
+
+  private func registerAppExit(_ flutterViewController: FlutterViewController) {
+    appExitChannel = FlutterMethodChannel(
+      name: "yureru/app_exit",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+  }
+
+  func prepareForTermination(completion: @escaping () -> Void) {
+    guard let appExitChannel else {
+      completion()
+      return
+    }
+    appExitChannel.invokeMethod("prepareForTermination", arguments: nil) { _ in
+      completion()
     }
   }
 

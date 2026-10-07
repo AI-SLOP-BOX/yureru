@@ -255,10 +255,9 @@ String fmtDuration(Duration d) {
 }
 
 /// Display title after removing invisible characters from file metadata.
-/// Empty or whitespace-only names fall back to '(無題)'.
+/// Empty or whitespace-only names remain empty.
 String displayTitle(String s) {
   final t = s.replaceAll(RegExp('[\u200b\ufeff\u200c\u200d\u2060]'), '').trim();
-  if (t.isEmpty) return '(無題)';
   return t;
 }
 

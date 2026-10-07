@@ -11,7 +11,6 @@ class SessionStore {
   const SessionStore();
   static const _kQueue = 'yureru.session.queue.v1';
   static const _kPositions = 'yureru.session.positions.v1';
-  static const _kMaxPositions = 200;
 
   Future<void> saveQueue(QueueState s) async {
     try {
@@ -53,14 +52,26 @@ class SessionStore {
 
   /// Remember [ms] for [id]; most-recently-touched ids are kept.
   Future<void> savePosition(String id, int ms) async {
-    if (ms <= 0) return;
+    if (ms < 0) return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      // Keep only the active video's position. This is a resume point, not a
+      // per-video watch history.
+      await p.setString(_kPositions, jsonEncode({id: ms}));
+    } catch (_) {}
+  }
+
+  Future<void> markActiveMedia(String id) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kPositions, jsonEncode({id: 0}));
+    } catch (_) {}
+  }
+
+  Future<void> clearPosition(String id) async {
     try {
       final all = await loadPositions();
-      all.remove(id);
-      all[id] = ms;
-      while (all.length > _kMaxPositions) {
-        all.remove(all.keys.first);
-      }
+      if (all.remove(id) == null) return;
       final p = await SharedPreferences.getInstance();
       await p.setString(_kPositions, jsonEncode(all));
     } catch (_) {}

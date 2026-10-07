@@ -128,4 +128,7 @@ class FakePlaybackEngine implements PlaybackEngine {
     disposed = true;
     await _completed.close();
   }
+
+  @override
+  Future<void> shutdown() => dispose();
 }

@@ -1952,8 +1952,8 @@ class _ExpandableVolumeState extends ConsumerState<_ExpandableVolume> {
 
   @override
   Widget build(BuildContext context) {
-    final engine = ref.watch(engineProvider);
-    final vol = engine.volume;
+    final volume = ref.watch(volumeProvider);
+    final playback = ref.read(playbackControllerProvider);
     final primaryControlColor = themeTextPrimary(context);
 
     return MouseRegion(
@@ -1979,19 +1979,21 @@ class _ExpandableVolumeState extends ConsumerState<_ExpandableVolume> {
               iconSize: 20,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              tooltip: vol == 0 ? 'ミュート解除' : 'ミュート',
+              tooltip: volume == 0 ? 'ミュート解除' : 'ミュート',
               icon: Icon(
-                vol == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                volume == 0
+                    ? Icons.volume_off_rounded
+                    : Icons.volume_up_rounded,
                 color: Colors.white,
               ),
               onPressed: () async {
                 widget.onHoverActivity();
-                if (vol == 0) {
+                if (volume == 0) {
                   final restore = _beforeMute > 0 ? _beforeMute : 1.0;
-                  await engine.setVolume(restore);
+                  await playback.setVolume(restore);
                 } else {
-                  _beforeMute = vol;
-                  await engine.setVolume(0);
+                  _beforeMute = volume;
+                  await playback.setVolume(0);
                 }
               },
             ),
@@ -2016,10 +2018,10 @@ class _ExpandableVolumeState extends ConsumerState<_ExpandableVolume> {
                           ),
                         ),
                         child: Slider(
-                          value: vol.clamp(0.0, 1.0),
+                          value: volume.clamp(0.0, 1.0),
                           onChanged: (v) {
                             widget.onHoverActivity();
-                            engine.setVolume(v);
+                            unawaited(playback.setVolume(v));
                           },
                         ),
                       )

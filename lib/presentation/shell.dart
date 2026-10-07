@@ -30,7 +30,9 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> {
+class _AppShellState extends ConsumerState<AppShell>
+    with WidgetsBindingObserver {
+  static const _appExitChannel = MethodChannel('yureru/app_exit');
   Nav nav = Nav.library;
   String? detailPlaylistId;
   Nav _detailFrom = Nav.library;
@@ -43,6 +45,16 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _appExitChannel.setMethodCallHandler((call) async {
+      if (call.method == 'prepareForTermination') {
+        await ref.read(playbackControllerProvider).prepareForAppExit();
+        return null;
+      }
+      throw MissingPluginException(
+        'Unknown app lifecycle method: ${call.method}',
+      );
+    });
     Future.microtask(() async {
       if (!mounted) return;
       if (!ref.read(libraryProvider).loaded) {
@@ -51,6 +63,23 @@ class _AppShellState extends ConsumerState<AppShell> {
       if (!mounted) return;
       await ref.read(playbackControllerProvider).restoreSession();
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      ref.read(playbackControllerProvider).saveCurrentPosition();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    ref.read(playbackControllerProvider).saveCurrentPosition();
+    _appExitChannel.setMethodCallHandler(null);
+    super.dispose();
   }
 
   void _browse() {

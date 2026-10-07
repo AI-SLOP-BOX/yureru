@@ -10,10 +10,12 @@ import 'package:yureru/playback/playback_engine.dart';
 import 'dart:convert';
 
 ProviderContainer makeContainer(FakePlaybackEngine fake) {
-  return ProviderContainer(overrides: [
-    repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
-    engineProvider.overrideWithValue(fake),
-  ]);
+  return ProviderContainer(
+    overrides: [
+      repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
+      engineProvider.overrideWithValue(fake),
+    ],
+  );
 }
 
 void main() {
@@ -55,14 +57,18 @@ void main() {
     final fake = FakePlaybackEngine();
     final c = makeContainer(fake);
     final ctl = c.read(playbackControllerProvider);
-    const src = PlaybackSource(mediaId: 'mid', uri: 'http://192.168.0.2:8080/media/mid');
+    const src = PlaybackSource(
+      mediaId: 'mid',
+      uri: 'http://192.168.0.2:8080/media/mid',
+    );
     expect(src.isNetwork, true);
     await fake.load(src);
     expect(fake.loaded?.uri, src.uri);
     expect(ctl, isNotNull);
   });
 
-  Future<(ProviderContainer, FakePlaybackEngine, String, String)> setupTwoItemQueue() async {
+  Future<(ProviderContainer, FakePlaybackEngine, String, String)>
+  setupTwoItemQueue() async {
     final fake = FakePlaybackEngine();
     final c = makeContainer(fake);
     final repo = c.read(repositoryProvider) as InMemoryLibraryRepository;
@@ -74,7 +80,9 @@ void main() {
     final pl = c.read(libraryProvider).playlists.single;
     await c.read(libraryProvider.notifier).addToPlaylist(pl.id, a.id);
     await c.read(libraryProvider.notifier).addToPlaylist(pl.id, b.id);
-    await c.read(playbackControllerProvider).startPlaylist(pl.id, shuffle: false);
+    await c
+        .read(playbackControllerProvider)
+        .startPlaylist(pl.id, shuffle: false);
     return (c, fake, a.id, b.id);
   }
 
@@ -126,13 +134,14 @@ void main() {
     final fake = FakePlaybackEngine();
     final c = makeContainer(fake);
     final repo = c.read(repositoryProvider) as InMemoryLibraryRepository;
-    await repo.saveMedia(
-        [MediaItem(id: 'mid', title: 'M', localPath: '/tmp/m.mp4')]);
+    await repo.saveMedia([
+      MediaItem(id: 'mid', title: 'M', localPath: '/tmp/m.mp4'),
+    ]);
     await c.read(libraryProvider.notifier).load();
     await c.read(playbackControllerProvider).restoreSession();
     expect(c.read(queueProvider).currentId, 'mid');
     expect(fake.loaded?.uri, '/tmp/m.mp4');
-    expect(fake.seeks, contains(const Duration(milliseconds: 65000)));
+    expect(fake.loaded?.start, const Duration(milliseconds: 65000));
     expect(fake.snapshot.isPlaying, isFalse);
   });
 
@@ -153,21 +162,24 @@ void main() {
     expect(fake.loaded, isNull);
   });
 
-  test('handleMediaRemoved removes deleted item from queue and advances if playing', () async {
-    final fake = FakePlaybackEngine();
-    final c = makeContainer(fake);
-    final repo = c.read(repositoryProvider) as InMemoryLibraryRepository;
-    final a = MediaItem(id: 'a', title: 'A', localPath: '/tmp/a.mp4');
-    final b = MediaItem(id: 'b', title: 'B', localPath: '/tmp/b.mp4');
-    await repo.saveMedia([a, b]);
-    await c.read(libraryProvider.notifier).load();
-    c.read(queueProvider.notifier).start(['a', 'b'], shuffle: false);
-    final ctl = c.read(playbackControllerProvider);
-    await ctl.openCurrent();
-    expect(c.read(queueProvider).currentId, 'a');
+  test(
+    'handleMediaRemoved removes deleted item from queue and advances if playing',
+    () async {
+      final fake = FakePlaybackEngine();
+      final c = makeContainer(fake);
+      final repo = c.read(repositoryProvider) as InMemoryLibraryRepository;
+      final a = MediaItem(id: 'a', title: 'A', localPath: '/tmp/a.mp4');
+      final b = MediaItem(id: 'b', title: 'B', localPath: '/tmp/b.mp4');
+      await repo.saveMedia([a, b]);
+      await c.read(libraryProvider.notifier).load();
+      c.read(queueProvider.notifier).start(['a', 'b'], shuffle: false);
+      final ctl = c.read(playbackControllerProvider);
+      await ctl.openCurrent();
+      expect(c.read(queueProvider).currentId, 'a');
 
-    await ctl.handleMediaRemoved('a');
-    expect(c.read(queueProvider).currentId, 'b');
-    expect(fake.loaded?.uri, '/tmp/b.mp4');
-  });
+      await ctl.handleMediaRemoved('a');
+      expect(c.read(queueProvider).currentId, 'b');
+      expect(fake.loaded?.uri, '/tmp/b.mp4');
+    },
+  );
 }

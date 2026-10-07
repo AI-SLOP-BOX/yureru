@@ -242,9 +242,9 @@ class ImportedMediaScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final lib = ref.watch(libraryProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('インポート済みメディア')),
+      appBar: AppBar(title: const Text('動画タイトル・投稿者を編集')),
       body: lib.media.isEmpty
-          ? const Center(child: Text('メディアがありません。「動画をインポート」から追加してください。'))
+          ? const Center(child: Text('動画がありません。'))
           : ListView.builder(itemCount: lib.media.length, itemBuilder: (c, i) {
               final m = lib.media[i];
               return Dismissible(key: ValueKey(m.id), direction: DismissDirection.endToStart,
@@ -262,10 +262,63 @@ class ImportedMediaScreen extends ConsumerWidget {
                         size: 40,
                         radius: 8),
                     title: Text(displayTitle(m.title)),
-                  subtitle: Text(
-                      m.origin == 'referenced' ? '参照' : 'インポート済み',
-                      style: const TextStyle(fontSize: 12))));
+                  subtitle: Text(m.artist?.trim().isNotEmpty == true
+                      ? m.artist!.trim()
+                      : (m.origin == 'referenced' ? '投稿者未設定 • 参照' : '投稿者未設定')),
+                  trailing: IconButton(
+                    tooltip: '編集',
+                    icon: const Icon(Icons.edit_rounded),
+                    onPressed: () => _editMedia(context, ref, m),
+                  ),
+                  onTap: () => _editMedia(context, ref, m),
+                ));
             }),
     );
+  }
+
+  Future<void> _editMedia(BuildContext context, WidgetRef ref, MediaItem media) async {
+    final titleController = TextEditingController(text: media.title);
+    final artistController = TextEditingController(text: media.artist ?? '');
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('動画情報を編集'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'タイトル'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: artistController,
+              decoration: const InputDecoration(labelText: '投稿者'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (save == true) {
+      final artist = artistController.text.trim();
+      await ref.read(libraryProvider.notifier).updateMediaMetadata(
+            media.id,
+            title: titleController.text.trim(),
+            artist: artist.isEmpty ? null : artist,
+          );
+    }
+    titleController.dispose();
+    artistController.dispose();
   }
 }

@@ -109,3 +109,57 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: build/yureru-linux-x64.tar.gz
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Android APK
+        run: flutter build apk --release
+
+      - name: Rename Android APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk build/yureru-android.apk
+
+      - name: Upload Android Release Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build/yureru-android.apk
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build unsigned iOS archive
+        run: flutter build ipa --release --no-codesign
+
+      - name: Archive unsigned iOS build
+        run: ditto -c -k --sequesterRsrc --keepParent build/ios/archive/Runner.xcarchive build/yureru-ios-unsigned.xcarchive.zip
+
+      - name: Upload iOS Release Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build/yureru-ios-unsigned.xcarchive.zip

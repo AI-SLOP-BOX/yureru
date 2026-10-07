@@ -31,39 +31,8 @@ class TransportBar extends ConsumerStatefulWidget {
 }
 
 class _TransportBarState extends ConsumerState<TransportBar> {
-  double _volume = 1.0;
   double _beforeMute = 1.0;
-  bool _isDraggingVolume = false;
   bool _volumeHover = false;
-  DateTime _lastLocalVolumeChange = DateTime.fromMillisecondsSinceEpoch(0);
-  StreamSubscription? _engineSub;
-
-  @override
-  void initState() {
-    super.initState();
-    final engine = ref.read(engineProvider);
-    _volume = engine.volume;
-    // Listen to engine snapshots only to synchronize external volume changes or play/pause states.
-    // High-frequency timeline updates are handled separately inside _TimelineBar.
-    _engineSub = engine.snapshots.listen((snap) {
-      if (!mounted) return;
-      // Guard against race conditions and echo jitter within 400ms of user slider/wheel adjustment
-      if (!_isDraggingVolume &&
-          DateTime.now().difference(_lastLocalVolumeChange).inMilliseconds >
-              400 &&
-          (_volume - engine.volume).abs() > 0.01) {
-        setState(() {
-          _volume = engine.volume;
-        });
-      }
-    }, onError: (_) {});
-  }
-
-  @override
-  void dispose() {
-    _engineSub?.cancel();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -420,39 +389,35 @@ class _TransportBarState extends ConsumerState<TransportBar> {
   }
 
   Widget _volumeControls(bool compact) {
-    final engine = ref.watch(engineProvider);
+    final volume = ref.watch(volumeProvider);
+    final playback = ref.read(playbackControllerProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Listener(
       onPointerSignal: (event) {
         if (event is PointerScrollEvent) {
           final delta = -event.scrollDelta.dy / 1000.0;
-          final next = (_volume + delta).clamp(0.0, 1.0);
-          _lastLocalVolumeChange = DateTime.now();
-          setState(() => _volume = next);
-          engine.setVolume(next);
+          final next = (volume + delta).clamp(0.0, 1.0).toDouble();
+          unawaited(playback.setVolume(next));
         }
       },
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            tooltip: _volume == 0 ? 'ミュート解除' : 'ミュート',
+            tooltip: volume == 0 ? 'ミュート解除' : 'ミュート',
             icon: Icon(
-              _volume == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+              volume == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded,
               size: 20,
             ),
             color: isDark ? Colors.white70 : const Color(0xFF475569),
             onPressed: () async {
-              _lastLocalVolumeChange = DateTime.now();
-              if (_volume == 0) {
+              if (volume == 0) {
                 final restore = _beforeMute > 0 ? _beforeMute : 1.0;
-                setState(() => _volume = restore);
-                await engine.setVolume(restore);
+                await playback.setVolume(restore);
               } else {
-                _beforeMute = _volume;
-                setState(() => _volume = 0);
-                await engine.setVolume(0);
+                _beforeMute = volume;
+                await playback.setVolume(0);
               }
             },
           ),
@@ -478,21 +443,8 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                     thumbColor: isDark ? Colors.white : const Color(0xFF1E293B),
                   ),
                   child: Slider(
-                    value: _volume.clamp(0.0, 1.0),
-                    onChangeStart: (_) {
-                      _isDraggingVolume = true;
-                      _lastLocalVolumeChange = DateTime.now();
-                    },
-                    onChanged: (v) {
-                      _lastLocalVolumeChange = DateTime.now();
-                      setState(() => _volume = v);
-                      engine.setVolume(v);
-                    },
-                    onChangeEnd: (v) {
-                      _lastLocalVolumeChange = DateTime.now();
-                      _isDraggingVolume = false;
-                      engine.setVolume(v);
-                    },
+                    value: volume.clamp(0.0, 1.0),
+                    onChanged: (v) => unawaited(playback.setVolume(v)),
                   ),
                 ),
               ),

@@ -24,6 +24,7 @@ class PlaylistDetailScreen extends ConsumerStatefulWidget {
 
 class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   bool _showSearch = false;
+  bool _sortByCreator = false;
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = '';
 
@@ -52,16 +53,39 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     final artworkGap = screenWidth < 600 ? 14.0 : 24.0;
 
     // Filter media items when search query is active
-    final filteredMediaIds = _searchQuery.trim().isEmpty
-        ? pl.mediaIds
-        : pl.mediaIds.where((id) {
-            final m = lib.byId(id);
-            if (m == null) return false;
-            final q = _searchQuery.trim().toLowerCase();
-            final titleMatch = m.title.toLowerCase().contains(q);
-            final artistMatch = m.artist?.toLowerCase().contains(q) ?? false;
-            return titleMatch || artistMatch;
-          }).toList();
+    final query = _searchQuery.trim().toLowerCase();
+    final filteredMediaIds =
+        (query.isEmpty
+                ? pl.mediaIds
+                : pl.mediaIds.where((id) {
+                    final m = lib.byId(id);
+                    if (m == null) return false;
+                    final titleMatch = m.title.toLowerCase().contains(query);
+                    final artistMatch = (m.artist ?? '')
+                        .trim()
+                        .toLowerCase()
+                        .contains(query);
+                    return titleMatch || artistMatch;
+                  }).toList())
+            .toList();
+    if (_sortByCreator) {
+      filteredMediaIds.sort((a, b) {
+        final aMedia = lib.byId(a);
+        final bMedia = lib.byId(b);
+        final aCreator = aMedia?.artist?.trim() ?? '';
+        final bCreator = bMedia?.artist?.trim() ?? '';
+        if (aCreator.isEmpty != bCreator.isEmpty) {
+          return aCreator.isEmpty ? 1 : -1;
+        }
+        final creatorOrder = aCreator.toLowerCase().compareTo(
+          bCreator.toLowerCase(),
+        );
+        if (creatorOrder != 0) return creatorOrder;
+        return (aMedia?.title ?? '').toLowerCase().compareTo(
+          (bMedia?.title ?? '').toLowerCase(),
+        );
+      });
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -334,6 +358,34 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             ),
           ),
 
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 2, 20, 2),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              PopupMenuButton<bool>(
+                tooltip: '並び替え',
+                initialValue: _sortByCreator,
+                onSelected: (value) => setState(() => _sortByCreator = value),
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: false, child: Text('プレイリスト順')),
+                  PopupMenuItem(value: true, child: Text('作成者順（未設定は下）')),
+                ],
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.sort, size: 18),
+                      SizedBox(width: 6),
+                      Text(_sortByCreator ? '作成者順' : 'プレイリスト順'),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 28),
           child: Divider(height: 1, color: Color(0x1FFFFFFF)),

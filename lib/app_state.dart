@@ -16,6 +16,9 @@ final importerProvider = Provider((_) => VideoImporter());
 final engineProvider = Provider<PlaybackEngine>(
   (_) => MediaKitPlaybackEngine(),
 );
+final volumeProvider = StateProvider<double>(
+  (ref) => ref.read(engineProvider).volume,
+);
 
 class LibraryState {
   final List<MediaItem> media;
@@ -65,6 +68,34 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     ];
     if (fresh.isEmpty) return;
     final m = [...state.media, ...fresh];
+    state = LibraryState(media: m, playlists: state.playlists, loaded: true);
+    await repo.saveMedia(m);
+  }
+
+  Future<void> updateMediaMetadata(
+    String id, {
+    required String title,
+    required String? artist,
+  }) async {
+    final current = state.byId(id);
+    if (current == null) return;
+    final m = state.media
+        .map(
+          (e) => e.id != id
+              ? e
+              : MediaItem(
+                  id: e.id,
+                  title: title,
+                  artist: artist,
+                  localPath: e.localPath,
+                  durationMs: e.durationMs,
+                  createdAt: e.createdAt,
+                  origin: e.origin,
+                  sourceFolderId: e.sourceFolderId,
+                  sourcePath: e.sourcePath,
+                ),
+        )
+        .toList();
     state = LibraryState(media: m, playlists: state.playlists, loaded: true);
     await repo.saveMedia(m);
   }

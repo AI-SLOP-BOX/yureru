@@ -56,6 +56,9 @@ abstract class PlaybackEngine {
 
   Future<void> dispose();
 
+  /// Release native playback resources before the desktop process exits.
+  Future<void> shutdown() => dispose();
+
   Stream<Duration> get positionStream;
   Stream<Duration> get durationStream;
   Stream<bool> get playingStream;

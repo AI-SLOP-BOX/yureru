@@ -672,7 +672,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('blank titles render as 無題 in queue', (tester) async {
+  testWidgets('blank titles do not render as 無題 in queue', (tester) async {
     final c = await pumpHomeWithMedia(
         tester, MediaItem(title: '​', localPath: '/tmp/t.mp4'));
     c.read(queueProvider.notifier).start(
@@ -680,7 +680,7 @@ void main() {
         shuffle: false);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('(無題)'), findsWidgets);
+    expect(find.text('(無題)'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

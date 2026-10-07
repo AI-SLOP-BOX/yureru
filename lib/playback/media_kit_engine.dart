@@ -88,6 +88,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   Future<void> load(PlaybackSource source, {bool autoplay = true}) async {
     _completedFired = false;
     final p = _ensurePlayer();
+    await _ensureVideoController(p);
     _snap = const PlaybackSnapshot(initialized: false);
     _snapCtrl.add(_snap);
     await p.open(
@@ -96,12 +97,21 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     );
     if (_rate != 1.0) await p.setRate(_rate);
     _snap = PlaybackSnapshot(
-      position: _snap.position,
-      duration: _snap.duration,
-      isPlaying: autoplay,
+      position: p.state.position,
+      duration: p.state.duration,
+      isPlaying: p.state.playing,
       initialized: true,
     );
     _snapCtrl.add(_snap);
+  }
+
+  Future<void> _ensureVideoController(mk.Player player) async {
+    final controller = _vc ??= mkv.VideoController(player);
+    try {
+      await controller.platform.future;
+    } catch (_) {
+      // Audio playback can still proceed if native video output is unavailable.
+    }
   }
 
   @override
@@ -203,5 +213,14 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     // NOTE: snapshot/completed controllers stay open — the engine lives as a
     // singleton via provider for the whole app lifetime. Closing them here
     // would break any later load() with "add after close".
+  }
+
+  @override
+  Future<void> shutdown() async {
+    final hadPlayer = _player != null;
+    await dispose();
+    // media_kit 1.2.6 schedules mpv_terminate_destroy five seconds after
+    // Player.dispose(). Keep Flutter alive until that native thread is gone.
+    if (hadPlayer) await Future<void>.delayed(const Duration(seconds: 6));
   }
 }

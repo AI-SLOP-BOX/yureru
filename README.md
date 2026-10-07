@@ -24,8 +24,8 @@ Import: Settings → Library Management → Import Videos.
   enters the player (+queue); nav taps return to browsing; auto-advance
   never steals the screen. Returning via transport/mini-player never
   reopens a user-closed queue. Transport bar hides when idle.
-- Session restore: queue layout + per-video positions persist; launch
-  preloads paused at the last position (no autoplay).
+- Session restore: the last active video's position persists; launch preloads
+  it paused at the last position (no autoplay).
 - Cmd/Ctrl+K global search palette (videos + playlists); TopBar field
   filters only the current list. Logo (always top-left) goes home.
 - Media/image toggle hides video only; engine (position, speed, volume,

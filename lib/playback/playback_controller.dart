@@ -24,6 +24,12 @@ class PlaybackController {
 
   PlaybackEngine get engine => ref.read(engineProvider);
 
+  Future<void> setVolume(double volume) async {
+    final value = volume.clamp(0.0, 1.0).toDouble();
+    ref.read(volumeProvider.notifier).state = value;
+    await engine.setVolume(value);
+  }
+
   void _hookCompleted() {
     if (_hooked) return;
     _hooked = true;
@@ -52,11 +58,19 @@ class PlaybackController {
     }, onError: (_) {});
   }
 
-  void _saveNow() {
+  void saveCurrentPosition() => unawaited(_saveNow());
+
+  Future<void> _saveNow() async {
     final id = _loadedId ?? ref.read(queueProvider).currentId;
     final ms = engine.snapshot.position.inMilliseconds;
     if (id == null || ms < 3000) return;
-    unawaited(ref.read(sessionStoreProvider).savePosition(id, ms));
+    await ref.read(sessionStoreProvider).savePosition(id, ms);
+  }
+
+  Future<void> prepareForAppExit() async {
+    await _saveNow();
+    if (engine.snapshot.initialized) await engine.pause();
+    await engine.shutdown();
   }
 
   /// End-of-track handler honoring repeat mode. Debounced because some engines
@@ -66,6 +80,10 @@ class PlaybackController {
     if (now.difference(_lastEnded).inMilliseconds < 400) return;
     _lastEnded = now;
     final q = ref.read(queueProvider);
+    final endedId = q.currentId;
+    if (endedId != null) {
+      await ref.read(sessionStoreProvider).clearPosition(endedId);
+    }
     if (q.repeat == 'one') {
       try {
         await engine.seekTo(Duration.zero);
@@ -120,10 +138,12 @@ class PlaybackController {
       // Push rate first so engine.load() opens with the right speed.
       await engine.setPlaybackRate(q.speed);
       // Remember where the outgoing track stopped before switching.
-      if (_loadedId != null && _loadedId != id) _saveNow();
+      if (_loadedId != null && _loadedId != id) await _saveNow();
+      final start = await _savedStart(id, m.durationMs);
+      await ref.read(sessionStoreProvider).markActiveMedia(id);
       try {
         await engine.load(
-          PlaybackSource(mediaId: id, uri: m.localPath),
+          PlaybackSource(mediaId: id, uri: m.localPath, start: start),
           autoplay: true,
         );
         _loadedId = id;
@@ -137,6 +157,23 @@ class PlaybackController {
       }
     } finally {
       _openingIds.remove(id);
+    }
+  }
+
+  Future<Duration?> _savedStart(String id, int? durationMs) async {
+    try {
+      final store = ref.read(sessionStoreProvider);
+      final ms = (await store.loadPositions())[id];
+      if (ms == null || ms <= 3000) return null;
+      // A position at the end is stale; start a completed video from the top.
+      if (durationMs != null && ms >= durationMs - 1000) {
+        await store.clearPosition(id);
+        return null;
+      }
+      return Duration(milliseconds: ms);
+    } catch (_) {
+      // A failed position lookup must not prevent the video from playing.
+      return null;
     }
   }
 
@@ -160,7 +197,7 @@ class PlaybackController {
     final s = engine.snapshot;
     if (s.isPlaying) {
       await engine.pause();
-      _saveNow();
+      unawaited(_saveNow());
     } else {
       await engine.play();
     }
@@ -208,19 +245,14 @@ class PlaybackController {
       if (id == null) return;
       final m = lib.byId(id);
       if (m == null) return;
+      final start = await _savedStart(id, m.durationMs);
       await engine.setPlaybackRate(q.speed);
       await engine.load(
-        PlaybackSource(mediaId: id, uri: m.localPath),
+        PlaybackSource(mediaId: id, uri: m.localPath, start: start),
         autoplay: false,
       );
       _loadedId = id;
-      final positions = await store.loadPositions();
-      final ms = positions[id];
-      if (ms != null && ms > 3000) {
-        try {
-          await engine.seekTo(Duration(milliseconds: ms));
-        } catch (_) {}
-      }
+      ref.read(viewingPlayerProvider.notifier).state = true;
     } catch (_) {
       // Session restore must never break launch.
     }
