@@ -178,8 +178,9 @@ class VideoImporter {
         if (!skipSourcePaths.contains(p)) p,
     ];
     final skipped = files.length - fresh.length;
-    if (skipped > 0)
+    if (skipped > 0) {
       debugPrint('import: skipped $skipped already-imported file(s)');
+    }
     final out = <MediaItem>[];
     for (var i = 0; i < fresh.length; i++) {
       final src = fresh[i];

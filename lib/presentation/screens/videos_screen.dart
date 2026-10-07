@@ -152,8 +152,9 @@ class VideosScreen extends ConsumerWidget {
                 onPlayNext: () {
                   final wasEmpty = !ref.read(queueProvider).hasCurrent;
                   ref.read(queueProvider.notifier).playNext(m.id);
-                  if (wasEmpty)
+                  if (wasEmpty) {
                     ref.read(playbackControllerProvider).openCurrent();
+                  }
                 },
                 onEnqueue: () => ref.read(queueProvider.notifier).append(m.id),
                 onDelete: () => _confirmDelete(context, ref, m),
@@ -439,7 +440,7 @@ class _TrackRowState extends State<_TrackRow> {
                       children: [
                         Icon(Icons.queue_music, size: 20),
                         SizedBox(width: 10),
-                        Text('次に再生'),
+                        Text('キューに追加'),
                       ],
                     ),
                   ),

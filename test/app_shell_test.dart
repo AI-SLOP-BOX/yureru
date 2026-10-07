@@ -414,9 +414,14 @@ void main() {
     ));
     await tester.pumpAndSettle();
     final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final now = DateTime.now();
     await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
-      MediaItem(title: 'B動画', localPath: '/tmp/b.mp4'),
-      MediaItem(title: 'A動画', localPath: '/tmp/a.mp4'),
+      MediaItem(
+        title: 'B動画',
+        localPath: '/tmp/b.mp4',
+        createdAt: now.add(const Duration(seconds: 1)),
+      ),
+      MediaItem(title: 'A動画', localPath: '/tmp/a.mp4', createdAt: now),
     ]);
     await c.read(libraryProvider.notifier).load();
     await tester.tap(find.text('すべての動画'));

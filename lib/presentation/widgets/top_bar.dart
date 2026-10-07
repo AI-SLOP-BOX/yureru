@@ -389,8 +389,9 @@ class _TopBarState extends ConsumerState<TopBar> {
                                             onPressed: _clearSearch,
                                           );
                                         }
-                                        if (isCompact)
+                                        if (isCompact) {
                                           return const SizedBox.shrink();
+                                        }
                                         return Padding(
                                           padding: const EdgeInsets.only(
                                             right: 8,
