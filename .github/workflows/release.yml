@@ -155,6 +155,12 @@ jobs:
       - name: Build unsigned iOS archive
         run: flutter build ipa --release --no-codesign
 
+      - name: Package unsigned iOS IPA
+        run: |
+          mkdir -p build/ios/Payload
+          cp -R build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app build/ios/Payload/Runner.app
+          (cd build/ios && /usr/bin/zip -qry -y yureru-ios-unsigned.ipa Payload)
+
       - name: Build iOS Simulator app
         run: xcodebuild -quiet -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/ios/SimulatorDerived ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build
 
@@ -168,5 +174,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
+            build/ios/yureru-ios-unsigned.ipa
             build/yureru-ios-unsigned.xcarchive.zip
             build/yureru-ios-simulator-arm64.zip
