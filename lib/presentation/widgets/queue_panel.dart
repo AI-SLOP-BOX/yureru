@@ -7,19 +7,8 @@ import '../theme.dart';
 import 'duration_text.dart';
 import 'thumb_image.dart';
 
-List<int> _queueDisplayIndices(QueueState queue) {
-  if (!queue.hasCurrent) {
-    return List<int>.generate(queue.queue.length, (index) => index);
-  }
-  return [
-    queue.index,
-    for (var i = queue.index - 1; i >= 0; i--) i,
-    for (var i = queue.index + 1; i < queue.queue.length; i++) i,
-  ];
-}
-
 /// Right panel: reorderable play queue (number, thumb, title, duration).
-class QueuePanel extends ConsumerWidget {
+class QueuePanel extends ConsumerStatefulWidget {
   final double width;
   final VoidCallback? onClose;
   final VoidCallback? onToggleExpanded;
@@ -37,14 +26,48 @@ class QueuePanel extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<QueuePanel> createState() => _QueuePanelState();
+}
+
+class _QueuePanelState extends ConsumerState<QueuePanel> {
+  static const double _queueRowExtent = 68;
+  final ScrollController _scrollController = ScrollController();
+  String? _lastCurrentId;
+  int? _lastCurrentIndex;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final q = ref.watch(queueProvider);
     final lib = ref.watch(libraryProvider);
     final engine = ref.watch(engineProvider);
-    final displayIndices = _queueDisplayIndices(q);
+    final displayIndices = List<int>.generate(q.queue.length, (index) => index);
+    if (q.hasCurrent &&
+        (q.currentId != _lastCurrentId || q.index != _lastCurrentIndex)) {
+      _lastCurrentId = q.currentId;
+      _lastCurrentIndex = q.index;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_scrollController.hasClients) return;
+        final position = _scrollController.position;
+        final target = (q.index * _queueRowExtent).clamp(
+          0.0,
+          position.maxScrollExtent,
+        );
+        _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+        );
+      });
+    }
     return Container(
-      width: width,
-      margin: margin ?? const EdgeInsets.fromLTRB(0, 12, 12, 12),
+      width: widget.width,
+      margin: widget.margin ?? const EdgeInsets.fromLTRB(0, 12, 12, 12),
       decoration: BoxDecoration(
         color: themePanelSolid(context),
         borderRadius: BorderRadius.circular(16),
@@ -64,10 +87,10 @@ class QueuePanel extends ConsumerWidget {
           Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (onToggleExpanded != null)
+              if (widget.onToggleExpanded != null)
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: onToggleExpanded,
+                  onTap: widget.onToggleExpanded,
                   child: SizedBox(
                     height: 26,
                     width: double.infinity,
@@ -87,7 +110,7 @@ class QueuePanel extends ConsumerWidget {
                           ),
                           const SizedBox(width: 8),
                           Icon(
-                            showCompactPreview
+                            widget.showCompactPreview
                                 ? Icons.keyboard_arrow_down_rounded
                                 : Icons.keyboard_arrow_up_rounded,
                             size: 18,
@@ -98,7 +121,7 @@ class QueuePanel extends ConsumerWidget {
                     ),
                   ),
                 ),
-              if (showCompactPreview && q.currentId != null)
+              if (widget.showCompactPreview && q.currentId != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
                   child: Row(
@@ -106,7 +129,7 @@ class QueuePanel extends ConsumerWidget {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(7),
                         child:
-                            compactPreview ??
+                            widget.compactPreview ??
                             ThumbImage(
                               seed: q.currentId!,
                               mediaId: lib.byId(q.currentId!)?.id,
@@ -173,13 +196,13 @@ class QueuePanel extends ConsumerWidget {
                         ),
                       ),
                     ),
-                    if (onClose != null) ...[
+                    if (widget.onClose != null) ...[
                       const Spacer(),
                       IconButton(
                         icon: const Icon(Icons.arrow_forward_rounded, size: 20),
                         tooltip: 'キューを閉じる (→)',
                         splashRadius: 18,
-                        onPressed: onClose,
+                        onPressed: widget.onClose,
                       ),
                     ],
                   ],
@@ -201,6 +224,8 @@ class QueuePanel extends ConsumerWidget {
                     ),
                   )
                 : ReorderableListView.builder(
+                    scrollController: _scrollController,
+                    itemExtent: _queueRowExtent,
                     buildDefaultDragHandles: false,
                     padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
                     itemCount: displayIndices.length,
