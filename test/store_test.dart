@@ -7,6 +7,20 @@ import 'package:yureru/domain/models.dart';
 import 'package:yureru/presentation/theme.dart';
 
 void main() {
+  test('manual video reorder is persisted in library order', () async {
+    final repo = InMemoryLibraryRepository();
+    final notifier = LibraryNotifier(repo);
+    final a = MediaItem(title: 'A', localPath: '/tmp/a.mp4');
+    final b = MediaItem(title: 'B', localPath: '/tmp/b.mp4');
+    final c = MediaItem(title: 'C', localPath: '/tmp/c.mp4');
+    await notifier.addMedia([a, b, c]);
+
+    await notifier.reorderMedia(2, 0);
+
+    expect(notifier.state.media.map((item) => item.id), [c.id, a.id, b.id]);
+    expect((await repo.loadMedia()).map((item) => item.id), [c.id, a.id, b.id]);
+  });
+
   test(
     'playlist independent of folders; same media in two playlists',
     () async {

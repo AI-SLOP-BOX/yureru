@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
+import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
 import '../theme.dart';
 import 'repeat_icon.dart';
@@ -180,15 +181,9 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         ),
       );
     }
-    String subtitle = '';
-    if (q.sourcePlaylistId != null) {
-      final plName = lib.playlistById(q.sourcePlaylistId!)?.name;
-      subtitle = plName == null || plName.isEmpty
-          ? 'プレイリスト'
-          : displayTitle(plName);
-    } else if (media.artist != null) {
-      subtitle = media.artist!;
-    }
+    // Keep this line about the video's creator; playlist names here looked
+    // like creator metadata when the video had no artist set.
+    final subtitle = formatCreatorNames(media.artist);
     final engine = ref.watch(engineProvider);
     final isVideoPlaying = engine.snapshot.initialized;
     final mode = ref.watch(playerViewModeProvider);
@@ -275,17 +270,19 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                       color: themeTextPrimary(context),
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: themeTextSub(context),
-                      fontWeight: FontWeight.w400,
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: themeTextSub(context),
+                        fontWeight: FontWeight.w400,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -311,6 +308,9 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         ? const Color(0xFF9E9EA2)
         : const Color(0xFF525256);
     final disabledIconColor = isDark ? Colors.white30 : Colors.black26;
+    // Keep the desktop play-to-skip glyph ratio on compact layouts as well.
+    final previousNextIconSize = 30.0;
+    final playPauseIconSize = desktop ? 42.0 : previousNextIconSize * 42 / 30;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -329,7 +329,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         IconButton(
           tooltip: '前の動画',
           icon: TransportIcon.previous(
-            size: 30,
+            size: previousNextIconSize,
             color: has ? arrowIconColor : disabledIconColor,
           ),
           color: has ? arrowIconColor : disabledIconColor,
@@ -354,7 +354,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                   child: Icon(
                     isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                     color: has ? playIconColor : disabledIconColor,
-                    size: desktop ? 42 : 26,
+                    size: playPauseIconSize,
                   ),
                 ),
               ),
@@ -365,7 +365,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         IconButton(
           tooltip: '次の動画',
           icon: SkipNextIcon(
-            size: 30,
+            size: previousNextIconSize,
             color: has ? arrowIconColor : disabledIconColor,
           ),
           onPressed: q.hasCurrent ? () => ctl.playNext() : null,

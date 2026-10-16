@@ -88,6 +88,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   Future<void> load(PlaybackSource source, {bool autoplay = true}) async {
     _completedFired = false;
     final p = _ensurePlayer();
+    await _enableHardwareDecoding(p);
     await _ensureVideoController(p);
     _snap = const PlaybackSnapshot(initialized: false);
     _snapCtrl.add(_snap);
@@ -103,6 +104,21 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
       initialized: true,
     );
     _snapCtrl.add(_snap);
+  }
+
+  Future<void> _enableHardwareDecoding(mk.Player player) async {
+    // Ask mpv to use a safe hardware decoder when the platform provides one.
+    // `auto-safe` falls back to software decoding for unsupported codecs or
+    // devices, so AV1 playback remains available without requiring hardware
+    // AV1 support.
+    final platform = player.platform;
+    if (platform is mk.NativePlayer) {
+      try {
+        await platform.setProperty('hwdec', 'auto-safe');
+      } catch (_) {
+        // Hardware decoding is an optimization; software playback can proceed.
+      }
+    }
   }
 
   Future<void> _ensureVideoController(mk.Player player) async {
@@ -216,11 +232,5 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   }
 
   @override
-  Future<void> shutdown() async {
-    final hadPlayer = _player != null;
-    await dispose();
-    // media_kit 1.2.6 schedules mpv_terminate_destroy five seconds after
-    // Player.dispose(). Keep Flutter alive until that native thread is gone.
-    if (hadPlayer) await Future<void>.delayed(const Duration(seconds: 6));
-  }
+  Future<void> shutdown() => dispose();
 }

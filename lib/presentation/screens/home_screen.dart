@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
+import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
 import '../theme.dart';
 import '../layout_metrics.dart';
@@ -65,13 +66,27 @@ class PageHeader extends StatelessWidget {
 }
 
 /// Library home: playlist grid (player card sits above this in the shell).
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   final ValueChanged<String>? onOpenPlaylist;
   final VoidCallback? onOpenVideos;
   const HomeScreen({super.key, this.onOpenPlaylist, this.onOpenVideos});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  final ScrollController _libraryScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _libraryScrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = this.ref;
     final lib = ref.watch(libraryProvider);
     final query = ref.watch(searchQueryProvider).trim().toLowerCase();
     if (!lib.loaded) return const Center(child: CircularProgressIndicator());
@@ -121,128 +136,148 @@ class HomeScreen extends ConsumerWidget {
       children: [
         PageHeader(title: 'ライブラリ', trailing: headerTrailing),
         Expanded(
-          child: CustomScrollView(
-            slivers: [
-              if (query.isEmpty)
-                SliverToBoxAdapter(
-                  child: _RecentStrip(onOpenVideos: onOpenVideos),
-                ),
+          child: Scrollbar(
+            controller: _libraryScrollController,
+            thumbVisibility: true,
+            interactive: true,
+            child: CustomScrollView(
+              controller: _libraryScrollController,
+              primary: false,
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                if (query.isEmpty)
+                  SliverToBoxAdapter(
+                    child: _RecentStrip(onOpenVideos: widget.onOpenVideos),
+                  ),
 
-              // 1. Matching songs/videos section (shown when searching)
-              if (query.isNotEmpty) ...[
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.music_note_rounded,
-                          size: 18,
-                          color: kAccent,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '曲・動画 (${matchingSongs.length}件)',
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
+                // 1. Matching songs/videos section (shown when searching)
+                if (query.isNotEmpty) ...[
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.music_note_rounded,
+                            size: 18,
+                            color: kAccent,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 6),
+                          Text(
+                            '曲・動画 (${matchingSongs.length}件)',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                if (matchingSongs.isEmpty)
-                  const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
+                  if (matchingSongs.isEmpty)
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 12,
+                        ),
+                        child: Text(
+                          '一致する曲が見つかりません',
+                          style: TextStyle(color: kTextSub, fontSize: 13),
+                        ),
                       ),
-                      child: Text(
-                        '一致する曲が見つかりません',
-                        style: TextStyle(color: kTextSub, fontSize: 13),
-                      ),
-                    ),
-                  )
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
-                    sliver: SliverList(
-                      delegate: SliverChildBuilderDelegate((context, index) {
-                        final m = matchingSongs[index];
-                        final artistText =
-                            m.artist != null && m.artist!.isNotEmpty
-                            ? m.artist!
-                            : '';
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 6),
-                          decoration: BoxDecoration(
-                            color: themeCard(context),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: themeBorder(context)),
-                          ),
-                          child: ListTile(
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 2,
+                    )
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate((context, index) {
+                          final m = matchingSongs[index];
+                          final artistText = formatCreatorNames(m.artist);
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            decoration: BoxDecoration(
+                              color: themeCard(context),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: themeBorder(context)),
                             ),
-                            leading: ThumbImage(
-                              seed: m.id,
-                              mediaId: m.id,
-                              localPath: m.localPath,
-                              size: 44,
-                              radius: 8,
-                            ),
-                            title: Text(
-                              displayTitle(m.title),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 2,
                               ),
-                            ),
-                            subtitle: Row(
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    artistText,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: kTextSub,
+                              leading: ThumbImage(
+                                seed: m.id,
+                                mediaId: m.id,
+                                localPath: m.localPath,
+                                size: 44,
+                                radius: 8,
+                              ),
+                              title: Text(
+                                displayTitle(m.title),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              subtitle: Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      artistText,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: kTextSub,
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  '• ',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: kTextMuted,
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '• ',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: kTextMuted,
+                                    ),
                                   ),
-                                ),
-                                DurationText(
-                                  mediaId: m.id,
-                                  localPath: m.localPath,
-                                  durationMs: m.durationMs,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: kTextMuted,
+                                  DurationText(
+                                    mediaId: m.id,
+                                    localPath: m.localPath,
+                                    durationMs: m.durationMs,
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: kTextMuted,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            trailing: IconButton(
-                              tooltip: '再生',
-                              icon: const Icon(
-                                Icons.play_circle_fill_rounded,
-                                size: 30,
-                                color: kAccent,
+                                ],
                               ),
-                              onPressed: () {
+                              trailing: IconButton(
+                                tooltip: '再生',
+                                icon: const Icon(
+                                  Icons.play_circle_fill_rounded,
+                                  size: 30,
+                                  color: kAccent,
+                                ),
+                                onPressed: () {
+                                  showPlayerView(ref);
+                                  final order = [
+                                    for (final s in matchingSongs) s.id,
+                                  ];
+                                  ref
+                                      .read(queueProvider.notifier)
+                                      .start(order, shuffle: false);
+                                  ref
+                                      .read(queueProvider.notifier)
+                                      .jumpTo(index);
+                                  ref
+                                      .read(playbackControllerProvider)
+                                      .openCurrent();
+                                },
+                              ),
+                              onTap: () {
                                 showPlayerView(ref);
                                 final order = [
                                   for (final s in matchingSongs) s.id,
@@ -256,101 +291,90 @@ class HomeScreen extends ConsumerWidget {
                                     .openCurrent();
                               },
                             ),
-                            onTap: () {
-                              showPlayerView(ref);
-                              final order = [
-                                for (final s in matchingSongs) s.id,
-                              ];
-                              ref
-                                  .read(queueProvider.notifier)
-                                  .start(order, shuffle: false);
-                              ref.read(queueProvider.notifier).jumpTo(index);
-                              ref
-                                  .read(playbackControllerProvider)
-                                  .openCurrent();
-                            },
-                          ),
-                        );
-                      }, childCount: matchingSongs.length),
+                          );
+                        }, childCount: matchingSongs.length),
+                      ),
                     ),
-                  ),
-              ],
+                ],
 
-              // 2. Playlists section
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-                  child: Text(
-                    query.isEmpty
-                        ? 'あなたのプレイリスト'
-                        : 'プレイリスト (${playlists.length}件)',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-              if (playlists.isEmpty)
+                // 2. Playlists section
                 SliverToBoxAdapter(
-                  child: Center(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 24),
-                      child: Text(
-                        query.isEmpty
-                            ? 'プレイリストはサイドバーの＋から作成できます'
-                            : '一致するプレイリストがありません',
-                        style: const TextStyle(color: kTextSub, fontSize: 13),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
+                    child: Text(
+                      query.isEmpty
+                          ? 'あなたのプレイリスト'
+                          : 'プレイリスト (${playlists.length}件)',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
-                )
-              else
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 4, 24, 20),
-                  sliver: SliverGrid(
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 230,
-                          childAspectRatio: 1.05,
-                          mainAxisSpacing: 14,
-                          crossAxisSpacing: 14,
-                        ),
-                    delegate: SliverChildBuilderDelegate((c, i) {
-                      final pl = playlists[i];
-                      final first = pl.mediaIds.isEmpty
-                          ? null
-                          : lib.byId(pl.mediaIds.first);
-                      return _PlaylistCard(
-                        playlistId: pl.id,
-                        name: pl.name,
-                        count: pl.mediaIds.length,
-                        thumbMediaId: first?.id,
-                        thumbPath: first?.localPath,
-                        onOpen: onOpenPlaylist == null
-                            ? null
-                            : () => onOpenPlaylist!(pl.id),
-                        onPlay: pl.mediaIds.isEmpty
-                            ? null
-                            : () {
-                                showPlayerView(ref);
-                                ref
-                                    .read(playbackControllerProvider)
-                                    .startPlaylist(pl.id, shuffle: false);
-                              },
-                        onShuffle: pl.mediaIds.isEmpty
-                            ? null
-                            : () {
-                                showPlayerView(ref);
-                                ref
-                                    .read(playbackControllerProvider)
-                                    .startPlaylist(pl.id, shuffle: true);
-                              },
-                      );
-                    }, childCount: playlists.length),
-                  ),
                 ),
-            ],
+                if (playlists.isEmpty)
+                  SliverToBoxAdapter(
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Text(
+                          query.isEmpty
+                              ? 'プレイリストはサイドバーの＋から作成できます'
+                              : '一致するプレイリストがありません',
+                          style: const TextStyle(color: kTextSub, fontSize: 13),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    // Leave scroll room below the last row so playlists can be
+                    // moved clear of the fixed video preview / mini-player.
+                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 300),
+                    sliver: SliverGrid(
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: 230,
+                            childAspectRatio: 1.05,
+                            mainAxisSpacing: 14,
+                            crossAxisSpacing: 14,
+                          ),
+                      delegate: SliverChildBuilderDelegate((c, i) {
+                        final pl = playlists[i];
+                        final first = pl.mediaIds.isEmpty
+                            ? null
+                            : lib.byId(pl.mediaIds.first);
+                        return _PlaylistCard(
+                          playlistId: pl.id,
+                          name: pl.name,
+                          count: pl.mediaIds.length,
+                          thumbMediaId: first?.id,
+                          thumbPath: first?.localPath,
+                          onOpen: widget.onOpenPlaylist == null
+                              ? null
+                              : () => widget.onOpenPlaylist!(pl.id),
+                          onPlay: pl.mediaIds.isEmpty
+                              ? null
+                              : () {
+                                  showPlayerView(ref);
+                                  ref
+                                      .read(playbackControllerProvider)
+                                      .startPlaylist(pl.id, shuffle: false);
+                                },
+                          onShuffle: pl.mediaIds.isEmpty
+                              ? null
+                              : () {
+                                  showPlayerView(ref);
+                                  ref
+                                      .read(playbackControllerProvider)
+                                      .startPlaylist(pl.id, shuffle: true);
+                                },
+                        );
+                      }, childCount: playlists.length),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
         const PreviewBar(),
@@ -791,18 +815,41 @@ class PlaylistsScreen extends ConsumerWidget {
         .where((p) => query.isEmpty || p.name.toLowerCase().contains(query))
         .toList();
     if (playlists.isEmpty) {
-      return const Center(
-        child: Text(
-          'プレイリストがありません\nサイドバーの＋から作成できます',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: kTextSub),
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.queue_music_rounded, size: 48, color: kTextSub),
+            const SizedBox(height: 12),
+            const Text(
+              'プレイリストがありません',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: kTextSub),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => _createPlaylist(context, ref),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('プレイリストを作成'),
+            ),
+          ],
         ),
       );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        PageHeader(title: 'プレイリスト', trailing: '${playlists.length}個'),
+        PageHeader(
+          title: 'プレイリスト',
+          trailing: '${playlists.length}個',
+          actions: MediaQuery.sizeOf(context).width < 1000
+              ? IconButton.filledTonal(
+                  tooltip: 'プレイリストを作成',
+                  onPressed: () => _createPlaylist(context, ref),
+                  icon: const Icon(Icons.add_rounded),
+                )
+              : null,
+        ),
         Expanded(
           child: ListView.separated(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
@@ -875,5 +922,36 @@ class PlaylistsScreen extends ConsumerWidget {
         ),
       ],
     );
+  }
+}
+
+Future<void> _createPlaylist(BuildContext context, WidgetRef ref) async {
+  final controller = TextEditingController();
+  final name = await showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('新規プレイリスト'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(hintText: 'プレイリスト名'),
+        onSubmitted: (value) => Navigator.pop(dialogContext, value),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('キャンセル'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, controller.text),
+          child: const Text('作成'),
+        ),
+      ],
+    ),
+  );
+  controller.dispose();
+  if (name != null && name.trim().isNotEmpty) {
+    await ref.read(libraryProvider.notifier).createPlaylist(name.trim());
   }
 }

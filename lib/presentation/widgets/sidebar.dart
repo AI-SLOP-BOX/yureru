@@ -272,6 +272,7 @@ class _RailButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Material(
@@ -287,7 +288,9 @@ class _RailButton extends StatelessWidget {
               child: Icon(
                 icon,
                 size: 22,
-                color: selected ? kAccentLight : kTextSub,
+                color: selected
+                    ? (isDark ? kAccentLight : Colors.black87)
+                    : (isDark ? kTextSub : Colors.black54),
               ),
             ),
           ),
@@ -344,7 +347,7 @@ class _NavItem extends StatelessWidget {
                     width: 3.5,
                     height: selected ? 18 : 0,
                     decoration: BoxDecoration(
-                      color: kAccent,
+                      color: isDark ? kAccent : Colors.black87,
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),

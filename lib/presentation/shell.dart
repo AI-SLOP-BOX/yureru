@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:io';
 import '../app_state.dart';
 import '../data/session.dart';
+import '../platform/window_utils.dart';
 import '../playback/playback_controller.dart';
 import 'nav.dart';
 import 'layout_metrics.dart';
@@ -41,10 +42,12 @@ class _AppShellState extends ConsumerState<AppShell>
   double _sideW = 248;
   double _queueW = 336;
   bool? _wasWide;
+  PlaybackController? _playbackController;
 
   @override
   void initState() {
     super.initState();
+    _playbackController = ref.read(playbackControllerProvider);
     WidgetsBinding.instance.addObserver(this);
     _appExitChannel.setMethodCallHandler((call) async {
       if (call.method == 'prepareForTermination') {
@@ -77,7 +80,7 @@ class _AppShellState extends ConsumerState<AppShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    ref.read(playbackControllerProvider).saveCurrentPosition();
+    _playbackController?.saveCurrentPosition();
     _appExitChannel.setMethodCallHandler(null);
     super.dispose();
   }
@@ -118,6 +121,17 @@ class _AppShellState extends ConsumerState<AppShell>
   void _openSearch() {
     if (!mounted) return;
     unawaited(SearchOverlay.show(context, _openDetail));
+  }
+
+  void _submitSearch(String query) {
+    if (!mounted) return;
+    ref.read(searchQueryProvider.notifier).state = query;
+    ref.read(videoCreatorFilterProvider.notifier).state = null;
+    _browse();
+    setState(() {
+      nav = Nav.videos;
+      detailPlaylistId = null;
+    });
   }
 
   Widget _centerPage() {
@@ -194,8 +208,30 @@ class _AppShellState extends ConsumerState<AppShell>
     ref.listen<QueueState>(queueProvider, (_, next) {
       unawaited(ref.read(sessionStoreProvider).saveQueue(next));
     });
+    ref.listen<String?>(creatorVideosRequestProvider, (_, creator) {
+      if (creator == null || creator.trim().isEmpty || !mounted) return;
+      ref.read(creatorVideosRequestProvider.notifier).state = null;
+      ref.read(videoCreatorFilterProvider.notifier).state = creator.trim();
+      ref.read(searchQueryProvider.notifier).state = '';
+      _browse();
+      setState(() {
+        nav = Nav.videos;
+        detailPlaylistId = null;
+      });
+    });
+    ref.listen<String?>(videoOpenRequestProvider, (_, mediaId) {
+      if (mediaId == null || !mounted) return;
+      ref.read(videoCreatorFilterProvider.notifier).state = null;
+      ref.read(searchQueryProvider.notifier).state = '';
+      _browse();
+      setState(() {
+        nav = Nav.videos;
+        detailPlaylistId = null;
+      });
+    });
     // Desktop shortcuts (ignored while typing in TextField).
     final isMac = Platform.isMacOS;
+    final isPictureInPicture = ref.watch(pictureInPictureProvider);
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.space): () {
@@ -246,7 +282,14 @@ class _AppShellState extends ConsumerState<AppShell>
         ): () =>
             _openSearch(),
       },
-      child: Focus(autofocus: true, child: wide ? _wide() : _narrow()),
+      child: Focus(
+        autofocus: true,
+        child: isPictureInPicture
+            ? const _PictureInPictureView()
+            : wide
+            ? _wide()
+            : _narrow(),
+      ),
     );
   }
 
@@ -316,6 +359,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                 onToggleQueue: _toggleQueue,
                                 onLogoHome: _goLibrary,
                                 onOpenSearch: _openSearch,
+                                onSubmitSearch: _submitSearch,
                               ),
                               Expanded(
                                 child: LayoutBuilder(
@@ -416,33 +460,70 @@ class _AppShellState extends ConsumerState<AppShell>
     // Drawer for navigation (shown via hamburger button in TopBar).
     // Visible at all times including when player is active.
     final drawer = Drawer(
+      width: (MediaQuery.sizeOf(context).width - 56).clamp(260.0, 288.0),
+      backgroundColor: themePanelSolid(context),
+      elevation: 0,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(22)),
+        side: BorderSide(color: kGlassBorder),
+      ),
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              padding: const EdgeInsets.fromLTRB(22, 20, 18, 24),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Image.asset(
+                      'assets/yureru_logo.png',
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, _, _) => const Icon(
+                        Icons.music_note_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'yureru',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 0, 16, 10),
               child: Text(
-                'メニュー',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey.shade500,
+                'ライブラリ',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: kTextMuted,
+                  letterSpacing: 1.1,
                 ),
               ),
             ),
-            ListTile(
-              leading: const Icon(Icons.home_rounded),
-              title: const Text('ライブラリ'),
+            _CompactDrawerItem(
+              icon: Icons.home_rounded,
+              label: 'ライブラリ',
               selected: nav == Nav.library && detailId == null && !isPlayerMode,
               onTap: () {
                 Navigator.pop(context);
                 _setNav(Nav.library);
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.playlist_play_rounded),
-              title: const Text('プレイリスト'),
+            _CompactDrawerItem(
+              icon: Icons.playlist_play_rounded,
+              label: 'プレイリスト',
               selected:
                   nav == Nav.playlists && detailId == null && !isPlayerMode,
               onTap: () {
@@ -450,18 +531,18 @@ class _AppShellState extends ConsumerState<AppShell>
                 _setNav(Nav.playlists);
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.video_library_rounded),
-              title: const Text('すべての動画'),
+            _CompactDrawerItem(
+              icon: Icons.video_library_rounded,
+              label: 'すべての動画',
               selected: nav == Nav.videos && !isPlayerMode,
               onTap: () {
                 Navigator.pop(context);
                 _setNav(Nav.videos);
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.settings_rounded),
-              title: const Text('設定'),
+            _CompactDrawerItem(
+              icon: Icons.settings_rounded,
+              label: '設定',
               selected: nav == Nav.settings && !isPlayerMode,
               onTap: () {
                 Navigator.pop(context);
@@ -488,6 +569,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 onToggleQueue: _toggleQueue,
                 onLogoHome: _goLibrary,
                 onOpenSearch: _openSearch,
+                onSubmitSearch: _submitSearch,
               ),
             ),
           Expanded(
@@ -536,30 +618,156 @@ class _AppShellState extends ConsumerState<AppShell>
               mainAxisSize: MainAxisSize.min,
               children: [
                 MiniPlayer(onExpand: () => showPlayerView(ref)),
-                NavigationBar(
+                _CompactNavigationBar(
                   selectedIndex: detailId != null ? 1 : index.clamp(0, 3),
-                  onDestinationSelected: (i) => _setNav(Nav.values[i]),
-                  destinations: const [
-                    NavigationDestination(
-                      icon: Icon(Icons.home_rounded),
-                      label: 'ライブラリ',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.playlist_play_rounded),
-                      label: 'プレイリスト',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.video_library_rounded),
-                      label: '動画',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.settings_rounded),
-                      label: '設定',
-                    ),
-                  ],
+                  onSelected: (i) => _setNav(Nav.values[i]),
                 ),
               ],
             ),
+    );
+  }
+}
+
+class _CompactDrawerItem extends StatelessWidget {
+  const _CompactDrawerItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final color = selected
+        ? (isDark ? kAccentLight : Colors.black87)
+        : (isDark ? kTextSub : Colors.black54);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      child: Material(
+        color: selected
+            ? (isDark
+                  ? kAccent.withValues(alpha: 0.13)
+                  : Colors.black.withValues(alpha: 0.07))
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(13),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(13),
+          onTap: onTap,
+          child: SizedBox(
+            height: 48,
+            child: Row(
+              children: [
+                const SizedBox(width: 15),
+                Icon(icon, size: 21, color: color),
+                const SizedBox(width: 14),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected
+                        ? (isDark ? kTextPrimary : Colors.black87)
+                        : color,
+                    fontSize: 14,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactNavigationBar extends StatelessWidget {
+  const _CompactNavigationBar({
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  static const _items = [
+    (Icons.home_rounded, 'ライブラリ'),
+    (Icons.playlist_play_rounded, 'プレイリスト'),
+    (Icons.video_library_rounded, '動画'),
+    (Icons.settings_rounded, '設定'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: themePanelSolid(context),
+        border: Border(top: BorderSide(color: themeBorder(context))),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 58,
+          child: Row(
+            children: [
+              for (var i = 0; i < _items.length; i++)
+                Expanded(
+                  child: _CompactNavItem(
+                    icon: _items[i].$1,
+                    label: _items[i].$2,
+                    selected: i == selectedIndex,
+                    isDark: isDark,
+                    onTap: () => onSelected(i),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactNavItem extends StatelessWidget {
+  const _CompactNavItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.isDark,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final bool isDark;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = isDark ? kAccentLight : Colors.black87;
+    final idle = isDark ? kTextMuted : const Color(0xFF666666);
+    return InkWell(
+      onTap: onTap,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 21, color: selected ? active : idle),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: selected ? active : idle,
+              fontSize: 10,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -578,6 +786,89 @@ class _CinemaFadeIn extends StatelessWidget {
         child: IgnorePointer(ignoring: opacity < 0.85, child: child),
       ),
       child: const ColoredBox(color: Colors.black, child: PlayerCard()),
+    );
+  }
+}
+
+class _PictureInPictureView extends ConsumerWidget {
+  const _PictureInPictureView();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final engine = ref.watch(engineProvider);
+    final media = ref
+        .watch(libraryProvider)
+        .byId(
+          ref.watch(queueProvider.select((queue) => queue.currentId ?? '')),
+        );
+    final playback = ref.read(playbackControllerProvider);
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            engine.buildVideoView(),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Container(
+                height: 58,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Color(0xCC000000)],
+                  ),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        media?.title ?? '再生中',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    StreamBuilder<bool>(
+                      stream: engine.playingStream,
+                      initialData: engine.snapshot.isPlaying,
+                      builder: (context, state) {
+                        final playing = state.data ?? false;
+                        return IconButton(
+                          tooltip: playing ? '一時停止' : '再生',
+                          color: Colors.white,
+                          onPressed: playback.toggle,
+                          icon: Icon(
+                            playing
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                          ),
+                        );
+                      },
+                    ),
+                    IconButton(
+                      tooltip: '通常のウィンドウに戻す',
+                      color: Colors.white,
+                      onPressed: () async {
+                        await setPictureInPictureWindow(false);
+                        ref.read(pictureInPictureProvider.notifier).state =
+                            false;
+                      },
+                      icon: const Icon(Icons.picture_in_picture_alt_rounded),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

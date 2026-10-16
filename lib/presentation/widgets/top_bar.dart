@@ -14,12 +14,14 @@ class TopBar extends ConsumerStatefulWidget {
   final VoidCallback onToggleQueue;
   final VoidCallback onLogoHome;
   final VoidCallback onOpenSearch;
+  final ValueChanged<String> onSubmitSearch;
   const TopBar({
     super.key,
     required this.queueVisible,
     required this.onToggleQueue,
     required this.onLogoHome,
     required this.onOpenSearch,
+    required this.onSubmitSearch,
   });
 
   @override
@@ -88,10 +90,16 @@ class _TopBarState extends ConsumerState<TopBar> {
     });
   }
 
+  Future<void> _enterPictureInPicture() async {
+    await setPictureInPictureWindow(true);
+    if (mounted) ref.read(pictureInPictureProvider.notifier).state = true;
+  }
+
   void _onSearchSubmitted(String v) {
     _debounceTimer?.cancel();
     ref.read(searchQueryProvider.notifier).state = v;
     _searchFocusNode.unfocus();
+    if (v.trim().isNotEmpty) widget.onSubmitSearch(v.trim());
   }
 
   void _clearSearch() {
@@ -145,6 +153,9 @@ class _TopBarState extends ConsumerState<TopBar> {
         (defaultTargetPlatform == TargetPlatform.macOS ||
             defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux);
+    final canPictureInPicture = ref.watch(
+      queueProvider.select((queue) => queue.hasCurrent),
+    );
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -471,6 +482,18 @@ class _TopBarState extends ConsumerState<TopBar> {
                     onPressed: () =>
                         ref.read(themeModeProvider.notifier).toggle(),
                   ),
+                  if (isDesktop && !isCompact)
+                    IconButton(
+                      tooltip: 'ピクチャ・イン・ピクチャ',
+                      icon: Icon(
+                        Icons.picture_in_picture_alt_rounded,
+                        size: 21,
+                        color: iconColor,
+                      ),
+                      onPressed: canPictureInPicture
+                          ? _enterPictureInPicture
+                          : null,
+                    ),
                   if (isDesktop && !isCompact)
                     IconButton(
                       tooltip: 'フルスクリーン',

@@ -1,7 +1,7 @@
 name: yureru
 description: "Local videos, enjoyed like a music player."
 publish_to: 'none'
-version: 1.0.2+3
+version: 1.0.3+4
 environment:
   sdk: ^3.11.4
 dependencies:
@@ -21,6 +21,7 @@ dependencies:
   nsd: ^5.0.1
   flutter_svg: ^2.3.0
   package_info_plus: ^9.0.1
+  window_manager: ^0.5.2
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -33,3 +34,4 @@ flutter:
     - assets/skip_next.svg
     - assets/skip_previous.svg
     - assets/shuffle.svg
+    - assets/icons/

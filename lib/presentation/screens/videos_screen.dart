@@ -1,17 +1,48 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
+import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
 import '../theme.dart';
 import '../widgets/duration_text.dart';
 import '../widgets/thumb_image.dart';
 import 'home_screen.dart';
 
+bool _sharesCreator(String? mediaCredit, String selectedCredit) {
+  final selectedNames = splitCreatorNames(
+    selectedCredit,
+  ).map((name) => name.toLowerCase()).toSet();
+  if (selectedNames.isEmpty) return false;
+  final mediaNames = splitCreatorNames(
+    mediaCredit,
+  ).map((name) => name.toLowerCase()).toSet();
+  return mediaNames.intersection(selectedNames).isNotEmpty;
+}
+
 /// "すべての動画": Clean modern table view with track index, hover play preview,
 /// clean alignment, and context actions.
-class VideosScreen extends ConsumerWidget {
+class VideosScreen extends ConsumerStatefulWidget {
   const VideosScreen({super.key});
+
+  @override
+  ConsumerState<VideosScreen> createState() => _VideosScreenState();
+}
+
+class _VideosScreenState extends ConsumerState<VideosScreen> {
+  final ScrollController _scrollController = ScrollController();
+  Timer? _highlightTimer;
+  String? _highlightedId;
+  String? _scheduledRequestId;
+
+  @override
+  void dispose() {
+    _highlightTimer?.cancel();
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   void _playFromHere(WidgetRef ref, List<String> ids, int i) {
     showPlayerView(ref);
@@ -21,18 +52,22 @@ class VideosScreen extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    final ref = this.ref;
     final lib = ref.watch(libraryProvider);
     final query = ref.watch(searchQueryProvider).trim().toLowerCase();
+    final creatorFilter = ref.watch(videoCreatorFilterProvider)?.trim();
     final sort = ref.watch(videosSortProvider);
     final currentId = ref.watch(queueProvider.select((q) => q.currentId));
     if (!lib.loaded) return const Center(child: CircularProgressIndicator());
     final items = lib.media
         .where(
           (m) =>
-              query.isEmpty ||
-              m.title.toLowerCase().contains(query) ||
-              (m.artist?.toLowerCase().contains(query) ?? false),
+              (creatorFilter == null ||
+                  _sharesCreator(m.artist, creatorFilter)) &&
+              (query.isEmpty ||
+                  m.title.toLowerCase().contains(query) ||
+                  (m.artist?.toLowerCase().contains(query) ?? false)),
         )
         .toList();
     switch (sort) {
@@ -44,47 +79,121 @@ class VideosScreen extends ConsumerWidget {
         items.sort(
           (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
         );
+      case VideosSort.manual:
+        // Preserve the user's saved library order.
+        break;
     }
     if (items.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.movie_outlined, size: 56, color: kTextSub),
-              SizedBox(height: 14),
-              Text(
-                '動画がありません',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+      return Column(
+        children: [
+          if (creatorFilter != null)
+            PageHeader(
+              title: '作者: $creatorFilter',
+              actions: IconButton(
+                tooltip: '作者フィルターを解除',
+                icon: const Icon(Icons.close_rounded, size: 20),
+                onPressed: () =>
+                    ref.read(videoCreatorFilterProvider.notifier).state = null,
               ),
-              SizedBox(height: 8),
-              Text(
-                '設定 → ライブラリ管理から動画・フォルダをインポートできます',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: kTextSub, fontSize: 13),
+            ),
+          const Expanded(
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.movie_outlined, size: 56, color: kTextSub),
+                    SizedBox(height: 14),
+                    Text(
+                      '動画がありません',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      '設定 → ライブラリ管理から動画・フォルダをインポートできます',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: kTextSub, fontSize: 13),
+                    ),
+                  ],
+                ),
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       );
+    }
+    final requestedMediaId = ref.watch(videoOpenRequestProvider);
+    if (requestedMediaId != null && requestedMediaId != _scheduledRequestId) {
+      _scheduledRequestId = requestedMediaId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(videoOpenRequestProvider.notifier).state = null;
+        _scheduledRequestId = null;
+        final targetIndex = items.indexWhere(
+          (media) => media.id == requestedMediaId,
+        );
+        if (targetIndex < 0) return;
+        if (_scrollController.hasClients) {
+          final position = _scrollController.position;
+          final offset = (targetIndex * 56.0)
+              .clamp(0.0, position.maxScrollExtent)
+              .toDouble();
+          unawaited(
+            _scrollController.animateTo(
+              offset,
+              duration: const Duration(milliseconds: 450),
+              curve: Curves.easeOutCubic,
+            ),
+          );
+        }
+        _highlightTimer?.cancel();
+        setState(() => _highlightedId = requestedMediaId);
+        _highlightTimer = Timer(const Duration(milliseconds: 2600), () {
+          if (mounted) setState(() => _highlightedId = null);
+        });
+      });
     }
     final ids = [for (final m in items) m.id];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         PageHeader(
-          title: 'すべての動画',
+          title: creatorFilter == null ? 'すべての動画' : '作者: $creatorFilter',
           trailing: '${items.length}本',
-          actions: PopupMenuButton<VideosSort>(
-            tooltip: '並び替え',
-            icon: const Icon(Icons.sort, size: 20),
-            initialValue: sort,
-            onSelected: (v) => ref.read(videosSortProvider.notifier).state = v,
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: VideosSort.newestFirst, child: Text('新しい順')),
-              PopupMenuItem(value: VideosSort.oldestFirst, child: Text('古い順')),
-              PopupMenuItem(value: VideosSort.name, child: Text('名前順')),
+          actions: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (creatorFilter != null)
+                IconButton(
+                  tooltip: '作者フィルターを解除',
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                  onPressed: () =>
+                      ref.read(videoCreatorFilterProvider.notifier).state =
+                          null,
+                ),
+              PopupMenuButton<VideosSort>(
+                tooltip: '並び替え',
+                icon: const Icon(Icons.sort, size: 20),
+                initialValue: sort,
+                onSelected: (v) =>
+                    ref.read(videosSortProvider.notifier).state = v,
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: VideosSort.newestFirst,
+                    child: Text('新しい順'),
+                  ),
+                  PopupMenuItem(
+                    value: VideosSort.oldestFirst,
+                    child: Text('古い順'),
+                  ),
+                  PopupMenuItem(value: VideosSort.name, child: Text('名前順')),
+                  PopupMenuItem(value: VideosSort.manual, child: Text('手動順')),
+                ],
+              ),
             ],
           ),
         ),
@@ -136,33 +245,74 @@ class VideosScreen extends ConsumerWidget {
           child: Divider(height: 1, color: Color(0x1FFFFFFF)),
         ),
         Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-            itemCount: items.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 3),
-            itemBuilder: (c, i) {
-              final m = items[i];
-              final playing = m.id == currentId;
-              return _TrackRow(
-                index: i + 1,
-                media: m,
-                playing: playing,
-                onPlay: () => _playFromHere(ref, ids, i),
-                onAddToPlaylist: () => _addToPlaylist(context, ref, m.id),
-                onPlayNext: () {
-                  final wasEmpty = !ref.read(queueProvider).hasCurrent;
-                  ref.read(queueProvider.notifier).playNext(m.id);
-                  if (wasEmpty) {
-                    ref.read(playbackControllerProvider).openCurrent();
-                  }
-                },
-                onEnqueue: () => ref.read(queueProvider.notifier).append(m.id),
-                onDelete: () => _confirmDelete(context, ref, m),
-              );
-            },
-          ),
+          child:
+              sort == VideosSort.manual &&
+                  query.isEmpty &&
+                  creatorFilter == null
+              ? ReorderableListView.builder(
+                  scrollController: _scrollController,
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+                  itemCount: items.length,
+                  onReorder: (oldIndex, newIndex) {
+                    if (newIndex > oldIndex) newIndex--;
+                    ref
+                        .read(libraryProvider.notifier)
+                        .reorderMedia(oldIndex, newIndex);
+                  },
+                  itemBuilder: (context, i) => _buildTrackRow(
+                    context,
+                    ref,
+                    items,
+                    ids,
+                    currentId,
+                    i,
+                    reorderable: true,
+                  ),
+                )
+              : ListView.separated(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+                  itemCount: items.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 3),
+                  itemBuilder: (context, i) =>
+                      _buildTrackRow(context, ref, items, ids, currentId, i),
+                ),
         ),
       ],
+    );
+  }
+
+  Widget _buildTrackRow(
+    BuildContext context,
+    WidgetRef ref,
+    List<MediaItem> items,
+    List<String> ids,
+    String? currentId,
+    int i, {
+    bool reorderable = false,
+  }) {
+    final m = items[i];
+    final playing = m.id == currentId;
+    final row = _TrackRow(
+      index: i + 1,
+      media: m,
+      playing: playing,
+      highlighted: m.id == _highlightedId,
+      reorderable: reorderable,
+      onPlay: () => _playFromHere(ref, ids, i),
+      onAddToPlaylist: () => _addToPlaylist(context, ref, m.id),
+      onPlayNext: () {
+        final wasEmpty = !ref.read(queueProvider).hasCurrent;
+        ref.read(queueProvider.notifier).playNext(m.id);
+        if (wasEmpty) ref.read(playbackControllerProvider).openCurrent();
+      },
+      onEnqueue: () => ref.read(queueProvider.notifier).append(m.id),
+      onDelete: () => _confirmDelete(context, ref, m),
+    );
+    if (!reorderable) return row;
+    return KeyedSubtree(
+      key: ValueKey('video-${m.id}'),
+      child: ReorderableDelayedDragStartListener(index: i, child: row),
     );
   }
 
@@ -231,9 +381,11 @@ class VideosScreen extends ConsumerWidget {
 }
 
 class _TrackRow extends StatefulWidget {
+  final bool reorderable;
   final int index;
   final MediaItem media;
   final bool playing;
+  final bool highlighted;
   final VoidCallback onPlay;
   final VoidCallback onAddToPlaylist;
   final VoidCallback onPlayNext;
@@ -244,11 +396,13 @@ class _TrackRow extends StatefulWidget {
     required this.index,
     required this.media,
     required this.playing,
+    required this.highlighted,
     required this.onPlay,
     required this.onAddToPlaylist,
     required this.onPlayNext,
     required this.onEnqueue,
     required this.onDelete,
+    this.reorderable = false,
   });
 
   @override
@@ -278,11 +432,22 @@ class _TrackRowState extends State<_TrackRow> {
           decoration: BoxDecoration(
             color: _hover
                 ? rowHoverColor
-                : (widget.playing
-                      ? (isDark
-                            ? kAccent.withValues(alpha: 0.12)
-                            : kAccent.withValues(alpha: 0.08))
-                      : Colors.transparent),
+                : (widget.highlighted
+                      ? kAccent.withValues(alpha: isDark ? 0.24 : 0.18)
+                      : (widget.playing
+                            ? (isDark
+                                  ? kAccent.withValues(alpha: 0.12)
+                                  : kAccent.withValues(alpha: 0.08))
+                            : Colors.transparent)),
+            boxShadow: widget.highlighted
+                ? [
+                    BoxShadow(
+                      color: kAccent.withValues(alpha: 0.28),
+                      blurRadius: 16,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
@@ -364,7 +529,7 @@ class _TrackRowState extends State<_TrackRow> {
                     Text(
                       widget.media.artist != null &&
                               widget.media.artist!.trim().isNotEmpty
-                          ? widget.media.artist!
+                          ? formatCreatorNames(widget.media.artist)
                           : (widget.media.origin == 'referenced'
                                 ? '参照動画'
                                 : '動画'),
@@ -397,6 +562,15 @@ class _TrackRowState extends State<_TrackRow> {
                 ),
               ),
               const SizedBox(width: 8),
+              if (widget.reorderable)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Icon(
+                    Icons.drag_indicator_rounded,
+                    size: 20,
+                    color: isDark ? kTextMuted : Colors.black38,
+                  ),
+                ),
               // Action menu
               PopupMenuButton<String>(
                 tooltip: 'メニュー',

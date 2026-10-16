@@ -1,11 +1,13 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
-import '../../data/importer.dart';
+import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
+import '../../platform/window_utils.dart';
 import '../../playback/playback_controller.dart';
 import '../../playback/playback_engine.dart';
 import '../theme.dart';
@@ -245,6 +247,54 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     engine.setVideoTrackEnabled(newMode == PlayerViewMode.media);
   }
 
+  void _showAddToPlaylist(BuildContext context, MediaItem media) {
+    final playlists = ref.read(libraryProvider).playlists;
+    if (playlists.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('先にプレイリストを作成してください')));
+      return;
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 18, 20, 8),
+              child: Text(
+                'プレイリストに追加',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+            ),
+            for (final playlist in playlists)
+              ListTile(
+                leading: const Icon(Icons.playlist_add_rounded),
+                title: Text(displayTitle(playlist.name)),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  await ref
+                      .read(libraryProvider.notifier)
+                      .addToPlaylist(playlist.id, media.id);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          '「${displayTitle(playlist.name)}」に追加しました',
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _hideTimer?.cancel();
@@ -271,6 +321,12 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     final videoLayoutWidth = screenWidth;
     final isCompact = screenWidth < 1000;
     final isUltraCompact = screenWidth < 380;
+    final previousNextIconSize = isUltraCompact
+        ? 24.0
+        : (isCompact ? 28.0 : 34.0);
+    // Preserve the desktop proportion (60px play glyph to 34px skip glyph)
+    // at every responsive size so the primary action remains visually primary.
+    final playPauseIconSize = previousNextIconSize * 60 / 34;
     final isCinema = ref.watch(cinemaModeProvider);
 
     if (isCompact) {
@@ -319,7 +375,6 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     final playIconColor = isDark
         ? const Color(0xFF9E9EA2)
         : const Color(0xFF525256);
-
     return MouseRegion(
       cursor: _controlsVisible
           ? SystemMouseCursors.basic
@@ -508,7 +563,11 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                         : Center(
                             key: const ValueKey('player-mode-image'),
                             child: AspectRatio(
-                              aspectRatio: 1,
+                              // Keep artwork in the source video's frame ratio
+                              // in both normal and cinema views. A fixed square
+                              // made wide and portrait videos crop differently
+                              // every time the view mode changed.
+                              aspectRatio: videoAspectRatio,
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: themeCard(context),
@@ -672,6 +731,12 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                       ref
                                               .read(
                                                 viewingPlayerProvider.notifier,
+                                              )
+                                              .state =
+                                          false;
+                                      ref
+                                              .read(
+                                                queueVisibleProvider.notifier,
                                               )
                                               .state =
                                           false;
@@ -919,28 +984,26 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                                   ),
                                                 ),
                                                 const SizedBox(height: 2),
-                                                Text(
-                                                  media.artist ??
-                                                      (q.sourcePlaylistId !=
-                                                              null
-                                                          ? (lib
-                                                                    .playlistById(
-                                                                      q.sourcePlaylistId!,
-                                                                    )
-                                                                    ?.name ??
-                                                                '')
-                                                          : ''),
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: TextStyle(
-                                                    fontSize: isCompact
-                                                        ? 11
-                                                        : 12,
-                                                    fontWeight: FontWeight.w500,
-                                                    color: textSub,
+                                                if (media.artist
+                                                        ?.trim()
+                                                        .isNotEmpty ==
+                                                    true)
+                                                  Text(
+                                                    formatCreatorNames(
+                                                      media.artist,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      fontSize: isCompact
+                                                          ? 11
+                                                          : 12,
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                      color: textSub,
+                                                    ),
                                                   ),
-                                                ),
                                               ],
                                             ),
                                           ),
@@ -1015,9 +1078,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                               : null,
                                           tooltip: '前の動画',
                                           icon: TransportIcon.previous(
-                                            size: isUltraCompact
-                                                ? 24
-                                                : (isCompact ? 28 : 34),
+                                            size: previousNextIconSize,
                                             color: transportIconColor,
                                           ),
                                           onPressed: () {
@@ -1056,9 +1117,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                                 icon: AnimatedIcons.play_pause,
                                                 progress: _playPauseAnim,
                                                 color: playIconColor,
-                                                size: isUltraCompact
-                                                    ? 24
-                                                    : (isCompact ? 28 : 60),
+                                                size: playPauseIconSize,
                                               ),
                                             ),
                                           ),
@@ -1081,9 +1140,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                               : null,
                                           tooltip: '次の動画',
                                           icon: SkipNextIcon(
-                                            size: isUltraCompact
-                                                ? 24
-                                                : (isCompact ? 28 : 34),
+                                            size: previousNextIconSize,
                                             color: transportIconColor,
                                           ),
                                           onPressed: () {
@@ -1195,13 +1252,16 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                           MediaQuery.sizeOf(context).width,
                     ),
                   )
-                : Positioned.fill(
-                    child: ThumbImage(
-                      seed: media.id,
-                      mediaId: media.id,
-                      localPath: media.localPath,
-                      expand: true,
-                      highRes: true,
+                : Center(
+                    child: AspectRatio(
+                      aspectRatio: engine.videoAspectRatio ?? (16 / 9),
+                      child: ThumbImage(
+                        seed: media.id,
+                        mediaId: media.id,
+                        localPath: media.localPath,
+                        expand: true,
+                        highRes: true,
+                      ),
                     ),
                   ),
             Positioned(
@@ -1244,11 +1304,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
   }) {
     final showQueue = ref.watch(queueVisibleProvider);
     final title = displayTitle(media.title);
-    final artist =
-        media.artist ??
-        (q.sourcePlaylistId != null
-            ? (lib.playlistById(q.sourcePlaylistId!)?.name ?? '')
-            : '');
+    final artist = formatCreatorNames(media.artist);
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = themeTextPrimary(context);
@@ -1259,6 +1315,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     final playIconColor = isDark
         ? const Color(0xFF9E9EA2)
         : const Color(0xFF525256);
+    final compactPlayPauseSize = (MediaQuery.sizeOf(context).width * 0.14)
+        .clamp(48.0, 56.0)
+        .toDouble();
+    final compactSkipSize = compactPlayPauseSize * 34 / 60;
 
     return Scaffold(
       key: key,
@@ -1299,6 +1359,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                             .read(
                                               viewingPlayerProvider.notifier,
                                             )
+                                            .state =
+                                        false;
+                                    ref
+                                            .read(queueVisibleProvider.notifier)
                                             .state =
                                         false;
                                   },
@@ -1357,8 +1421,33 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                           color: themeBorder(context),
                                         ),
                                       ),
-                                      onSelected: (val) {},
+                                      onSelected: (val) {
+                                        if (val == 'add_to_playlist') {
+                                          _showAddToPlaylist(context, media);
+                                        }
+                                      },
                                       itemBuilder: (ctx) => [
+                                        PopupMenuItem(
+                                          value: 'add_to_playlist',
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.playlist_add_rounded,
+                                                color: textPrimary,
+                                                size: 18,
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Text(
+                                                'プレイリストに追加',
+                                                style: TextStyle(
+                                                  color: textPrimary,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const PopupMenuDivider(),
                                         PopupMenuItem(
                                           enabled: false,
                                           child: Row(
@@ -1425,58 +1514,84 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                 horizontal: 16,
                               ),
                               child: Center(
-                                child: AspectRatio(
-                                  aspectRatio: mode == PlayerViewMode.media
-                                      ? (16 / 9)
-                                      : 1.0,
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.black,
-                                      borderRadius: BorderRadius.circular(16),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withValues(
-                                            alpha: isDark ? 0.6 : 0.15,
+                                child: LayoutBuilder(
+                                  builder: (context, visualConstraints) {
+                                    final isArtwork =
+                                        mode == PlayerViewMode.image;
+                                    final aspectRatio =
+                                        engine.videoAspectRatio ?? (16 / 9);
+                                    final maxVisualHeight =
+                                        MediaQuery.sizeOf(context).height *
+                                        (isArtwork ? 0.4 : 0.48);
+                                    final maxVisualWidth = isArtwork
+                                        ? visualConstraints.maxWidth * 0.82
+                                        : visualConstraints.maxWidth;
+                                    // Fit the actual media ratio inside both
+                                    // viewport bounds. This avoids adding a
+                                    // second set of bars around unusual MVs.
+                                    final visualWidth = math.min(
+                                      maxVisualWidth,
+                                      maxVisualHeight * aspectRatio,
+                                    );
+                                    final visualHeight =
+                                        visualWidth / aspectRatio;
+                                    return SizedBox(
+                                      width: visualWidth,
+                                      height: visualHeight,
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.black,
+                                          borderRadius: BorderRadius.circular(
+                                            16,
                                           ),
-                                          blurRadius: 24,
-                                          offset: const Offset(0, 8),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withValues(
+                                                alpha: isDark ? 0.6 : 0.15,
+                                              ),
+                                              blurRadius: 24,
+                                              offset: const Offset(0, 8),
+                                            ),
+                                          ],
                                         ),
-                                      ],
-                                    ),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onTap: () => ctl.toggle(),
-                                      child: mode == PlayerViewMode.media
-                                          ? (snap.initialized
-                                                ? Stack(
-                                                    fit: StackFit.expand,
-                                                    children: [
-                                                      ThumbImage(
+                                        clipBehavior: Clip.antiAlias,
+                                        child: GestureDetector(
+                                          behavior: HitTestBehavior.opaque,
+                                          onTap: () => ctl.toggle(),
+                                          child: mode == PlayerViewMode.media
+                                              ? (snap.initialized
+                                                    ? Stack(
+                                                        fit: StackFit.expand,
+                                                        children: [
+                                                          ThumbImage(
+                                                            seed: media.id,
+                                                            mediaId: media.id,
+                                                            localPath:
+                                                                media.localPath,
+                                                            expand: true,
+                                                          ),
+                                                          engine
+                                                              .buildVideoView(),
+                                                        ],
+                                                      )
+                                                    : ThumbImage(
                                                         seed: media.id,
                                                         mediaId: media.id,
                                                         localPath:
                                                             media.localPath,
                                                         expand: true,
-                                                      ),
-                                                      engine.buildVideoView(),
-                                                    ],
-                                                  )
-                                                : ThumbImage(
-                                                    seed: media.id,
-                                                    mediaId: media.id,
-                                                    localPath: media.localPath,
-                                                    expand: true,
-                                                  ))
-                                          : ThumbImage(
-                                              seed: media.id,
-                                              mediaId: media.id,
-                                              localPath: media.localPath,
-                                              expand: true,
-                                              highRes: true,
-                                            ),
-                                    ),
-                                  ),
+                                                      ))
+                                              : ThumbImage(
+                                                  seed: media.id,
+                                                  mediaId: media.id,
+                                                  localPath: media.localPath,
+                                                  expand: true,
+                                                  highRes: true,
+                                                ),
+                                        ),
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
                             ),
@@ -1501,17 +1616,35 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                     height: 1.2,
                                   ),
                                 ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  artist,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w500,
-                                    color: textSub,
+                                if (artist.isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  InkWell(
+                                    onTap: () =>
+                                        ref
+                                                .read(
+                                                  creatorVideosRequestProvider
+                                                      .notifier,
+                                                )
+                                                .state =
+                                            artist,
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 2,
+                                      ),
+                                      child: Text(
+                                        artist,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w500,
+                                          color: textSub,
+                                        ),
+                                      ),
+                                    ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                           ),
@@ -1550,7 +1683,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                 IconButton(
                                   tooltip: '前の動画',
                                   icon: TransportIcon.previous(
-                                    size: 40,
+                                    size: compactSkipSize,
                                     color: transportArrowColor,
                                   ),
                                   onPressed: () => ctl.playPrev(),
@@ -1570,7 +1703,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                         icon: AnimatedIcons.play_pause,
                                         progress: _playPauseAnim,
                                         color: playIconColor,
-                                        size: 38,
+                                        size: compactPlayPauseSize,
                                       ),
                                     ),
                                   ),
@@ -1580,7 +1713,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                 IconButton(
                                   tooltip: '次の動画',
                                   icon: SkipNextIcon(
-                                    size: 40,
+                                    size: compactSkipSize,
                                     color: transportArrowColor,
                                   ),
                                   onPressed: () => ctl.playNext(),

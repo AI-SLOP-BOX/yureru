@@ -4,13 +4,26 @@ import 'package:yureru/domain/models.dart';
 
 void main() {
   test('ordered queue preserves order', () {
-    expect(QueueBuilder.build(['A','B','C','D','E'], shuffle: false), ['A','B','C','D','E']);
+    expect(QueueBuilder.build(['A', 'B', 'C', 'D', 'E'], shuffle: false), [
+      'A',
+      'B',
+      'C',
+      'D',
+      'E',
+    ]);
   });
-  test('shuffle queue is a permutation with no duplicates until full cycle', () {
-    final q = QueueBuilder.build(['A','B','C','D','E'], shuffle: true, seed: 42);
-    expect(q.length, 5);
-    expect(q.toSet(), {'A','B','C','D','E'});
-  });
+  test(
+    'shuffle queue is a permutation with no duplicates until full cycle',
+    () {
+      final q = QueueBuilder.build(
+        ['A', 'B', 'C', 'D', 'E'],
+        shuffle: true,
+        seed: 42,
+      );
+      expect(q.length, 5);
+      expect(q.toSet(), {'A', 'B', 'C', 'D', 'E'});
+    },
+  );
   test('media identity is id, not path', () {
     final a = MediaItem(title: 'x', localPath: '/a/x.mp4');
     final b = MediaItem(title: 'x', localPath: '/b/x.mp4');
@@ -23,7 +36,7 @@ void main() {
       n.start(['A', 'B', 'C', 'D'], playlistId: 'p', shuffle: false);
       n.jumpTo(2);
       expect(n.state.currentId, 'C');
-      n.move(0, 3); // move A to the end
+      n.move(0, 3);
       expect(n.state.queue, ['B', 'C', 'D', 'A']);
       expect(n.state.currentId, 'C');
       expect(n.state.sourcePlaylistId, 'p');
@@ -94,11 +107,12 @@ void main() {
       final n = QueueNotifier();
       n.restore(
         const QueueState(
-            queue: ['A', 'X', 'B'],
-            index: 2,
-            sourcePlaylistId: 'p',
-            shuffle: true,
-            original: ['A', 'X', 'B']),
+          queue: ['A', 'X', 'B'],
+          index: 2,
+          sourcePlaylistId: 'p',
+          shuffle: true,
+          original: ['A', 'X', 'B'],
+        ),
         {'A', 'B'},
       );
       expect(n.state.queue, ['A', 'B']);

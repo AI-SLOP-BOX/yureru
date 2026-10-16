@@ -100,6 +100,30 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     await repo.saveMedia(m);
   }
 
+  Future<void> updateMediaArtists(List<String> ids, String? artist) async {
+    final selectedIds = ids.toSet();
+    if (selectedIds.isEmpty) return;
+    final m = state.media
+        .map(
+          (item) => !selectedIds.contains(item.id)
+              ? item
+              : MediaItem(
+                  id: item.id,
+                  title: item.title,
+                  artist: artist,
+                  localPath: item.localPath,
+                  durationMs: item.durationMs,
+                  createdAt: item.createdAt,
+                  origin: item.origin,
+                  sourceFolderId: item.sourceFolderId,
+                  sourcePath: item.sourcePath,
+                ),
+        )
+        .toList();
+    state = LibraryState(media: m, playlists: state.playlists, loaded: true);
+    await repo.saveMedia(m);
+  }
+
   Future<void> removeMedia(String id) async {
     final removed = state.media.where((e) => e.id == id).toList();
     final m = state.media.where((e) => e.id != id).toList();
@@ -226,6 +250,47 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         .toList();
     state = LibraryState(media: state.media, playlists: p, loaded: true);
     await repo.savePlaylists(p);
+  }
+
+  Future<void> reorderPlaylist(String playlistId, int from, int to) async {
+    final playlist = state.playlistById(playlistId);
+    if (playlist == null || from < 0 || from >= playlist.mediaIds.length) {
+      return;
+    }
+    final ids = [...playlist.mediaIds];
+    if (to < 0 || to >= ids.length || from == to) return;
+    ids.insert(to, ids.removeAt(from));
+    final playlists = state.playlists
+        .map(
+          (item) => item.id == playlistId
+              ? Playlist(
+                  id: item.id,
+                  name: item.name,
+                  mediaIds: ids,
+                  createdAt: item.createdAt,
+                )
+              : item,
+        )
+        .toList();
+    state = LibraryState(
+      media: state.media,
+      playlists: playlists,
+      loaded: true,
+    );
+    await repo.savePlaylists(playlists);
+  }
+
+  Future<void> reorderMedia(int from, int to) async {
+    if (from < 0 || from >= state.media.length) return;
+    final media = [...state.media];
+    if (to < 0 || to >= media.length || from == to) return;
+    media.insert(to, media.removeAt(from));
+    state = LibraryState(
+      media: media,
+      playlists: state.playlists,
+      loaded: true,
+    );
+    await repo.saveMedia(media);
   }
 }
 
@@ -524,11 +589,20 @@ final playerViewModeProvider = StateProvider<PlayerViewMode>(
 );
 
 /// Videos list order.
-enum VideosSort { newestFirst, oldestFirst, name }
+enum VideosSort { newestFirst, oldestFirst, name, manual }
 
 final videosSortProvider = StateProvider<VideosSort>(
   (_) => VideosSort.newestFirst,
 );
+
+/// Optional exact creator filter for the all-videos view.
+final videoCreatorFilterProvider = StateProvider<String?>((_) => null);
+
+/// One-shot navigation request emitted by tappable creator labels.
+final creatorVideosRequestProvider = StateProvider<String?>((_) => null);
+
+/// One-shot request from global search to reveal a video in the videos list.
+final videoOpenRequestProvider = StateProvider<String?>((_) => null);
 
 /// Center pane mode: true = full-size player, false = browse pages.
 /// Only explicit user actions (tap play, "再生中") set it to true;
@@ -537,6 +611,9 @@ final viewingPlayerProvider = StateProvider<bool>((_) => false);
 
 /// Immersive cinema mode (video occupies whole window, hiding sidebars and bars)
 final cinemaModeProvider = StateProvider<bool>((_) => false);
+
+/// macOS floating picture-in-picture window state.
+final pictureInPictureProvider = StateProvider<bool>((_) => false);
 
 /// Queue panel visibility. Hidden by default; auto-shown on the player
 /// screen, auto-hidden when browsing. Manual toggle respected in between.

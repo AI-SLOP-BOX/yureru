@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
+import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
 import '../theme.dart';
 import 'thumb_image.dart';
@@ -94,7 +95,7 @@ class MiniPlayer extends ConsumerWidget {
                             media.artist!.trim().isNotEmpty) ...[
                           const SizedBox(height: 2),
                           Text(
-                            media.artist!,
+                            formatCreatorNames(media.artist),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(

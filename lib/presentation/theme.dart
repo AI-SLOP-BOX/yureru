@@ -61,7 +61,11 @@ ThemeData yureruDarkTheme() {
     ),
     listTileTheme: const ListTileThemeData(
       iconColor: kTextSub,
-      titleTextStyle: TextStyle(color: kTextPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+      titleTextStyle: TextStyle(
+        color: kTextPrimary,
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+      ),
       subtitleTextStyle: TextStyle(color: kTextSub, fontSize: 12),
     ),
     iconButtonTheme: const IconButtonThemeData(
@@ -88,7 +92,10 @@ ThemeData yureruDarkTheme() {
     ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: kCard,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: kGlassBorder)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: kGlassBorder),
+      ),
       contentTextStyle: const TextStyle(color: Colors.white, fontSize: 13),
     ),
     scrollbarTheme: base.scrollbarTheme.copyWith(
@@ -145,13 +152,19 @@ ThemeData yureruLightTheme() {
       isDense: true,
     ),
     listTileTheme: const ListTileThemeData(
-      iconColor: Color(0xFF5B5EA6),
-      titleTextStyle: TextStyle(color: Color(0xFF1E1B4B), fontSize: 14, fontWeight: FontWeight.w500),
+      iconColor: Color(0xFF333333),
+      selectedColor: Colors.black,
+      selectedTileColor: Color(0x0F000000),
+      titleTextStyle: TextStyle(
+        color: Color(0xFF1E1B4B),
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+      ),
       subtitleTextStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
     ),
     iconButtonTheme: const IconButtonThemeData(
       style: ButtonStyle(
-        foregroundColor: WidgetStatePropertyAll(Color(0xFF3730A3)),
+        foregroundColor: WidgetStatePropertyAll(Color(0xFF222222)),
         overlayColor: WidgetStatePropertyAll(Color(0x0A6D28D9)),
       ),
     ),
@@ -234,7 +247,8 @@ Color themeTextSub(BuildContext context) {
 
 /// Deterministic per-id gradient so every thumbnail looks distinct.
 LinearGradient thumbGradient(String seed) {
-  final hue = seed.runes.fold<int>(17, (a, r) => (a * 31 + r) & 0x7fffffff) % 360;
+  final hue =
+      seed.runes.fold<int>(17, (a, r) => (a * 31 + r) & 0x7fffffff) % 360;
   final c1 = HSVColor.fromAHSV(1, hue.toDouble(), 0.6, 0.78).toColor();
   final c2 = HSVColor.fromAHSV(1, (hue + 45) % 360, 0.65, 0.42).toColor();
   return LinearGradient(

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../../app_state.dart';
+import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
 import '../layout_metrics.dart';
 import '../theme.dart';
@@ -220,7 +222,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           builder: (context, constraints) {
                             final tight = constraints.maxWidth < 210;
                             return Wrap(
-                              spacing: tight ? 8 : 14,
+                              spacing: tight ? 4 : 14,
                               runSpacing: 8,
                               crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
@@ -229,6 +231,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                   tooltip: 'プレイリストを編集',
                                   icon: Icons.edit_rounded,
                                   iconSize: 20,
+                                  buttonSize: tight ? 40 : 44,
                                   isDark: isDark,
                                   onTap: () => _showRenameDialog(context, pl),
                                 ),
@@ -271,7 +274,12 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                   ),
                                 ),
                                 // 3. More options (PopupMenuButton formatted as dark circular button)
-                                _moreMenuButton(context, pl, isDark),
+                                _moreMenuButton(
+                                  context,
+                                  pl,
+                                  isDark,
+                                  buttonSize: tight ? 40 : 44,
+                                ),
                               ],
                             );
                           },
@@ -363,6 +371,13 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              if (!_sortByCreator && query.isEmpty) ...[
+                const Text(
+                  '≡をドラッグして順番変更',
+                  style: TextStyle(fontSize: 12, color: kTextSub),
+                ),
+                const SizedBox(width: 8),
+              ],
               PopupMenuButton<bool>(
                 tooltip: '並び替え',
                 initialValue: _sortByCreator,
@@ -407,7 +422,15 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                     style: const TextStyle(color: kTextSub),
                   ),
                 )
-              : ListView(
+              : ReorderableListView(
+                  buildDefaultDragHandles: false,
+                  onReorder: (from, to) {
+                    if (_sortByCreator || query.isNotEmpty) return;
+                    if (to > from) to--;
+                    ref
+                        .read(libraryProvider.notifier)
+                        .reorderPlaylist(pl.id, from, to);
+                  },
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                   children: [
                     for (int i = 0; i < filteredMediaIds.length; i++) ...[
@@ -430,7 +453,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           ref.read(playbackControllerProvider).openCurrent();
                         }
 
-                        return Dismissible(
+                        final row = Dismissible(
                           key: ValueKey(m.id),
                           direction: DismissDirection.endToStart,
                           background: Container(
@@ -465,9 +488,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
-                              subtitle: m.artist != null
+                              subtitle: m.artist?.trim().isNotEmpty == true
                                   ? Text(
-                                      m.artist!,
+                                      formatCreatorNames(m.artist),
                                       style: const TextStyle(
                                         fontSize: 12,
                                         color: kTextSub,
@@ -478,27 +501,63 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                       localPath: m.localPath,
                                       durationMs: m.durationMs,
                                     ),
-                              trailing: m.id == currentId
-                                  ? const Icon(
-                                      Icons.equalizer,
-                                      size: 20,
-                                      color: kAccentLight,
-                                    )
-                                  : IconButton(
-                                      tooltip: '再生',
-                                      icon: const Icon(Icons.play_arrow),
-                                      onPressed: playFromHere,
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  m.id == currentId
+                                      ? const SizedBox(
+                                          width: 48,
+                                          child: Icon(
+                                            Icons.equalizer,
+                                            size: 20,
+                                            color: kAccentLight,
+                                          ),
+                                        )
+                                      : IconButton(
+                                          tooltip: '再生',
+                                          icon: const Icon(Icons.play_arrow),
+                                          onPressed: playFromHere,
+                                        ),
+                                  if (!_sortByCreator && query.isEmpty)
+                                    Tooltip(
+                                      message: 'ドラッグして順番を変更',
+                                      child: SizedBox(
+                                        width: 52,
+                                        height: 52,
+                                        child: ReorderableDragStartListener(
+                                          index: i,
+                                          child: const Icon(
+                                            Icons.drag_handle_rounded,
+                                            size: 28,
+                                            color: kTextSub,
+                                          ),
+                                        ),
+                                      ),
                                     ),
+                                ],
+                              ),
                               onTap: playFromHere,
                             ),
                           ),
                         );
+                        if (!_sortByCreator && query.isEmpty) {
+                          return ReorderableDelayedDragStartListener(
+                            key: ValueKey('playlist-row-${m.id}'),
+                            index: i,
+                            child: row,
+                          );
+                        }
+                        return row;
                       }(),
                     ],
                     // When playlist has few items, offer quick additions from remaining library
                     if (lib.media.length > pl.mediaIds.length) ...[
-                      const SizedBox(height: 24),
+                      const SizedBox(
+                        key: ValueKey('playlist-add-gap'),
+                        height: 24,
+                      ),
                       Padding(
+                        key: const ValueKey('playlist-add-heading'),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 12,
                           vertical: 8,
@@ -527,6 +586,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                               .where((item) => !pl.mediaIds.contains(item.id))
                               .take(5))
                         Container(
+                          key: ValueKey('playlist-add-${cand.id}'),
                           margin: const EdgeInsets.symmetric(vertical: 2),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(10),
@@ -552,7 +612,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                               ),
                             ),
                             subtitle: Text(
-                              cand.artist ?? '動画',
+                              formatCreatorNames(cand.artist).isEmpty
+                                  ? '動画'
+                                  : formatCreatorNames(cand.artist),
                               style: const TextStyle(
                                 fontSize: 11.5,
                                 color: kTextSub,
@@ -595,6 +657,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     required String tooltip,
     required IconData icon,
     required double iconSize,
+    double buttonSize = 44,
     required bool isDark,
     required VoidCallback onTap,
   }) {
@@ -607,8 +670,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         child: InkWell(
           onTap: onTap,
           child: Container(
-            width: 44,
-            height: 44,
+            width: buttonSize,
+            height: buttonSize,
             alignment: Alignment.center,
             child: Icon(
               icon,
@@ -621,7 +684,12 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     );
   }
 
-  Widget _moreMenuButton(BuildContext context, dynamic pl, bool isDark) {
+  Widget _moreMenuButton(
+    BuildContext context,
+    dynamic pl,
+    bool isDark, {
+    double buttonSize = 44,
+  }) {
     return Theme(
       data: Theme.of(context).copyWith(
         popupMenuTheme: PopupMenuThemeData(
@@ -640,8 +708,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
           shape: const CircleBorder(),
           clipBehavior: Clip.antiAlias,
           child: Container(
-            width: 44,
-            height: 44,
+            width: buttonSize,
+            height: buttonSize,
             alignment: Alignment.center,
             child: Icon(
               Icons.more_vert_rounded,
@@ -652,24 +720,24 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         ),
         onSelected: (val) => _handleMenuAction(context, pl, val),
         itemBuilder: (ctx) => [
-          _menuItem('shuffle', Icons.shuffle_rounded, 'シャッフル再生', isDark),
-          _menuItem('search', Icons.search_rounded, 'プレイリストで検索', isDark),
-          _menuItem('play_next', Icons.playlist_play_rounded, '次に再生', isDark),
+          _menuItem('shuffle', 'assets/icons/shuffle.svg', 'シャッフル再生', isDark),
+          _menuItem('search', 'assets/icons/search.svg', 'プレイリストで検索', isDark),
+          _menuItem('play_next', 'assets/icons/play_next.svg', '次に再生', isDark),
           _menuItem(
             'add_to_queue',
-            Icons.playlist_add_rounded,
+            'assets/icons/queue_add.svg',
             'キューに追加',
             isDark,
           ),
           _menuItem(
             'add_videos',
-            Icons.add_circle_outline_rounded,
+            'assets/icons/video_add.svg',
             '動画を追加',
             isDark,
           ),
           _menuItem(
             'delete',
-            Icons.delete_outline_rounded,
+            'assets/icons/delete.svg',
             '再生リストを削除',
             isDark,
             isDestructive: true,
@@ -681,7 +749,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
   PopupMenuItem<String> _menuItem(
     String value,
-    IconData icon,
+    String iconAsset,
     String label,
     bool isDark, {
     bool isDestructive = false,
@@ -694,7 +762,13 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
       height: 44,
       child: Row(
         children: [
-          Icon(icon, size: 22, color: color),
+          SvgPicture.asset(
+            iconAsset,
+            width: 22,
+            height: 22,
+            colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+            excludeFromSemantics: true,
+          ),
           const SizedBox(width: 14),
           Text(
             label,

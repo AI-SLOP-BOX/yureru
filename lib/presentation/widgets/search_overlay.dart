@@ -3,8 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_state.dart';
+import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
-import '../../playback/playback_controller.dart';
 import '../theme.dart';
 import 'duration_text.dart';
 import 'thumb_image.dart';
@@ -30,15 +30,19 @@ class SearchOverlay extends ConsumerStatefulWidget {
       builder: (dlgContext) {
         final isDark = Theme.of(dlgContext).brightness == Brightness.dark;
         return Dialog(
-          insetPadding:
-              const EdgeInsets.symmetric(horizontal: 40, vertical: 80),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 40,
+            vertical: 80,
+          ),
           backgroundColor: Colors.transparent,
           elevation: 0,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 580),
             child: Container(
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xF214141E) : Colors.white.withValues(alpha: 0.98),
+                color: isDark
+                    ? const Color(0xF214141E)
+                    : Colors.white.withValues(alpha: 0.98),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
                   color: isDark
@@ -143,18 +147,10 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
       final vIdx = index - playlists.length;
       if (vIdx < videos.length) {
         final targetVideo = videos[vIdx];
-        _playVideo(ref, lib.media, lib.media.indexOf(targetVideo));
+        Navigator.pop(context);
+        ref.read(videoOpenRequestProvider.notifier).state = targetVideo.id;
       }
     }
-  }
-
-  void _playVideo(WidgetRef ref, List<MediaItem> all, int i) {
-    final ids = [for (final m in all) m.id];
-    showPlayerView(ref);
-    ref.read(queueProvider.notifier).start(ids, shuffle: false);
-    ref.read(queueProvider.notifier).jumpTo(i);
-    ref.read(playbackControllerProvider).openCurrent();
-    Navigator.pop(context);
   }
 
   @override
@@ -180,61 +176,84 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
       _selectedIndex = 0;
     }
 
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
-        child: TextField(
-          controller: _ctrl,
-          focusNode: _focusNode,
-          autofocus: true,
-          onChanged: (v) => setState(() {
-            _q = v;
-            _selectedIndex = 0;
-          }),
-          style: const TextStyle(fontSize: 15),
-          decoration: InputDecoration(
-            hintText: '曲名、アーティスト、プレイリストを検索...',
-            prefixIcon: const Icon(Icons.search_rounded, size: 20, color: kTextSub),
-            suffixIcon: _ctrl.text.isNotEmpty
-                ? IconButton(
-                    tooltip: 'クリア',
-                    splashRadius: 16,
-                    icon: const Icon(Icons.clear_rounded, size: 18, color: kTextSub),
-                    onPressed: _clear,
-                  )
-                : null,
-          ),
-          onSubmitted: (_) {
-            _activateIndex(_selectedIndex, playlists, videos, lib);
-          },
-        ),
-      ),
-      Flexible(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
-          children: [
-            if (playlists.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(12, 6, 12, 4),
-                child: Text('プレイリスト',
-                    style: TextStyle(fontSize: 12, color: kTextSub, fontWeight: FontWeight.w600)),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+          child: TextField(
+            controller: _ctrl,
+            focusNode: _focusNode,
+            autofocus: true,
+            onChanged: (v) => setState(() {
+              _q = v;
+              _selectedIndex = 0;
+            }),
+            style: const TextStyle(fontSize: 15),
+            decoration: InputDecoration(
+              hintText: '曲名、アーティスト、プレイリストを検索...',
+              prefixIcon: const Icon(
+                Icons.search_rounded,
+                size: 20,
+                color: kTextSub,
               ),
-              for (int i = 0; i < playlists.length && i < 5; i++) ...[
-                () {
-                  final pl = playlists[i];
-                  final isSelected = _selectedIndex == i;
-                  return Container(
-                    decoration: BoxDecoration(
-                      color: isSelected ? kAccent.withValues(alpha: 0.18) : Colors.transparent,
-                      borderRadius: BorderRadius.circular(10),
-                      border: isSelected
-                          ? Border.all(color: kAccentLight.withValues(alpha: 0.5), width: 1)
-                          : null,
+              suffixIcon: _ctrl.text.isNotEmpty
+                  ? IconButton(
+                      tooltip: 'クリア',
+                      splashRadius: 16,
+                      icon: const Icon(
+                        Icons.clear_rounded,
+                        size: 18,
+                        color: kTextSub,
+                      ),
+                      onPressed: _clear,
+                    )
+                  : null,
+            ),
+            onSubmitted: (_) {
+              _activateIndex(_selectedIndex, playlists, videos, lib);
+            },
+          ),
+        ),
+        Flexible(
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+            children: [
+              if (playlists.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(12, 6, 12, 4),
+                  child: Text(
+                    'プレイリスト',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: kTextSub,
+                      fontWeight: FontWeight.w600,
                     ),
-                    child: ListTile(
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      leading: ThumbImage(
+                  ),
+                ),
+                for (int i = 0; i < playlists.length && i < 5; i++) ...[
+                  () {
+                    final pl = playlists[i];
+                    final isSelected = _selectedIndex == i;
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? kAccent.withValues(alpha: 0.18)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        border: isSelected
+                            ? Border.all(
+                                color: kAccentLight.withValues(alpha: 0.5),
+                                width: 1,
+                              )
+                            : null,
+                      ),
+                      child: ListTile(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        leading: ThumbImage(
                           seed: pl.id,
                           mediaId: pl.mediaIds.isEmpty
                               ? null
@@ -242,99 +261,140 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                           localPath: pl.mediaIds.isEmpty
                               ? null
                               : lib.byId(pl.mediaIds.first)?.localPath,
-                          size: 40),
-                      title: Text(displayTitle(pl.name),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text('${pl.mediaIds.length}本の動画',
-                          style:
-                              const TextStyle(fontSize: 12, color: kTextSub)),
-                      trailing: isSelected
-                          ? const Icon(Icons.keyboard_return_rounded, size: 16, color: kAccentLight)
-                          : null,
-                      onTap: () {
-                        Navigator.pop(context);
-                        widget.onOpenPlaylist(pl.id);
-                      },
-                    ),
-                  );
-                }(),
+                          size: 40,
+                        ),
+                        title: Text(
+                          displayTitle(pl.name),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          '${pl.mediaIds.length}本の動画',
+                          style: const TextStyle(fontSize: 12, color: kTextSub),
+                        ),
+                        trailing: isSelected
+                            ? const Icon(
+                                Icons.keyboard_return_rounded,
+                                size: 16,
+                                color: kAccentLight,
+                              )
+                            : null,
+                        onTap: () {
+                          Navigator.pop(context);
+                          widget.onOpenPlaylist(pl.id);
+                        },
+                      ),
+                    );
+                  }(),
+                ],
               ],
-            ],
-            if (videos.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: Text('動画・楽曲',
-                    style: TextStyle(fontSize: 12, color: kTextSub, fontWeight: FontWeight.w600)),
-              ),
-              for (int i = 0; i < videos.length && i < 8; i++) ...[
-                () {
-                  final m = videos[i];
-                  final globalIdx = playlists.length + i;
-                  final isSelected = _selectedIndex == globalIdx;
-                  final subtitleText = m.artist != null && m.artist!.isNotEmpty
-                      ? m.artist!
-                      : null;
-
-                  return Container(
-                    decoration: BoxDecoration(
-                      color: isSelected ? kAccent.withValues(alpha: 0.18) : Colors.transparent,
-                      borderRadius: BorderRadius.circular(10),
-                      border: isSelected
-                          ? Border.all(color: kAccentLight.withValues(alpha: 0.5), width: 1)
-                          : null,
+              if (videos.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(12, 8, 12, 4),
+                  child: Text(
+                    '動画・楽曲',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: kTextSub,
+                      fontWeight: FontWeight.w600,
                     ),
-                    child: ListTile(
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      leading: ThumbImage(
+                  ),
+                ),
+                for (int i = 0; i < videos.length && i < 8; i++) ...[
+                  () {
+                    final m = videos[i];
+                    final globalIdx = playlists.length + i;
+                    final isSelected = _selectedIndex == globalIdx;
+                    final subtitleText =
+                        m.artist != null && m.artist!.isNotEmpty
+                        ? formatCreatorNames(m.artist)
+                        : null;
+
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? kAccent.withValues(alpha: 0.18)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        border: isSelected
+                            ? Border.all(
+                                color: kAccentLight.withValues(alpha: 0.5),
+                                width: 1,
+                              )
+                            : null,
+                      ),
+                      child: ListTile(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        leading: ThumbImage(
                           seed: m.id,
                           mediaId: m.id,
                           localPath: m.localPath,
                           size: 40,
-                          radius: 8),
-                      title: Text(displayTitle(m.title),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: subtitleText != null
-                          ? Text(subtitleText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12, color: kTextSub))
-                          : DurationText(
-                              mediaId: m.id,
-                              localPath: m.localPath,
-                              durationMs: m.durationMs),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (subtitleText != null)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: DurationText(
+                          radius: 8,
+                        ),
+                        title: Text(
+                          displayTitle(m.title),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: subtitleText != null
+                            ? Text(
+                                subtitleText,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: kTextSub,
+                                ),
+                              )
+                            : DurationText(
+                                mediaId: m.id,
+                                localPath: m.localPath,
+                                durationMs: m.durationMs,
+                              ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (subtitleText != null)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: DurationText(
                                   mediaId: m.id,
                                   localPath: m.localPath,
-                                  durationMs: m.durationMs),
-                            ),
-                          if (isSelected)
-                            const Icon(Icons.play_circle_filled_rounded,
-                                size: 18, color: kAccentLight),
-                        ],
+                                  durationMs: m.durationMs,
+                                ),
+                              ),
+                            if (isSelected)
+                              const Icon(
+                                Icons.arrow_forward_rounded,
+                                size: 18,
+                                color: kAccentLight,
+                              ),
+                          ],
+                        ),
+                        onTap: () =>
+                            _activateIndex(globalIdx, playlists, videos, lib),
                       ),
-                      onTap: () =>
-                          _playVideo(ref, lib.media, lib.media.indexOf(m)),
-                    ),
-                  );
-                }(),
+                    );
+                  }(),
+                ],
               ],
+              if (videos.isEmpty && playlists.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(28),
+                  child: Center(
+                    child: Text(
+                      '見つかりませんでした',
+                      style: TextStyle(color: kTextSub, fontSize: 13),
+                    ),
+                  ),
+                ),
             ],
-            if (videos.isEmpty && playlists.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(28),
-                child: Center(
-                    child: Text('見つかりませんでした',
-                        style: TextStyle(color: kTextSub, fontSize: 13))),
-              ),
-          ],
+          ),
         ),
-      ),
-    ]);
+      ],
+    );
   }
 }

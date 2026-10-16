@@ -1,10 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
+import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
 import '../theme.dart';
 import 'duration_text.dart';
 import 'thumb_image.dart';
+
+List<int> _queueDisplayIndices(QueueState queue) {
+  if (!queue.hasCurrent) {
+    return List<int>.generate(queue.queue.length, (index) => index);
+  }
+  return [
+    queue.index,
+    for (var i = queue.index - 1; i >= 0; i--) i,
+    for (var i = queue.index + 1; i < queue.queue.length; i++) i,
+  ];
+}
 
 /// Right panel: reorderable play queue (number, thumb, title, duration).
 class QueuePanel extends ConsumerWidget {
@@ -29,6 +41,7 @@ class QueuePanel extends ConsumerWidget {
     final q = ref.watch(queueProvider);
     final lib = ref.watch(libraryProvider);
     final engine = ref.watch(engineProvider);
+    final displayIndices = _queueDisplayIndices(q);
     return Container(
       width: width,
       margin: margin ?? const EdgeInsets.fromLTRB(0, 12, 12, 12),
@@ -190,15 +203,24 @@ class QueuePanel extends ConsumerWidget {
                 : ReorderableListView.builder(
                     buildDefaultDragHandles: false,
                     padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
-                    itemCount: q.queue.length,
+                    itemCount: displayIndices.length,
                     onReorder: (oldIndex, newIndex) {
+                      final firstUpcomingIndex = q.hasCurrent ? q.index + 1 : 0;
+                      // Keep the current and played entries in the history
+                      // section; only reorder entries that are still ahead.
+                      if (oldIndex < firstUpcomingIndex ||
+                          newIndex < firstUpcomingIndex) {
+                        return;
+                      }
                       if (newIndex > oldIndex) newIndex -= 1;
                       ref.read(queueProvider.notifier).move(oldIndex, newIndex);
                     },
                     itemBuilder: (c, i) {
-                      final id = q.queue[i];
+                      final queueIndex = displayIndices[i];
+                      final id = q.queue[queueIndex];
                       final m = lib.byId(id);
-                      final cur = i == q.index && q.hasCurrent;
+                      final cur = queueIndex == q.index && q.hasCurrent;
+                      final played = q.hasCurrent && queueIndex < q.index;
                       final knownDur =
                           cur && engine.snapshot.duration > Duration.zero
                           ? engine.snapshot.duration
@@ -210,7 +232,7 @@ class QueuePanel extends ConsumerWidget {
                       final textPrimary = themeTextPrimary(context);
                       final textSub = themeTextSub(context);
                       return Container(
-                        key: ValueKey('queue-${id}_$i'),
+                        key: ValueKey('queue-${id}_$queueIndex'),
                         margin: const EdgeInsets.only(bottom: 3),
                         decoration: BoxDecoration(
                           color: cur
@@ -234,7 +256,7 @@ class QueuePanel extends ConsumerWidget {
                               : Colors.black.withValues(alpha: 0.04),
                           onTap: () {
                             showPlayerView(ref);
-                            ref.read(queueProvider.notifier).jumpTo(i);
+                            ref.read(queueProvider.notifier).jumpTo(queueIndex);
                             ref.read(playbackControllerProvider).openCurrent();
                           },
                           child: Padding(
@@ -254,8 +276,14 @@ class QueuePanel extends ConsumerWidget {
                                               ? kAccentLight
                                               : kAccent,
                                         )
+                                      : played
+                                      ? Icon(
+                                          Icons.check_rounded,
+                                          size: 16,
+                                          color: textSub,
+                                        )
                                       : Text(
-                                          '${i + 1}',
+                                          '${queueIndex + 1}',
                                           textAlign: TextAlign.center,
                                           style: TextStyle(
                                             fontSize: 12.5,
@@ -311,7 +339,17 @@ class QueuePanel extends ConsumerWidget {
                                               : textPrimary,
                                         ),
                                       ),
-                                      knownDur != null
+                                      m?.artist?.trim().isNotEmpty == true
+                                          ? Text(
+                                              formatCreatorNames(m!.artist),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 11.5,
+                                                color: textSub,
+                                              ),
+                                            )
+                                          : knownDur != null
                                           ? Text(
                                               fmtDuration(knownDur),
                                               style: TextStyle(
@@ -350,29 +388,30 @@ class QueuePanel extends ConsumerWidget {
                                   onPressed: () {
                                     ref
                                         .read(queueProvider.notifier)
-                                        .removeAt(i);
+                                        .removeAt(queueIndex);
                                   },
                                 ),
                                 const SizedBox(width: 2),
-                                ReorderableDragStartListener(
-                                  index: i,
-                                  child: MouseRegion(
-                                    cursor: SystemMouseCursors.grab,
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 4,
-                                        vertical: 8,
-                                      ),
-                                      child: Icon(
-                                        Icons.drag_indicator_rounded,
-                                        size: 18,
-                                        color: cur
-                                            ? (isDark ? kAccentLight : kAccent)
-                                            : textSub.withValues(alpha: 0.6),
+                                if (!q.hasCurrent || i > q.index)
+                                  ReorderableDragStartListener(
+                                    index: i,
+                                    child: MouseRegion(
+                                      cursor: SystemMouseCursors.grab,
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 4,
+                                          vertical: 8,
+                                        ),
+                                        child: Icon(
+                                          Icons.drag_indicator_rounded,
+                                          size: 18,
+                                          color: textSub.withValues(alpha: 0.6),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ),
+                                  )
+                                else
+                                  const SizedBox(width: 26),
                               ],
                             ),
                           ),
