@@ -183,12 +183,6 @@ class _TopBarState extends ConsumerState<TopBar> {
 
         final content = CallbackShortcuts(
           bindings: {
-            // ⌘K / Ctrl+K: Global search palette (SearchOverlay)
-            SingleActivator(
-              LogicalKeyboardKey.keyK,
-              meta: isMacOS,
-              control: !isMacOS,
-            ): widget.onOpenSearch,
             // ⌘F / Ctrl+F: Focus the in-page search bar
             // Scoped: Only trigger if the current route is active (prevents hijacking modal / sub-view Ctrl+F)
             SingleActivator(

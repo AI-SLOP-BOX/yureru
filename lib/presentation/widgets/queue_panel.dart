@@ -33,7 +33,6 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
   static const double _queueRowExtent = 68;
   final ScrollController _scrollController = ScrollController();
   String? _lastCurrentId;
-  int? _lastCurrentIndex;
 
   @override
   void dispose() {
@@ -47,10 +46,8 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
     final lib = ref.watch(libraryProvider);
     final engine = ref.watch(engineProvider);
     final displayIndices = List<int>.generate(q.queue.length, (index) => index);
-    if (q.hasCurrent &&
-        (q.currentId != _lastCurrentId || q.index != _lastCurrentIndex)) {
+    if (q.hasCurrent && q.currentId != _lastCurrentId) {
       _lastCurrentId = q.currentId;
-      _lastCurrentIndex = q.index;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_scrollController.hasClients) return;
         final position = _scrollController.position;
@@ -230,22 +227,18 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                     padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
                     itemCount: displayIndices.length,
                     onReorder: (oldIndex, newIndex) {
-                      final firstUpcomingIndex = q.hasCurrent ? q.index + 1 : 0;
-                      // Keep the current and played entries in the history
-                      // section; only reorder entries that are still ahead.
-                      if (oldIndex < firstUpcomingIndex ||
-                          newIndex < firstUpcomingIndex) {
-                        return;
-                      }
                       if (newIndex > oldIndex) newIndex -= 1;
-                      ref.read(queueProvider.notifier).move(oldIndex, newIndex);
+                      final fromQueueIndex = displayIndices[oldIndex];
+                      final toQueueIndex = displayIndices[newIndex];
+                      ref
+                          .read(queueProvider.notifier)
+                          .move(fromQueueIndex, toQueueIndex);
                     },
                     itemBuilder: (c, i) {
                       final queueIndex = displayIndices[i];
                       final id = q.queue[queueIndex];
                       final m = lib.byId(id);
                       final cur = queueIndex == q.index && q.hasCurrent;
-                      final played = q.hasCurrent && queueIndex < q.index;
                       final knownDur =
                           cur && engine.snapshot.duration > Duration.zero
                           ? engine.snapshot.duration
@@ -257,7 +250,7 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                       final textPrimary = themeTextPrimary(context);
                       final textSub = themeTextSub(context);
                       return Container(
-                        key: ValueKey('queue-${id}_$queueIndex'),
+                        key: ValueKey('queue-$id'),
                         margin: const EdgeInsets.only(bottom: 3),
                         decoration: BoxDecoration(
                           color: cur
@@ -300,12 +293,6 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                                           color: isDark
                                               ? kAccentLight
                                               : kAccent,
-                                        )
-                                      : played
-                                      ? Icon(
-                                          Icons.check_rounded,
-                                          size: 16,
-                                          color: textSub,
                                         )
                                       : Text(
                                           '${queueIndex + 1}',
@@ -401,45 +388,39 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                                     ],
                                   ),
                                 ),
-                                if (!played)
-                                  IconButton(
-                                    icon: const Icon(
-                                      Icons.close_rounded,
-                                      size: 16,
-                                    ),
-                                    color: textSub,
-                                    splashRadius: 14,
-                                    visualDensity: VisualDensity.compact,
-                                    tooltip: 'キューから削除',
-                                    onPressed: () {
-                                      ref
-                                          .read(queueProvider.notifier)
-                                          .removeAt(queueIndex);
-                                    },
-                                  )
-                                else
-                                  const SizedBox(width: 36),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.close_rounded,
+                                    size: 16,
+                                  ),
+                                  color: textSub,
+                                  splashRadius: 14,
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: 'キューから削除',
+                                  onPressed: () {
+                                    ref
+                                        .read(queueProvider.notifier)
+                                        .removeAt(queueIndex);
+                                  },
+                                ),
                                 const SizedBox(width: 2),
-                                if (!q.hasCurrent || i > q.index)
-                                  ReorderableDragStartListener(
-                                    index: i,
-                                    child: MouseRegion(
-                                      cursor: SystemMouseCursors.grab,
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 4,
-                                          vertical: 8,
-                                        ),
-                                        child: Icon(
-                                          Icons.drag_indicator_rounded,
-                                          size: 18,
-                                          color: textSub.withValues(alpha: 0.6),
-                                        ),
+                                ReorderableDragStartListener(
+                                  index: i,
+                                  child: MouseRegion(
+                                    cursor: SystemMouseCursors.grab,
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                        vertical: 8,
+                                      ),
+                                      child: Icon(
+                                        Icons.drag_indicator_rounded,
+                                        size: 18,
+                                        color: textSub.withValues(alpha: 0.6),
                                       ),
                                     ),
-                                  )
-                                else
-                                  const SizedBox(width: 26),
+                                  ),
+                                ),
                               ],
                             ),
                           ),

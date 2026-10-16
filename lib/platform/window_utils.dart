@@ -26,7 +26,7 @@ Future<void> setPictureInPictureWindow(bool enabled) async {
       await windowManager.setResizable(true);
       await windowManager.setMinimumSize(const Size(280, 180));
       await windowManager.setAlwaysOnTop(true);
-      await windowManager.setSize(const Size(480, 300), animate: true);
+      await windowManager.setSize(const Size(360, 225), animate: true);
       await windowManager.setAlignment(Alignment.bottomRight, animate: true);
     } else {
       await windowManager.setAlwaysOnTop(false);

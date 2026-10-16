@@ -48,6 +48,7 @@ class _AppShellState extends ConsumerState<AppShell>
   void initState() {
     super.initState();
     _playbackController = ref.read(playbackControllerProvider);
+    HardwareKeyboard.instance.addHandler(_handleGlobalKeyboardEvent);
     WidgetsBinding.instance.addObserver(this);
     _appExitChannel.setMethodCallHandler((call) async {
       if (call.method == 'prepareForTermination') {
@@ -79,10 +80,53 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalKeyboardEvent);
     WidgetsBinding.instance.removeObserver(this);
     _playbackController?.saveCurrentPosition();
     _appExitChannel.setMethodCallHandler(null);
     super.dispose();
+  }
+
+  bool _handleGlobalKeyboardEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+
+    final keyboard = HardwareKeyboard.instance;
+    final key = event.logicalKey;
+    final isMac = Platform.isMacOS;
+    final hasSearchModifier = isMac
+        ? keyboard.isMetaPressed
+        : keyboard.isControlPressed;
+    if (key == LogicalKeyboardKey.keyK && hasSearchModifier) {
+      _openSearch();
+      return true;
+    }
+
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    final isTyping =
+        focusContext != null &&
+        focusContext.mounted &&
+        (focusContext.widget is EditableText ||
+            focusContext.findAncestorWidgetOfExactType<EditableText>() != null);
+    if (isTyping) return false;
+
+    final playback = ref.read(playbackControllerProvider);
+    switch (key) {
+      case LogicalKeyboardKey.space:
+        playback.toggle();
+        return true;
+      case LogicalKeyboardKey.arrowRight:
+        playback.seekBy(const Duration(seconds: 10));
+        return true;
+      case LogicalKeyboardKey.arrowLeft:
+        playback.seekBy(const Duration(seconds: -10));
+        return true;
+      case LogicalKeyboardKey.escape:
+        if (ref.read(cinemaModeProvider)) {
+          ref.read(cinemaModeProvider.notifier).state = false;
+          return true;
+        }
+    }
+    return false;
   }
 
   void _browse() {
@@ -187,7 +231,6 @@ class _AppShellState extends ConsumerState<AppShell>
       });
     }
     _wasWide = wide;
-    final ctl = ref.read(playbackControllerProvider);
     // Fresh playback enters the player; the queue opens by default only on
     // desktop. Auto-advance (playNext) leaves the current view alone.
     ref.listen<String?>(queueProvider.select((q) => q.currentId), (prev, next) {
@@ -229,67 +272,14 @@ class _AppShellState extends ConsumerState<AppShell>
         detailPlaylistId = null;
       });
     });
-    // Desktop shortcuts (ignored while typing in TextField).
-    final isMac = Platform.isMacOS;
     final isPictureInPicture = ref.watch(pictureInPictureProvider);
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.space): () {
-          final focusedNode = FocusManager.instance.primaryFocus;
-          final ctx = focusedNode?.context;
-          final isTyping =
-              ctx != null &&
-              ctx.mounted &&
-              (ctx.widget is EditableText ||
-                  ctx.findAncestorWidgetOfExactType<EditableText>() != null);
-          if (!isTyping) {
-            ctl.toggle();
-          }
-        },
-        const SingleActivator(LogicalKeyboardKey.arrowRight): () {
-          final focusedNode = FocusManager.instance.primaryFocus;
-          final ctx = focusedNode?.context;
-          final isTyping =
-              ctx != null &&
-              ctx.mounted &&
-              (ctx.widget is EditableText ||
-                  ctx.findAncestorWidgetOfExactType<EditableText>() != null);
-          if (!isTyping) {
-            ctl.seekBy(const Duration(seconds: 10));
-          }
-        },
-        const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
-          final focusedNode = FocusManager.instance.primaryFocus;
-          final ctx = focusedNode?.context;
-          final isTyping =
-              ctx != null &&
-              ctx.mounted &&
-              (ctx.widget is EditableText ||
-                  ctx.findAncestorWidgetOfExactType<EditableText>() != null);
-          if (!isTyping) {
-            ctl.seekBy(const Duration(seconds: -10));
-          }
-        },
-        const SingleActivator(LogicalKeyboardKey.escape): () {
-          if (ref.read(cinemaModeProvider)) {
-            ref.read(cinemaModeProvider.notifier).state = false;
-          }
-        },
-        SingleActivator(
-          LogicalKeyboardKey.keyK,
-          meta: isMac,
-          control: !isMac,
-        ): () =>
-            _openSearch(),
-      },
-      child: Focus(
-        autofocus: true,
-        child: isPictureInPicture
-            ? const _PictureInPictureView()
-            : wide
-            ? _wide()
-            : _narrow(),
-      ),
+    return Focus(
+      autofocus: true,
+      child: isPictureInPicture
+          ? const _PictureInPictureView()
+          : wide
+          ? _wide()
+          : _narrow(),
     );
   }
 
@@ -790,11 +780,20 @@ class _CinemaFadeIn extends StatelessWidget {
   }
 }
 
-class _PictureInPictureView extends ConsumerWidget {
+class _PictureInPictureView extends ConsumerStatefulWidget {
   const _PictureInPictureView();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_PictureInPictureView> createState() =>
+      _PictureInPictureViewState();
+}
+
+class _PictureInPictureViewState extends ConsumerState<_PictureInPictureView> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = this.ref;
     final engine = ref.watch(engineProvider);
     final media = ref
         .watch(libraryProvider)
@@ -804,69 +803,88 @@ class _PictureInPictureView extends ConsumerWidget {
     final playback = ref.read(playbackControllerProvider);
     return Scaffold(
       backgroundColor: Colors.black,
-      body: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            engine.buildVideoView(),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Container(
-                height: 58,
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Color(0xCC000000)],
-                  ),
-                ),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        media?.title ?? '再生中',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
+      body: MouseRegion(
+        onEnter: (_) {
+          if (!_hovered) setState(() => _hovered = true);
+        },
+        onExit: (_) {
+          if (_hovered) setState(() => _hovered = false);
+        },
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              engine.buildVideoView(),
+              IgnorePointer(
+                ignoring: !_hovered,
+                child: AnimatedOpacity(
+                  opacity: _hovered ? 1 : 0,
+                  duration: const Duration(milliseconds: 180),
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Container(
+                      height: 58,
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.transparent, Color(0xCC000000)],
                         ),
                       ),
-                    ),
-                    StreamBuilder<bool>(
-                      stream: engine.playingStream,
-                      initialData: engine.snapshot.isPlaying,
-                      builder: (context, state) {
-                        final playing = state.data ?? false;
-                        return IconButton(
-                          tooltip: playing ? '一時停止' : '再生',
-                          color: Colors.white,
-                          onPressed: playback.toggle,
-                          icon: Icon(
-                            playing
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              media?.title ?? '再生中',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
-                        );
-                      },
+                          StreamBuilder<bool>(
+                            stream: engine.playingStream,
+                            initialData: engine.snapshot.isPlaying,
+                            builder: (context, state) {
+                              final playing = state.data ?? false;
+                              return IconButton(
+                                tooltip: playing ? '一時停止' : '再生',
+                                color: Colors.white,
+                                onPressed: playback.toggle,
+                                icon: Icon(
+                                  playing
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
+                                ),
+                              );
+                            },
+                          ),
+                          IconButton(
+                            tooltip: '通常のウィンドウに戻す',
+                            color: Colors.white,
+                            onPressed: () async {
+                              await setPictureInPictureWindow(false);
+                              ref
+                                      .read(pictureInPictureProvider.notifier)
+                                      .state =
+                                  false;
+                            },
+                            icon: const Icon(
+                              Icons.picture_in_picture_alt_rounded,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    IconButton(
-                      tooltip: '通常のウィンドウに戻す',
-                      color: Colors.white,
-                      onPressed: () async {
-                        await setPictureInPictureWindow(false);
-                        ref.read(pictureInPictureProvider.notifier).state =
-                            false;
-                      },
-                      icon: const Icon(Icons.picture_in_picture_alt_rounded),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

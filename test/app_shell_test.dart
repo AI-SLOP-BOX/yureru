@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yureru/app_state.dart';
@@ -239,8 +242,16 @@ void main() {
       final shortcut = find.text(
         defaultTargetPlatform == TargetPlatform.macOS ? '⌘ K' : 'Ctrl+K',
       );
-      await tester.tap(shortcut);
+      expect(shortcut, findsOneWidget);
+      final modifier = Platform.isMacOS
+          ? LogicalKeyboardKey.metaLeft
+          : LogicalKeyboardKey.controlLeft;
+      await tester.sendKeyDownEvent(modifier);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyK);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyK);
+      await tester.sendKeyUpEvent(modifier);
       await tester.pumpAndSettle();
+      expect(find.byType(SearchOverlay), findsOneWidget);
       await tester.enterText(find.byType(TextField).last, media.title);
       await tester.pumpAndSettle();
       await tester.tap(
@@ -328,6 +339,72 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     return c;
   }
+
+  testWidgets('played queue items can be reordered and removed', (
+    tester,
+  ) async {
+    final first = MediaItem(title: '最初', localPath: '/tmp/first.mp4');
+    final second = MediaItem(title: '二番目', localPath: '/tmp/second.mp4');
+    final current = MediaItem(title: '再生中', localPath: '/tmp/current.mp4');
+    final c = await pumpHomeWithMedia(tester, first);
+    final repository = c.read(repositoryProvider) as InMemoryLibraryRepository;
+    await repository.saveMedia([first, second, current]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([
+      first.id,
+      second.id,
+      current.id,
+    ], shuffle: false);
+    c.read(queueProvider.notifier).jumpTo(2);
+    await tester.pumpAndSettle();
+
+    final firstHandle = find.byType(ReorderableDragStartListener).first;
+    await tester.dragFrom(tester.getCenter(firstHandle), const Offset(0, 110));
+    await tester.pumpAndSettle();
+    expect(
+      c.read(queueProvider).queue,
+      isNot([first.id, second.id, current.id]),
+    );
+    expect(c.read(queueProvider).queue.toSet(), {
+      first.id,
+      second.id,
+      current.id,
+    });
+    expect(c.read(queueProvider).currentId, current.id);
+
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(ValueKey('queue-${first.id}')),
+        matching: find.byTooltip('キューから削除'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(c.read(queueProvider).queue, isNot(contains(first.id)));
+    expect(c.read(queueProvider).currentId, current.id);
+  });
+
+  testWidgets('creator name in the play queue is not interactive', (
+    tester,
+  ) async {
+    final media = MediaItem(
+      title: '作者テスト',
+      artist: '作者A',
+      localPath: '/tmp/creator.mp4',
+    );
+    final c = await pumpHomeWithMedia(tester, media);
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    await tester.pumpAndSettle();
+
+    final creator = find.descendant(
+      of: find.byType(QueuePanel),
+      matching: find.text('作者A'),
+    );
+    await tester.tap(creator);
+    await tester.pumpAndSettle();
+
+    expect(c.read(videoCreatorFilterProvider), isNull);
+    expect(find.text('作者: 作者A'), findsNothing);
+  });
 
   testWidgets('home shows static preview; its play enters full player', (
     tester,
