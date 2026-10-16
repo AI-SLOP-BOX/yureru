@@ -376,21 +376,24 @@ class QueuePanel extends ConsumerWidget {
                                     ],
                                   ),
                                 ),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.close_rounded,
-                                    size: 16,
-                                  ),
-                                  color: textSub,
-                                  splashRadius: 14,
-                                  visualDensity: VisualDensity.compact,
-                                  tooltip: 'キューから削除',
-                                  onPressed: () {
-                                    ref
-                                        .read(queueProvider.notifier)
-                                        .removeAt(queueIndex);
-                                  },
-                                ),
+                                if (!played)
+                                  IconButton(
+                                    icon: const Icon(
+                                      Icons.close_rounded,
+                                      size: 16,
+                                    ),
+                                    color: textSub,
+                                    splashRadius: 14,
+                                    visualDensity: VisualDensity.compact,
+                                    tooltip: 'キューから削除',
+                                    onPressed: () {
+                                      ref
+                                          .read(queueProvider.notifier)
+                                          .removeAt(queueIndex);
+                                    },
+                                  )
+                                else
+                                  const SizedBox(width: 36),
                                 const SizedBox(width: 2),
                                 if (!q.hasCurrent || i > q.index)
                                   ReorderableDragStartListener(
