@@ -10,12 +10,14 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
   final PlaybackEngine engine;
   Timer? _timer;
   Timer? _seekCaptureTimer;
+  Timer? _retryCaptureTimer;
   StreamSubscription<PlaybackSnapshot>? _snapshotSubscription;
   bool _enabled;
   bool _cinema;
   bool _playing;
   bool _capturing = false;
   bool _pendingForcedCapture = false;
+  int _retryCaptureCount = 0;
   bool _wasInitialized;
   Duration _lastPosition;
   int _framesPerSecond;
@@ -129,6 +131,9 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
     if (!_enabled || _cinema) {
       _timer?.cancel();
       _timer = null;
+      _retryCaptureTimer?.cancel();
+      _retryCaptureTimer = null;
+      _retryCaptureCount = 0;
       _replaceFrame(null);
       return;
     }
@@ -195,9 +200,29 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
         softness: _softness,
       );
       if (mounted && _enabled && !_cinema && frame != null) {
+        _retryCaptureCount = 0;
+        _retryCaptureTimer?.cancel();
+        _retryCaptureTimer = null;
         _replaceFrame(frame);
       } else {
         frame?.dispose();
+        // Opening a video can mark it initialized before mpv has decoded its
+        // first frame. A single forced sample then leaves paused videos dark
+        // forever. Retry briefly while paused; playback itself is also sampled
+        // by the regular timer.
+        if (mounted &&
+            _enabled &&
+            !_cinema &&
+            !_playing &&
+            engine.snapshot.initialized &&
+            _retryCaptureCount < 12 &&
+            _retryCaptureTimer == null) {
+          _retryCaptureCount++;
+          _retryCaptureTimer = Timer(const Duration(milliseconds: 250), () {
+            _retryCaptureTimer = null;
+            unawaited(_capture(force: true));
+          });
+        }
       }
     } catch (_) {
     } finally {
@@ -226,6 +251,7 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
   void dispose() {
     _timer?.cancel();
     _seekCaptureTimer?.cancel();
+    _retryCaptureTimer?.cancel();
     _snapshotSubscription?.cancel();
     state?.dispose();
     super.dispose();

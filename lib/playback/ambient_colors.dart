@@ -613,9 +613,11 @@ Future<ui.Image> renderAmbientGlow(
   double depth = 1,
   double softness = 1,
   bool matteOnly = false,
+  int renderWidth = 320,
+  int renderHeight = 180,
 }) async {
-  const width = 320;
-  const height = 180;
+  final width = renderWidth.clamp(80, 640).toInt();
+  final height = renderHeight.clamp(45, 360).toInt();
   // The caller measures the real video view in the app window. Using a fixed
   // centered rectangle made edge colors stretch at the wrong scale whenever
   // the player moved or resized.
@@ -668,22 +670,22 @@ Future<ui.Image> renderAmbientGlow(
   final roomTop = _softenAmbientProfile(
     top,
     softness: softness,
-    blurFraction: 0.20,
+    blurFraction: 0.34,
   );
   final roomBottom = _softenAmbientProfile(
     bottom,
     softness: softness,
-    blurFraction: 0.20,
+    blurFraction: 0.34,
   );
   final roomLeft = _softenAmbientProfile(
     left,
     softness: softness,
-    blurFraction: 0.20,
+    blurFraction: 0.34,
   );
   final roomRight = _softenAmbientProfile(
     right,
     softness: softness,
-    blurFraction: 0.20,
+    blurFraction: 0.34,
   );
   final rgba = Uint8List(width * height * 4);
   const sideProfileInset = 0.005;
@@ -721,7 +723,10 @@ Future<ui.Image> renderAmbientGlow(
   final averageRight = profileAverage(diffusedRight);
   final depthBlend = (depth / 2).clamp(0.0, 1.0);
   final spreadPixels = math.min(width, height) * 0.55 * spread.clamp(0.5, 1.5);
-  final glowFadeDistance = 40 + 40 * (spread.clamp(0.5, 1.5) - 0.5);
+  // The room spill must reach beyond the immediate player border. At the old
+  // 40–80 source-pixel range, dark blue/teal shots disappeared into a black
+  // shell before the light reached the surrounding panels.
+  final glowFadeDistance = 80 + 80 * (spread.clamp(0.5, 1.5) - 0.5);
 
   Color edgeColorAt(
     List<Color> edge,
@@ -748,12 +753,11 @@ Future<ui.Image> renderAmbientGlow(
       broadProfile,
       blurProgress,
     )!;
-    // A small amount of room-color mixing suppresses isolated streaks without
-    // flattening the whole edge into one average hue. Most diffusion comes
-    // from the progressively wider profile above, which preserves the scene's
-    // broad color layout as it travels away from the video.
+    // Fade toward each edge's broad room color as the spill travels outward.
+    // This prevents a single dark/light pixel boundary from becoming a
+    // barcode stripe across the app while retaining the scene's overall hue.
     final amount =
-        (0.08 + depthBlend * 0.16) *
+        (0.24 + depthBlend * 0.40) *
         math.pow(normalizedDistance, 0.85).toDouble();
     final source = Color.lerp(broadened, average, amount)!;
     final luminance = source.r * 0.2126 + source.g * 0.7152 + source.b * 0.0722;
@@ -946,7 +950,9 @@ Future<ui.Image> renderAmbientGlow(
         final mask = edges.matteMask;
         alpha = mask == null
             ? (insidePicture ? 0 : 1)
-            : (mask[y * width + x] > 0 ? 1 : 0);
+            : (mask[(y * 180 ~/ height) * 320 + (x * 320 ~/ width)] > 0
+                  ? 1
+                  : 0);
       } else if (signedDistance > 0) {
         // Fade each spill toward the actual window edges. Multiplying the
         // rounded side distances gives corners a radial falloff instead of
@@ -973,6 +979,18 @@ Future<ui.Image> renderAmbientGlow(
             .pow((1 - signedDistance / glowFadeDistance).clamp(0.0, 1.0), 1.5)
             .toDouble();
         alpha = math.min(alpha, distanceFade);
+      }
+      final averageBrightness = (color.r + color.g + color.b) / 3;
+      if (!matteOnly && averageBrightness < 0.18) {
+        // Edge pixels are often much darker than the scene's dominant color
+        // (letterbox-adjacent shadows, night footage). Lift the spill's
+        // luminance while preserving its hue; the source video is untouched.
+        color = Color.fromARGB(
+          255,
+          (math.pow(color.r, 0.56) * 255).round().clamp(0, 255),
+          (math.pow(color.g, 0.56) * 255).round().clamp(0, 255),
+          (math.pow(color.b, 0.56) * 255).round().clamp(0, 255),
+        );
       }
       write(x, y, color, alpha);
     }

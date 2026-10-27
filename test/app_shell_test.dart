@@ -111,6 +111,25 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('wide ambient player leaves the glow canvas visible', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final media = MediaItem(title: '青い動画', localPath: '/tmp/blue.mp4');
+    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
+      media,
+    ]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    c.read(viewingPlayerProvider.notifier).state = true;
+    await tester.pump();
+
+    final shellScaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
+    expect(shellScaffold.backgroundColor, Colors.transparent);
+    expect(find.byType(PlayerCard), findsOneWidget);
+  });
+
   testWidgets(
     'wide video player hides the bottom bar and shows it in image mode',
     (tester) async {
@@ -294,6 +313,38 @@ void main() {
     expect(tester.widget<AnimatedOpacity>(transport).opacity, 1);
     await tester.pump(const Duration(milliseconds: 2400));
     expect(tester.widget<AnimatedOpacity>(transport).opacity, 0);
+    await mouse.removePointer();
+  });
+
+  testWidgets('compact full-player video keeps the seek timeline on hover', (
+    tester,
+  ) async {
+    await pumpShell(tester, size: const Size(700, 900));
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final media = MediaItem(title: '動画シーク', localPath: '/tmp/seek-compact.mp4');
+    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
+      media,
+    ]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    c.read(viewingPlayerProvider.notifier).state = true;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final timeline = find.byKey(const ValueKey('compact-player-timeline'));
+    expect(timeline, findsOneWidget);
+    expect(tester.widget<AnimatedOpacity>(timeline).opacity, 0);
+
+    final bounds = tester.getRect(timeline);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: bounds.center);
+    await mouse.moveTo(bounds.center + const Offset(4, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.widget<AnimatedOpacity>(timeline).opacity, 1);
+    expect(
+      find.descendant(of: timeline, matching: find.byType(Slider)),
+      findsOneWidget,
+    );
     await mouse.removePointer();
   });
 

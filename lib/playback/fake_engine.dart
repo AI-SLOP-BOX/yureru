@@ -96,6 +96,9 @@ class FakePlaybackEngine implements PlaybackEngine {
   }) async => null;
 
   @override
+  void setAmbientFrameSource(Future<ui.Image?> Function()? capture) {}
+
+  @override
   ValueListenable<ui.Image?>? get ambientMatteFrameListenable => null;
   @override
   Future<String?> readEmbeddedLyrics() async => null;

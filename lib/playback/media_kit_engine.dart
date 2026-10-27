@@ -24,6 +24,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   double _volume = 1.0;
   bool _normalizationEnabled = false;
   final ValueNotifier<ui.Image?> _ambientMatteFrame = ValueNotifier(null);
+  Future<ui.Image?> Function()? _ambientFrameSource;
   AmbientEdgeColors? _previousAmbientEdges;
   (Rect?, double, double, double)? _ambientGeometry;
 
@@ -33,6 +34,13 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     final p = mk.Player();
     _player = p;
     p.setVolume(_volume * 100); // media_kit uses 0..100
+    _subs.add(
+      p.stream.log.listen((entry) {
+        if (entry.level == 'error') {
+          debugPrint('media_kit: ${entry.text}');
+        }
+      }),
+    );
     _subs.add(
       p.stream.position.listen((d) {
         _snap = PlaybackSnapshot(
@@ -256,22 +264,15 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     double depth = 1,
     double softness = 1,
   }) async {
-    final player = _player;
-    if (player == null) return null;
-    ui.Codec? codec;
     ui.Image? image;
     try {
-      // mpv's screenshot-raw path can abort the native process while converting
-      // frames (m_config_cache_from_shadow assertion on macOS). Use its encoded
-      // screenshot path instead; decoding at a bounded width keeps the ambient
-      // sampler inexpensive and avoids exposing a native abort to Dart catches.
-      final jpeg = await player.screenshot(format: 'image/jpeg');
-      if (jpeg == null || jpeg.isEmpty) return null;
-      codec = await ui.instantiateImageCodec(jpeg, targetWidth: 480);
-      image = (await codec.getNextFrame()).image;
-      final pixels = await image.toByteData(
-        format: ui.ImageByteFormat.rawRgba,
-      );
+      // media_kit's macOS screenshot API runs `screenshot-raw` against mpv
+      // from a Dart worker. Crash reports show mpv aborting in its swscale
+      // configuration path, so use Flutter's rendered surface capture instead
+      // of risking a process-wide abort from an optional ambient effect.
+      image = await _ambientFrameSource?.call();
+      if (image == null) return null;
+      final pixels = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       if (pixels == null) return null;
       final sampled = sampleAmbientEdges(
         pixels.buffer.asUint8List(pixels.offsetInBytes, pixels.lengthInBytes),
@@ -292,20 +293,29 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
         spread: spread,
         depth: depth,
         softness: softness,
+        // This field is enlarged to the window and blurred by Flutter. A
+        // 240×135 render keeps the gradients smooth while cutting per-frame
+        // pixel work by about 44% compared with 320×180.
+        renderWidth: 240,
+        renderHeight: 135,
       );
       _previousAmbientEdges = smoothed;
       _ambientGeometry = geometry;
-      // The video surface is never covered with a sampled matte image. This
-      // keeps decoded video pixels crisp and lets ambient spill stay behind
-      // the player as a separate glow layer.
+      // Ambient light belongs outside the rendered video only. Keep the
+      // sampled frame out of the video texture so no picture or letterbox
+      // pixels can be washed over by a foreground overlay.
       _replaceAmbientMatteFrame(null);
       return frame;
     } catch (_) {
       return null;
     } finally {
       image?.dispose();
-      codec?.dispose();
     }
+  }
+
+  @override
+  void setAmbientFrameSource(Future<ui.Image?> Function()? capture) {
+    _ambientFrameSource = capture;
   }
 
   @override

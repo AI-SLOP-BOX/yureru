@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
@@ -42,7 +43,9 @@ class PlayerCard extends ConsumerStatefulWidget {
 class _PlayerCardState extends ConsumerState<PlayerCard> {
   final GlobalKey _playerHoverBoundsKey = GlobalKey();
   final GlobalKey _ambientVideoBoundsKey = GlobalKey();
+  final GlobalKey _ambientVideoCaptureKey = GlobalKey();
   late StateController<Rect?> _ambientApertureController;
+  late PlaybackEngine _engine;
   Rect? _lastAmbientAperture;
   bool _ambientBoundsReportScheduled = false;
   bool _ambientBoundsNeeded = false;
@@ -118,12 +121,16 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     _ambientBoundsNeeded = false;
     final previous = _lastAmbientAperture;
     if (previous == null) return;
-    // Another player surface may already have published its own aperture.
-    // Clear only the bounds this widget last supplied.
-    if (_ambientApertureController.state == previous) {
-      _ambientApertureController.state = null;
-    }
     _lastAmbientAperture = null;
+    // dispose can run while Flutter is finalizing the widget tree. Defer the
+    // provider write until the frame is over, and avoid clearing a newer
+    // aperture published by another player surface in the meantime.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_ambientApertureController.mounted) return;
+      if (_ambientApertureController.state == previous) {
+        _ambientApertureController.state = null;
+      }
+    });
   }
 
   void _trackGlobalMousePosition(PointerEvent event) {
@@ -158,7 +165,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     WidgetsBinding.instance.pointerRouter.addGlobalRoute(
       _trackGlobalMousePosition,
     );
-    final engine = ref.read(engineProvider);
+    final engine = _engine = ref.read(engineProvider);
     bool lastInit = engine.snapshot.initialized;
     bool lastPlaying = engine.snapshot.isPlaying;
     _isPlaybackPlaying = lastPlaying;
@@ -286,17 +293,6 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     _startHideTimer(reset: true);
   }
 
-  void _toggleControlsVisibility() {
-    setState(() {
-      _controlsVisible = !_controlsVisible;
-    });
-    if (_controlsVisible) {
-      _startHideTimer(reset: true);
-    } else {
-      _hideTimer?.cancel();
-    }
-  }
-
   void _showCompactCinemaControls() {
     _compactCinemaHideTimer?.cancel();
     if (!_compactCinemaControlsVisible && mounted) {
@@ -352,10 +348,31 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   }
 
   Widget _videoSurface(PlaybackEngine engine, {BoxFit fit = BoxFit.contain}) {
-    // Keep the decoded video as the topmost picture layer. Drawing a sampled
-    // matte image over it can mistake dark scene detail for letterboxing and
-    // wash out the actual frame; ambient color remains behind the player.
-    return engine.buildVideoView(fit: fit);
+    // Video stays as an untouched foreground surface. Ambient colors are
+    // rendered only in the surrounding app canvas beneath this aperture.
+    return RepaintBoundary(
+      key: _ambientVideoCaptureKey,
+      child: engine.buildVideoView(fit: fit),
+    );
+  }
+
+  Future<ui.Image?> _captureAmbientVideoFrame() async {
+    final renderObject = _ambientVideoCaptureKey.currentContext
+        ?.findRenderObject();
+    if (renderObject is! RenderRepaintBoundary || !renderObject.hasSize) {
+      return null;
+    }
+    final size = renderObject.size;
+    if (size.width <= 0 || size.height <= 0) return null;
+    final pixelRatio = math.min(
+      1.0,
+      math.min(480 / size.width, 320 / size.height),
+    );
+    try {
+      return await renderObject.toImage(pixelRatio: pixelRatio);
+    } catch (_) {
+      return null;
+    }
   }
 
   void _onSwitchMode(PlayerViewMode newMode) {
@@ -468,6 +485,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
       _trackGlobalMousePosition,
     );
     _clearAmbientVideoBounds();
+    _engine.setAmbientFrameSource(null);
     super.dispose();
   }
 
@@ -514,6 +532,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final playPauseIconSize = previousNextIconSize * 60 / 34;
     final isCinema = ref.watch(cinemaModeProvider);
     final useVideoOverlay = mode == PlayerViewMode.media && !isCinema;
+    engine.setAmbientFrameSource(
+      useVideoOverlay ? _captureAmbientVideoFrame : null,
+    );
     if (snap.initialized && mode == PlayerViewMode.media && !isCinema) {
       _reportAmbientVideoBounds();
     } else {
@@ -668,7 +689,8 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                       () {
                         if (!mounted) return;
                         if (isCompact) {
-                          _toggleControlsVisibility();
+                          // Touch layouts keep the seek and transport controls
+                          // visible; tapping the video must not hide them.
                         } else {
                           _onPointerHover();
                           ctl.toggle();
@@ -766,13 +788,18 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                 ? Stack(
                                                     fit: StackFit.expand,
                                                     children: [
-                                                      ThumbImage(
-                                                        seed: media.id,
-                                                        mediaId: media.id,
-                                                        localPath:
-                                                            media.localPath,
-                                                        expand: true,
-                                                      ),
+                                                      if (hasValidVideoAspectRatio)
+                                                        const ColoredBox(
+                                                          color: Colors.black,
+                                                        )
+                                                      else
+                                                        ThumbImage(
+                                                          seed: media.id,
+                                                          mediaId: media.id,
+                                                          localPath:
+                                                              media.localPath,
+                                                          expand: true,
+                                                        ),
                                                       if (hasValidVideoAspectRatio)
                                                         _videoSurface(engine),
                                                     ],
@@ -1827,6 +1854,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final isNarrowWindow = MediaQuery.sizeOf(context).width < 1000;
     final showQueueSheet = showQueue && isNarrowWindow;
     final useVideoOverlay = mode == PlayerViewMode.media;
+    // Compact layouts are touch-first: keep the transport and seek bar visible
+    // instead of relying on hover, which mobile devices do not have.
+    final keepVideoControlsVisible = useVideoOverlay;
     final ambientLightEnabled = ref.watch(ambientLightProvider);
     final fullPlayerView = ref.watch(viewingPlayerProvider);
     final title = displayTitle(media.title);
@@ -1848,7 +1878,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
 
     return MouseRegion(
       key: _playerHoverBoundsKey,
-      cursor: useVideoOverlay && !_controlsVisible
+      cursor: useVideoOverlay && !_controlsVisible && !keepVideoControlsVisible
           ? SystemMouseCursors.none
           : SystemMouseCursors.basic,
       onHover: (event) {
@@ -2266,6 +2296,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                           children: [
                                             Positioned.fill(
                                               child: Container(
+                                                key:
+                                                    mode == PlayerViewMode.media
+                                                    ? _ambientVideoBoundsKey
+                                                    : null,
                                                 decoration: BoxDecoration(
                                                   color: Colors.black,
                                                   borderRadius:
@@ -2414,14 +2448,31 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                             const SizedBox(height: 18),
 
                             // 4. Seekbar + Time indicators underneath
-                            if (!fullPlayerView)
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                ),
-                                child: _MobileTimeline(
-                                  engine: engine,
-                                  ctl: ctl,
+                            if (useVideoOverlay || !fullPlayerView)
+                              AnimatedOpacity(
+                                key: useVideoOverlay
+                                    ? const ValueKey('compact-player-timeline')
+                                    : null,
+                                opacity:
+                                    useVideoOverlay && !keepVideoControlsVisible
+                                    ? (_controlsVisible ? 1 : 0)
+                                    : 1,
+                                duration: const Duration(milliseconds: 240),
+                                curve: Curves.easeInOut,
+                                child: IgnorePointer(
+                                  ignoring:
+                                      useVideoOverlay &&
+                                      !keepVideoControlsVisible &&
+                                      !_controlsVisible,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                    ),
+                                    child: _MobileTimeline(
+                                      engine: engine,
+                                      ctl: ctl,
+                                    ),
+                                  ),
                                 ),
                               ),
 
@@ -2432,13 +2483,17 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                               key: useVideoOverlay
                                   ? const ValueKey('compact-player-transport')
                                   : null,
-                              opacity: useVideoOverlay
+                              opacity:
+                                  useVideoOverlay && !keepVideoControlsVisible
                                   ? (_controlsVisible ? 1 : 0)
                                   : 1,
                               duration: const Duration(milliseconds: 240),
                               curve: Curves.easeInOut,
                               child: IgnorePointer(
-                                ignoring: useVideoOverlay && !_controlsVisible,
+                                ignoring:
+                                    useVideoOverlay &&
+                                    !keepVideoControlsVisible &&
+                                    !_controlsVisible,
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 16,

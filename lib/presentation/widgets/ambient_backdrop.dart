@@ -58,27 +58,38 @@ class AmbientRoomGlowCanvas extends ConsumerWidget {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Edge profiles are already diffused in renderAmbientGlow. Apply only
-        // a small final softening pass here; a window-sized sigma erased the
-        // color falloff and turned the whole shell into gray fog.
-        // The source glow is only 320×180 and is already spatially softened
-        // as it leaves the video. Keep this final pass below one source pixel
-        // on typical windows so it blends interpolation without smearing the
-        // sky/mountain boundary into a foggy band.
-        final sigma = (constraints.maxHeight * 0.005)
-            .clamp(2.0, 6.0)
+        final aperture = ref.watch(ambientVideoApertureProvider);
+        final isVideoMode =
+            ref.watch(playerViewModeProvider) == PlayerViewMode.media &&
+            ref.read(engineProvider).videoAspectRatio != null;
+        // Do not show an unmasked first frame while the player bounds are
+        // still being measured. Once available, the glow remains in the app
+        // area around the player and is cut out over the video itself.
+        if (isVideoMode && aperture == null) return const SizedBox.expand();
+        // A moderate final blur removes the last scanline-like edge streaks
+        // while preserving the broad color gradients of the room glow.
+        final sigma = (constraints.maxHeight * 0.015)
+            .clamp(8.0, 16.0)
             .toDouble();
         return IgnorePointer(
           child: Opacity(
             opacity: intensity.clamp(0.0, 1.0).toDouble(),
-            child: ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-              child: RawImage(
-                image: frame,
-                width: constraints.maxWidth,
-                height: constraints.maxHeight,
-                fit: BoxFit.fill,
-                filterQuality: FilterQuality.medium,
+            // Blur can spread opaque edge colors into the transparent video
+            // aperture in the source image. Cut the actual player rectangle
+            // back out after filtering so ambient light never washes over the
+            // moving picture itself.
+            child: ClipPath(
+              clipper: _AmbientApertureClipper(aperture),
+              clipBehavior: Clip.antiAlias,
+              child: ImageFiltered(
+                imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                child: RawImage(
+                  image: frame,
+                  width: constraints.maxWidth,
+                  height: constraints.maxHeight,
+                  fit: BoxFit.fill,
+                  filterQuality: FilterQuality.medium,
+                ),
               ),
             ),
           ),
@@ -86,6 +97,36 @@ class AmbientRoomGlowCanvas extends ConsumerWidget {
       },
     );
   }
+}
+
+class _AmbientApertureClipper extends CustomClipper<Path> {
+  const _AmbientApertureClipper(this.aperture);
+
+  final Rect? aperture;
+
+  @override
+  Path getClip(Size size) {
+    final path = Path()..addRect(Offset.zero & size);
+    final normalized = aperture;
+    if (normalized == null || size.isEmpty) return path;
+
+    // Match the 20 px rounded video card, with a one-pixel safety inset to
+    // prevent anti-aliased filtering from leaving a colored fringe on its edge.
+    final videoRect = Rect.fromLTRB(
+      normalized.left * size.width,
+      normalized.top * size.height,
+      normalized.right * size.width,
+      normalized.bottom * size.height,
+    ).inflate(1);
+    final radius = Radius.circular(21);
+    return path
+      ..fillType = PathFillType.evenOdd
+      ..addRRect(RRect.fromRectAndRadius(videoRect, radius));
+  }
+
+  @override
+  bool shouldReclip(covariant _AmbientApertureClipper oldClipper) =>
+      oldClipper.aperture != aperture;
 }
 
 class AmbientToolbarGlow extends ConsumerWidget {

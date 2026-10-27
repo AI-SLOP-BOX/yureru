@@ -78,6 +78,10 @@ abstract class PlaybackEngine {
     double softness = 1,
   }) async => null;
 
+  /// Supplies a frame captured from the rendered video surface. This avoids
+  /// native screenshot paths that are not safe during active playback.
+  void setAmbientFrameSource(Future<ui.Image?> Function()? capture) {}
+
   /// Local video-frame overlay that fills static edge mattes with ambient
   /// colors while keeping the active picture transparent in the overlay.
   ValueListenable<ui.Image?>? get ambientMatteFrameListenable => null;

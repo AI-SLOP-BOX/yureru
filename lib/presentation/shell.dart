@@ -383,7 +383,12 @@ class _AppShellState extends ConsumerState<AppShell>
     final showAmbient = viewing && hasCurrent && ambientEnabled && !isCinema;
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
+      // The room-glow canvas is painted immediately behind this Scaffold.
+      // Keep the wide player surface transparent while ambient mode is on;
+      // an opaque scaffold background hides every sampled video color.
+      backgroundColor: showAmbient
+          ? Colors.transparent
+          : theme.scaffoldBackgroundColor,
       body: Stack(
         children: [
           if (showAmbient)

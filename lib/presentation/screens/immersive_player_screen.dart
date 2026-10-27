@@ -161,21 +161,22 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  IgnorePointer(
-                    child: ImageFiltered(
-                      imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
-                      child: Opacity(
-                        opacity: 0.22,
-                        child: ThumbImage(
-                          seed: media.id,
-                          mediaId: media.id,
-                          localPath: media.localPath,
-                          expand: true,
-                          highRes: true,
+                  if (mode != PlayerViewMode.media)
+                    IgnorePointer(
+                      child: ImageFiltered(
+                        imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+                        child: Opacity(
+                          opacity: 0.22,
+                          child: ThumbImage(
+                            seed: media.id,
+                            mediaId: media.id,
+                            localPath: media.localPath,
+                            expand: true,
+                            highRes: true,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                   if (mode == PlayerViewMode.media)
                     const AmbientRoomGlowCanvas(),
                   SafeArea(

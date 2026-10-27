@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:media_kit/media_kit.dart' as mk;
-import 'package:media_kit_video/media_kit_video.dart' as mkv;
 import 'package:path_provider/path_provider.dart';
 
 import 'importer.dart';
@@ -124,13 +122,10 @@ class ThumbnailService {
         }
       }
       if (_isWebm(localPath)) {
-        return _throttled(
-          () => _generateWebm(
-            mediaId: mediaId,
-            localPath: localPath,
-            output: out,
-          ),
-        );
+        // media_kit's screenshot() calls mpv's screenshot-raw command, which
+        // aborts inside libmpv on this macOS build. Keep WebM playback stable
+        // and let callers show their normal placeholder instead.
+        return null;
       }
       return _throttled(
         () => _generate(mediaId, localPath, maxWidth, highRes: highRes),
@@ -143,76 +138,6 @@ class ThumbnailService {
 
   static bool _isWebm(String path) =>
       path.toLowerCase().split('?').first.endsWith('.webm');
-
-  /// AVFoundation does not decode WebM on macOS. Use the same mpv backend as
-  /// playback for this container, then cache its JPEG frame just like the
-  /// AVFoundation path. The temporary player is always disposed to release
-  /// its decoder and file handles.
-  static Future<File?> _generateWebm({
-    required String mediaId,
-    required String localPath,
-    required File output,
-  }) async {
-    final player = mk.Player();
-    final controller = mkv.VideoController(
-      player,
-      configuration: const mkv.VideoControllerConfiguration(
-        width: 640,
-        height: 360,
-      ),
-    );
-    try {
-      await controller.platform.future.timeout(const Duration(seconds: 15));
-      await controller.setSize(width: 640, height: 360);
-      await player.setVolume(0);
-      await player
-          .open(mk.Media(localPath), play: true)
-          .timeout(const Duration(seconds: 30));
-      var duration = player.state.duration;
-      if (duration <= Duration.zero) {
-        duration = await player.stream.duration
-            .firstWhere((value) => value > Duration.zero)
-            .timeout(const Duration(seconds: 15));
-      }
-      await controller.waitUntilFirstFrameRendered.timeout(
-        const Duration(seconds: 15),
-      );
-      final target = duration > Duration.zero
-          ? Duration(milliseconds: duration.inMilliseconds ~/ 3)
-          : Duration.zero;
-      await player.seek(target).timeout(const Duration(seconds: 10));
-      // Let mpv decode the sought frame before requesting the screenshot.
-      await Future<void>.delayed(const Duration(seconds: 1));
-      await player.pause();
-      final bytes = await player
-          .screenshot(format: 'image/jpeg')
-          .timeout(const Duration(seconds: 15));
-      if (bytes == null || bytes.isEmpty) return null;
-      await output.parent.create(recursive: true);
-      await output.writeAsBytes(bytes, flush: true);
-      if (target.inMilliseconds >= 0) {
-        try {
-          await File(
-            '${output.path}.txt',
-          ).writeAsString('${target.inMilliseconds}');
-        } catch (_) {}
-      }
-      // Drop older generations so the WebM thumbnail appears immediately.
-      try {
-        for (final legacy in await legacyCacheFilesFor(mediaId)) {
-          if (legacy.path != output.path && await legacy.exists()) {
-            await legacy.delete();
-          }
-        }
-      } catch (_) {}
-      return output;
-    } catch (e) {
-      debugPrint('thumb: mpv WebM skipped $mediaId: $e');
-      return null;
-    } finally {
-      await player.dispose();
-    }
-  }
 
   static Future<File?> _generate(
     String mediaId,

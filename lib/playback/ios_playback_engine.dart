@@ -260,6 +260,11 @@ class IosPlaybackEngine implements PlaybackEngine {
   );
 
   @override
+  void setAmbientFrameSource(Future<ui.Image?> Function()? capture) {
+    _fallback?.setAmbientFrameSource(capture);
+  }
+
+  @override
   ValueListenable<ui.Image?>? get ambientMatteFrameListenable =>
       _fallback?.ambientMatteFrameListenable;
 

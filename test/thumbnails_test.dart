@@ -6,32 +6,81 @@ import 'package:yureru/data/importer.dart';
 import 'package:yureru/data/thumbnails.dart';
 
 void main() {
-  group('ThumbnailService.forMedia', () {    test('network uri -> null without native call', () async {
+  group('ThumbnailService.forMedia', () {
+    test('network uri -> null without native call', () async {
       expect(
         await ThumbnailService.forMedia(
-            mediaId: 'x', localPath: 'http://192.168.0.2:8080/media/x'),
+          mediaId: 'x',
+          localPath: 'http://192.168.0.2:8080/media/x',
+        ),
         isNull,
       );
     });
     test('missing file -> null without throwing', () async {
       expect(
         await ThumbnailService.forMedia(
-            mediaId: 'missing', localPath: '/tmp/yureru-no-such-file.mp4'),
+          mediaId: 'missing',
+          localPath: '/tmp/yureru-no-such-file.mp4',
+        ),
         isNull,
       );
     });
+
+    test(
+      'WebM thumbnail skips the crash-prone mpv screenshot command',
+      () async {
+        final binding = TestWidgetsFlutterBinding.ensureInitialized();
+        final messenger = binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(
+          const MethodChannel('plugins.flutter.io/path_provider'),
+          (call) async => call.method == 'getTemporaryDirectory'
+              ? Directory.systemTemp.path
+              : null,
+        );
+        var nativeCalls = 0;
+        messenger.setMockMethodCallHandler(mediaPickerChannel, (call) async {
+          nativeCalls++;
+          return null;
+        });
+        addTearDown(() {
+          messenger.setMockMethodCallHandler(mediaPickerChannel, null);
+          messenger.setMockMethodCallHandler(
+            const MethodChannel('plugins.flutter.io/path_provider'),
+            null,
+          );
+        });
+
+        final source = File(
+          '${Directory.systemTemp.path}/yureru-thumb-test.webm',
+        );
+        await source.writeAsBytes([0]);
+        addTearDown(() async {
+          if (await source.exists()) await source.delete();
+        });
+
+        expect(
+          await ThumbnailService.forMedia(
+            mediaId: 'webm-no-mpv-screenshot',
+            localPath: source.path,
+          ),
+          isNull,
+        );
+        expect(nativeCalls, 0);
+      },
+    );
 
     test('mocked native bytes are cached; second call hits disk', () async {
       final binding = TestWidgetsFlutterBinding.ensureInitialized();
       final messenger = binding.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(
-          const MethodChannel('plugins.flutter.io/path_provider'),
-          (call) async {
-        if (call.method == 'getTemporaryDirectory') {
-          return Directory.systemTemp.path;
-        }
-        return null;
-      });
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (call) async {
+          if (call.method == 'getTemporaryDirectory') {
+            return Directory.systemTemp.path;
+          }
+          return null;
+        },
+      );
       var nativeCalls = 0;
       messenger.setMockMethodCallHandler(mediaPickerChannel, (call) async {
         if (call.method == 'makeThumbnail') {
@@ -49,7 +98,9 @@ void main() {
       addTearDown(() {
         messenger.setMockMethodCallHandler(mediaPickerChannel, null);
         messenger.setMockMethodCallHandler(
-            const MethodChannel('plugins.flutter.io/path_provider'), null);
+          const MethodChannel('plugins.flutter.io/path_provider'),
+          null,
+        );
       });
 
       final src = File('${Directory.systemTemp.path}/yureru-thumb-src.mp4');
@@ -60,30 +111,37 @@ void main() {
         if (await cached.exists()) await cached.delete();
         final sidecar = File('${cached.path}.txt');
         if (await sidecar.exists()) await sidecar.delete();
-        for (final legacy
-            in await ThumbnailService.legacyCacheFilesFor('mock1')) {
+        for (final legacy in await ThumbnailService.legacyCacheFilesFor(
+          'mock1',
+        )) {
           if (await legacy.exists()) await legacy.delete();
         }
       });
 
       final first = await ThumbnailService.forMedia(
-          mediaId: 'mock1', localPath: src.path);
+        mediaId: 'mock1',
+        localPath: src.path,
+      );
       expect(first, isNotNull);
       expect(first!.path.endsWith('.v3.jpg'), isTrue);
       expect(await first.readAsBytes(), [0xFF, 0xD8, 0xFF, 0xD9]);
       expect(await ThumbnailService.bestTimeMsFor('mock1'), 2000);
       final second = await ThumbnailService.forMedia(
-          mediaId: 'mock1', localPath: src.path);
+        mediaId: 'mock1',
+        localPath: src.path,
+      );
       expect(second?.path, first.path);
       expect(nativeCalls, 1);
     });
   });
 
-  group('DurationService.forMedia', () {    test('missing file -> null without throwing', () async {
+  group('DurationService.forMedia', () {
+    test('missing file -> null without throwing', () async {
       expect(
         await DurationService.forMedia(
-            mediaId: 'dur-missing',
-            localPath: '/tmp/yureru-no-such-file.mp4'),
+          mediaId: 'dur-missing',
+          localPath: '/tmp/yureru-no-such-file.mp4',
+        ),
         isNull,
       );
     });
@@ -100,8 +158,9 @@ void main() {
         }
         return null;
       });
-      addTearDown(() =>
-          messenger.setMockMethodCallHandler(mediaPickerChannel, null));
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(mediaPickerChannel, null),
+      );
 
       final src = File('${Directory.systemTemp.path}/yureru-dur-src.mp4');
       await src.writeAsBytes([0]);
@@ -126,13 +185,14 @@ void main() {
       final binding = TestWidgetsFlutterBinding.ensureInitialized();
       final messenger = binding.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(
-          const MethodChannel('plugins.flutter.io/path_provider'),
-          (call) async {
-        if (call.method == 'getTemporaryDirectory') {
-          return Directory.systemTemp.path;
-        }
-        return null;
-      });
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (call) async {
+          if (call.method == 'getTemporaryDirectory') {
+            return Directory.systemTemp.path;
+          }
+          return null;
+        },
+      );
       var nativeCalls = 0;
       messenger.setMockMethodCallHandler(mediaPickerChannel, (call) async {
         if (call.method == 'makeThumbnail') {
@@ -148,7 +208,9 @@ void main() {
       addTearDown(() {
         messenger.setMockMethodCallHandler(mediaPickerChannel, null);
         messenger.setMockMethodCallHandler(
-            const MethodChannel('plugins.flutter.io/path_provider'), null);
+          const MethodChannel('plugins.flutter.io/path_provider'),
+          null,
+        );
       });
 
       final srcs = <File>[];
@@ -162,8 +224,7 @@ void main() {
           if (await f.exists()) await f.delete();
         }
         for (var i = 0; i < 4; i++) {
-          final cached =
-              await ThumbnailService.cacheFileFor('thr$i');
+          final cached = await ThumbnailService.cacheFileFor('thr$i');
           if (await cached.exists()) await cached.delete();
           final sidecar = File('${cached.path}.txt');
           if (await sidecar.exists()) await sidecar.delete();
@@ -172,8 +233,7 @@ void main() {
 
       final results = await Future.wait([
         for (var i = 0; i < 4; i++)
-          ThumbnailService.forMedia(
-              mediaId: 'thr$i', localPath: srcs[i].path),
+          ThumbnailService.forMedia(mediaId: 'thr$i', localPath: srcs[i].path),
       ]);
       expect(results.every((f) => f != null), isTrue);
       expect(nativeCalls, 4);
