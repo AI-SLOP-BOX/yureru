@@ -233,6 +233,79 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                       },
                     ),
                   ),
+                  // Keep the now-playing identity in the upper-left, separate
+                  // from the artwork/video and the transport surface, like a
+                  // music-first fullscreen player.
+                  PositionedDirectional(
+                    top: 72,
+                    start: 32,
+                    end: 32,
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: MediaQuery.sizeOf(context).width * 0.62,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              key: const ValueKey('immersive-title'),
+                              displayTitle(media.title),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 28,
+                                fontWeight: FontWeight.w700,
+                                shadows: [
+                                  Shadow(color: Colors.black87, blurRadius: 8),
+                                ],
+                              ),
+                            ),
+                            if (formatCreatorNames(media.artist).isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Tooltip(
+                                  message: ref.tr('search_by_creator'),
+                                  child: InkWell(
+                                    key: const ValueKey(
+                                      'immersive-creator-search',
+                                    ),
+                                    onTap: () =>
+                                        ref
+                                            .read(
+                                              creatorVideosRequestProvider
+                                                  .notifier,
+                                            )
+                                            .state = formatCreatorNames(
+                                          media.artist,
+                                        ),
+                                    child: Text(
+                                      key: const ValueKey('immersive-creator'),
+                                      formatCreatorNames(media.artist),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 20,
+                                        shadows: [
+                                          Shadow(
+                                            color: Colors.black87,
+                                            blurRadius: 8,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                   PositionedDirectional(
                     top: 0,
                     start: 12,
@@ -435,7 +508,7 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                       child: _controls(
                         Center(
                           child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 680),
+                            constraints: const BoxConstraints(maxWidth: 1200),
                             child: _ImmersiveTransport(engine: engine),
                           ),
                         ),
@@ -492,27 +565,6 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 20),
-        Text(
-          displayTitle(media.title),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 24,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        if (media.artist?.trim().isNotEmpty == true) ...[
-          const SizedBox(height: 6),
-          Text(
-            formatCreatorNames(media.artist),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white60, fontSize: 16),
-          ),
-        ],
       ],
     );
   }
@@ -545,6 +597,40 @@ class _ImmersiveTransportState extends ConsumerState<_ImmersiveTransport> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Slider(
+              value: positionMs,
+              max: (duration > 0 ? duration : 1).toDouble(),
+              activeColor: Colors.white,
+              inactiveColor: Colors.white24,
+              onChangeStart: playback.initialized && duration > 0
+                  ? (value) => setState(() => _dragPositionMs = value)
+                  : null,
+              onChanged: playback.initialized && duration > 0
+                  ? (value) => setState(() => _dragPositionMs = value)
+                  : null,
+              onChangeEnd: playback.initialized && duration > 0
+                  ? (value) async {
+                      await controller.seekTo(
+                        Duration(milliseconds: value.round()),
+                      );
+                      if (mounted) setState(() => _dragPositionMs = null);
+                    }
+                  : null,
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  fmtDuration(Duration(milliseconds: positionMs.round())),
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+                Text(
+                  fmtDuration(playback.duration),
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -582,39 +668,6 @@ class _ImmersiveTransportState extends ConsumerState<_ImmersiveTransport> {
                 const PlaybackRepeatButton(
                   activeColor: Colors.white,
                   inactiveColor: Colors.white38,
-                ),
-              ],
-            ),
-            Slider(
-              value: positionMs,
-              max: (duration > 0 ? duration : 1).toDouble(),
-              activeColor: Colors.white,
-              inactiveColor: Colors.white24,
-              onChangeStart: playback.initialized && duration > 0
-                  ? (value) => setState(() => _dragPositionMs = value)
-                  : null,
-              onChanged: playback.initialized && duration > 0
-                  ? (value) => setState(() => _dragPositionMs = value)
-                  : null,
-              onChangeEnd: playback.initialized && duration > 0
-                  ? (value) async {
-                      await controller.seekTo(
-                        Duration(milliseconds: value.round()),
-                      );
-                      if (mounted) setState(() => _dragPositionMs = null);
-                    }
-                  : null,
-            ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  fmtDuration(Duration(milliseconds: positionMs.round())),
-                  style: const TextStyle(color: Colors.white60, fontSize: 12),
-                ),
-                Text(
-                  fmtDuration(playback.duration),
-                  style: const TextStyle(color: Colors.white60, fontSize: 12),
                 ),
               ],
             ),

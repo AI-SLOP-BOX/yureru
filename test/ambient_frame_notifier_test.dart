@@ -11,6 +11,7 @@ import 'package:yureru/playback/playback_engine.dart';
 class _SnapshotEngine extends FakePlaybackEngine {
   final controller = StreamController<PlaybackSnapshot>.broadcast();
   int captures = 0;
+  Duration captureDelay = Duration.zero;
 
   @override
   Stream<PlaybackSnapshot> get snapshots => controller.stream;
@@ -22,6 +23,7 @@ class _SnapshotEngine extends FakePlaybackEngine {
     double depth = 1,
     double softness = 1,
   }) async {
+    if (captureDelay > Duration.zero) await Future<void>.delayed(captureDelay);
     captures++;
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
@@ -82,4 +84,53 @@ void main() {
       expect(notifier.state, isNotNull);
     },
   );
+
+  test(
+    'automatic capture rate falls under load and rises when it clears',
+    () async {
+      final engine = _SnapshotEngine()
+        ..snap = const PlaybackSnapshot(
+          position: Duration.zero,
+          duration: Duration(minutes: 2),
+          initialized: true,
+          isPlaying: true,
+        )
+        ..captureDelay = const Duration(milliseconds: 45);
+      final notifier = AmbientFrameNotifier(engine, framesPerSecond: 0);
+      addTearDown(() async {
+        notifier.dispose();
+        await engine.controller.close();
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(notifier.effectiveFramesPerSecond, lessThan(60));
+
+      engine.captureDelay = Duration.zero;
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (notifier.effectiveFramesPerSecond < 60 &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(notifier.effectiveFramesPerSecond, 60);
+    },
+  );
+
+  test('a numeric capture rate stays fixed under load', () async {
+    final engine = _SnapshotEngine()
+      ..snap = const PlaybackSnapshot(
+        position: Duration.zero,
+        duration: Duration(minutes: 2),
+        initialized: true,
+        isPlaying: true,
+      )
+      ..captureDelay = const Duration(milliseconds: 60);
+    final notifier = AmbientFrameNotifier(engine, framesPerSecond: 30);
+    addTearDown(() async {
+      notifier.dispose();
+      await engine.controller.close();
+    });
+
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect(notifier.effectiveFramesPerSecond, 30);
+  });
 }

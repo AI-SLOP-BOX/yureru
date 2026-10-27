@@ -2,13 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
+import 'package:media_kit/media_kit.dart' as mk;
 import 'package:path_provider/path_provider.dart';
 
 import 'importer.dart';
 
-/// Best-of-N frame JPEG thumbnails via the native channel (macOS:
-/// AVFoundation samples several timestamps, skips near-black/white frames
-/// and returns the most textured one).
+/// Best-of-N JPEG thumbnails from local media. macOS uses AVFoundation;
+/// Android, iOS, Windows and Linux use the bundled media_kit decoder.
 /// Disk-cached per media id under the temp dir; any failure yields null
 /// and callers fall back to the gradient placeholder.
 class ThumbnailService {
@@ -104,8 +105,6 @@ class ThumbnailService {
     bool highRes = false,
   }) async {
     try {
-      // TODO: mobile (video_thumbnail) / Windows / Linux backends.
-      if (!Platform.isMacOS) return null;
       // Check existence asynchronously without blocking UI event loop.
       if (!await File(localPath).exists()) {
         return null;
@@ -121,7 +120,7 @@ class ThumbnailService {
           return out;
         }
       }
-      if (_isWebm(localPath)) {
+      if (Platform.isMacOS && _isWebm(localPath)) {
         // media_kit's screenshot() calls mpv's screenshot-raw command, which
         // aborts inside libmpv on this macOS build. Keep WebM playback stable
         // and let callers show their normal placeholder instead.
@@ -146,6 +145,14 @@ class ThumbnailService {
     bool highRes = false,
   }) async {
     try {
+      if (!Platform.isMacOS) {
+        return await _generateWithMediaKit(
+          mediaId,
+          localPath,
+          maxWidth,
+          highRes: highRes,
+        );
+      }
       final out = await cacheFileFor(mediaId, highRes: highRes);
       // Another waiter may have finished first; re-check inside the gate.
       if (await out.exists()) {
@@ -183,6 +190,96 @@ class ThumbnailService {
       return null;
     }
   }
+
+  /// Uses the same bundled decoder as playback on Android, iOS, Windows and
+  /// Linux. Multiple seek samples are scored for detail and usable exposure,
+  /// matching the native macOS best-frame behavior without another plugin.
+  static Future<File?> _generateWithMediaKit(
+    String mediaId,
+    String localPath,
+    int maxWidth, {
+    required bool highRes,
+  }) async {
+    final player = mk.Player();
+    try {
+      await player.open(mk.Media(Uri.file(localPath).toString()), play: false);
+      var duration = player.state.duration;
+      if (duration <= Duration.zero) {
+        duration = await player.stream.duration
+            .firstWhere((value) => value > Duration.zero)
+            .timeout(const Duration(seconds: 8));
+      }
+      if (duration <= Duration.zero) return null;
+
+      Uint8List? bestFrame;
+      var bestScore = double.negativeInfinity;
+      var bestTimeMs = 0;
+      for (final fraction in const [0.12, 0.34, 0.58, 0.82]) {
+        final timeMs = (duration.inMilliseconds * fraction).round();
+        await player.seek(Duration(milliseconds: timeMs));
+        await Future<void>.delayed(const Duration(milliseconds: 180));
+        final bytes = await player.screenshot(format: 'image/jpeg');
+        final score = bytes == null ? null : _frameScore(bytes);
+        if (bytes != null &&
+            bytes.isNotEmpty &&
+            score != null &&
+            score > bestScore) {
+          bestFrame = bytes;
+          bestScore = score;
+          bestTimeMs = timeMs;
+        }
+      }
+      if (bestFrame == null) return null;
+
+      final decoded = img.decodeJpg(bestFrame);
+      if (decoded == null) return null;
+      final thumbnail = img.copyResize(
+        decoded,
+        width: maxWidth,
+        interpolation: img.Interpolation.average,
+      );
+      final out = await cacheFileFor(mediaId, highRes: highRes);
+      await out.parent.create(recursive: true);
+      await out.writeAsBytes(
+        img.encodeJpg(thumbnail, quality: 88),
+        flush: true,
+      );
+      await File('${out.path}.txt').writeAsString('$bestTimeMs');
+      return out;
+    } catch (e) {
+      debugPrint('thumb: media_kit skipped $mediaId: $e');
+      return null;
+    } finally {
+      await player.dispose();
+    }
+  }
+
+  static double? _frameScore(Uint8List bytes) {
+    final decoded = img.decodeJpg(bytes);
+    if (decoded == null) return null;
+    final sample = img.copyResize(decoded, width: 64, height: 36);
+    final luminance = List<double>.filled(sample.width * sample.height, 0);
+    var sum = 0.0;
+    var squaredSum = 0.0;
+    var edges = 0.0;
+    for (var y = 0; y < sample.height; y++) {
+      for (var x = 0; x < sample.width; x++) {
+        final value = sample.getPixel(x, y).luminance.toDouble();
+        final index = y * sample.width + x;
+        luminance[index] = value;
+        sum += value;
+        squaredSum += value * value;
+        if (x > 0) edges += (value - luminance[index - 1]).abs();
+        if (y > 0) edges += (value - luminance[index - sample.width]).abs();
+      }
+    }
+    final count = luminance.length;
+    final mean = sum / count;
+    if (mean < 18 || mean > 238) return -1;
+    final variance = (squaredSum / count - mean * mean).clamp(0.0, 65025.0);
+    final exposurePenalty = (mean - 128).abs() / 128 * 18;
+    return variance + edges / count * 0.35 - exposurePenalty;
+  }
 }
 
 /// Duration probe companion to [ThumbnailService]. Same guards, same
@@ -213,14 +310,14 @@ class DurationService {
     required String localPath,
   }) async {
     try {
-      // TODO: mobile / Windows / Linux backends.
-      if (!Platform.isMacOS) return null;
       if (!await File(localPath).exists()) {
         return null;
       }
-      final ms = await mediaPickerChannel.invokeMethod<int>('probeDuration', {
-        'path': localPath,
-      });
+      final ms = Platform.isMacOS
+          ? await mediaPickerChannel.invokeMethod<int>('probeDuration', {
+              'path': localPath,
+            })
+          : await _probeDurationWithMediaKit(localPath);
       if (ms == null || ms <= 0) return null;
       _cache[mediaId] = ms;
       return ms;
@@ -228,5 +325,26 @@ class DurationService {
       debugPrint('duration: skipped $mediaId: $e');
       return null;
     }
+  }
+
+  static Future<int?> _probeDurationWithMediaKit(String localPath) async {
+    return ThumbnailService._throttled(() async {
+      final player = mk.Player();
+      try {
+        await player.open(
+          mk.Media(Uri.file(localPath).toString()),
+          play: false,
+        );
+        var duration = player.state.duration;
+        if (duration <= Duration.zero) {
+          duration = await player.stream.duration
+              .firstWhere((value) => value > Duration.zero)
+              .timeout(const Duration(seconds: 8));
+        }
+        return duration.inMilliseconds > 0 ? duration.inMilliseconds : null;
+      } finally {
+        await player.dispose();
+      }
+    });
   }
 }

@@ -1,7 +1,7 @@
 name: yureru
 description: "Local videos, enjoyed like a music player."
 publish_to: 'none'
-version: 1.0.7+16
+version: 1.0.8+18
 environment:
   sdk: ^3.11.4
 dependencies:
@@ -17,6 +17,7 @@ dependencies:
   media_kit: ^1.2.6
   media_kit_video: ^2.0.1
   media_kit_libs_video: ^1.0.7
+  image: ^4.10.1
   pocketbase: ^0.25.2
   nsd: ^5.0.1
   flutter_svg: ^2.3.0

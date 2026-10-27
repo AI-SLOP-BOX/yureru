@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -9,7 +10,6 @@ import '../../platform/window_utils.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
 import '../theme.dart';
-import 'frosted_panel.dart';
 
 /// Top bar: logo-home + global search + window/panel icon actions.
 class TopBar extends ConsumerStatefulWidget {
@@ -17,14 +17,26 @@ class TopBar extends ConsumerStatefulWidget {
   final ValueChanged<String> onSubmitSearch;
   final VoidCallback? onOpenFile;
   final VoidCallback? onSaveTemporary;
+  final VoidCallback? onToggleSidebar;
+  final VoidCallback? onToggleQueuePin;
+  final bool queuePinned;
+  final bool showMenuButton;
   final bool ambient;
+  final double leadingInset;
+  final double trailingInset;
   const TopBar({
     super.key,
     required this.onOpenSearch,
     required this.onSubmitSearch,
     this.onOpenFile,
     this.onSaveTemporary,
+    this.onToggleSidebar,
+    this.onToggleQueuePin,
+    this.queuePinned = false,
+    this.showMenuButton = true,
     this.ambient = false,
+    this.leadingInset = 0,
+    this.trailingInset = 0,
   });
 
   @override
@@ -241,11 +253,19 @@ class _TopBarState extends ConsumerState<TopBar> {
               widget.onOpenFile?.call();
             },
           },
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: AnimatedPadding(
+            key: const ValueKey('shell-topbar-chrome-insets'),
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            padding: EdgeInsets.fromLTRB(
+              16 + widget.leadingInset,
+              12,
+              16 + widget.trailingInset,
+              8,
+            ),
             child: Row(
               children: [
-                if (!isCompactExpanded) ...[
+                if (!isCompactExpanded && widget.showMenuButton) ...[
                   Builder(
                     builder: (bContext) => IconButton(
                       tooltip: Scaffold.maybeOf(bContext)?.hasDrawer == true
@@ -262,6 +282,8 @@ class _TopBarState extends ConsumerState<TopBar> {
                         final scaffold = Scaffold.maybeOf(bContext);
                         if (scaffold != null && scaffold.hasDrawer) {
                           scaffold.openDrawer();
+                        } else if (widget.onToggleSidebar != null) {
+                          widget.onToggleSidebar!();
                         } else {
                           ref.read(sidebarCollapsedProvider.notifier).state =
                               !collapsed;
@@ -270,7 +292,7 @@ class _TopBarState extends ConsumerState<TopBar> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                ] else ...[
+                ] else if (isCompactExpanded) ...[
                   // Back button when search is expanded full-width on very small screens
                   IconButton(
                     tooltip: '${ref.tr('close')} (Esc)',
@@ -550,6 +572,20 @@ class _TopBarState extends ConsumerState<TopBar> {
                         );
                       },
                     ),
+                  if (widget.onToggleQueuePin != null)
+                    IconButton(
+                      tooltip: ref.tr(
+                        widget.queuePinned ? 'unpin_queue' : 'pin_queue',
+                      ),
+                      icon: Icon(
+                        widget.queuePinned
+                            ? Icons.push_pin_rounded
+                            : Icons.queue_music_rounded,
+                        size: 21,
+                        color: iconColor,
+                      ),
+                      onPressed: widget.onToggleQueuePin,
+                    ),
                   if (isDesktop && !isCompact)
                     IconButton(
                       tooltip: ref.tr('fullscreen'),
@@ -566,15 +602,29 @@ class _TopBarState extends ConsumerState<TopBar> {
           ),
         );
 
-        final header = widget.ambient
-            ? FrostedPanel(
-                // Keep the ambient palette present without letting a bright
-                // frame tint the full-width search/header surface too strongly.
-                fillOpacity: 0.84,
-                borderOpacity: 0.025,
-                child: content,
-              )
-            : content;
+        final chromeSurface = widget.ambient
+            ? themePanel(context).withValues(alpha: 0.84)
+            : themePanel(context);
+        final header = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              top: 0,
+              bottom: 0,
+              left: -8,
+              right: 0,
+              child: widget.ambient
+                  ? ClipRect(
+                      child: BackdropFilter(
+                        filter: ui.ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                        child: ColoredBox(color: chromeSurface),
+                      ),
+                    )
+                  : ColoredBox(color: chromeSurface),
+            ),
+            content,
+          ],
+        );
 
         // When expanded full width on compact screens:
         // 1. Trap focus within an active FocusScope with canRequestFocus: true

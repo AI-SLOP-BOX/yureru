@@ -146,6 +146,81 @@ void main() {
     expect(find.byType(PlayerCard), findsOneWidget);
   });
 
+  testWidgets('large desktop reveals the queue from the right edge', (
+    tester,
+  ) async {
+    await pumpShell(tester, size: const Size(1440, 900));
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final media = MediaItem(title: 'デスクトップ動画', localPath: '/tmp/desktop.mp4');
+    final nextMedia = MediaItem(
+      title: '次のデスクトップ動画',
+      localPath: '/tmp/desktop-next.mp4',
+    );
+    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
+      media,
+      nextMedia,
+    ]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([
+      media.id,
+      nextMedia.id,
+    ], shuffle: false);
+    c.read(viewingPlayerProvider.notifier).state = true;
+    await tester.pumpAndSettle();
+
+    final queuePanel = find.byType(QueuePanel);
+    expect(tester.getRect(queuePanel).left, greaterThanOrEqualTo(1440));
+    expect(find.byIcon(Icons.arrow_forward_rounded), findsNothing);
+    expect(find.byTooltip('再生キューを固定'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('compact-next-content-button')),
+      findsNothing,
+    );
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: const Offset(1439, 200));
+    await mouse.moveTo(const Offset(1439, 200));
+    await tester.pumpAndSettle();
+    expect(tester.getRect(queuePanel).left, lessThan(1440));
+
+    // The explicit queue button is only available while watching a video.
+    final pinButton = find.byTooltip('再生キューを固定');
+    expect(pinButton, findsOneWidget);
+    await tester.tap(pinButton);
+    await tester.pumpAndSettle();
+    expect(c.read(queueVisibleProvider), isTrue);
+    final topbarInsets = find.byKey(
+      const ValueKey('shell-topbar-chrome-insets'),
+    );
+    expect(
+      (tester.widget<AnimatedPadding>(topbarInsets).padding as EdgeInsets)
+          .right,
+      greaterThan(16),
+    );
+    await mouse.moveTo(const Offset(500, 400));
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(tester.getRect(queuePanel).left, lessThan(1440));
+
+    // The pinned panel remains interactive, including selecting a queue row.
+    await tester.tap(find.byKey(ValueKey('queue-${nextMedia.id}')));
+    await tester.pumpAndSettle();
+    expect(c.read(queueProvider).currentId, nextMedia.id);
+
+    // Returning to browsing closes and unpins the desktop queue.
+    await mouse.moveTo(const Offset(1, 200));
+    await tester.pumpAndSettle();
+    final openPanelInsets =
+        tester.widget<AnimatedPadding>(topbarInsets).padding as EdgeInsets;
+    expect(openPanelInsets.left, greaterThan(16));
+    expect(openPanelInsets.right, greaterThan(16));
+    await tester.tap(find.byIcon(Icons.video_library_rounded));
+    await tester.pumpAndSettle();
+    expect(c.read(queueVisibleProvider), isFalse);
+    expect(find.byTooltip('再生キューを固定'), findsNothing);
+    expect(find.byType(PlayerCard), findsNothing);
+    await mouse.removePointer();
+  });
+
   testWidgets(
     'wide video player hides the bottom bar and shows it in image mode',
     (tester) async {
@@ -157,7 +232,11 @@ void main() {
       final c = ProviderScope.containerOf(
         tester.element(find.byType(AppShell)),
       );
-      final m = MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4');
+      final m = MediaItem(
+        title: 'テスト動画',
+        artist: 'テスト作者',
+        localPath: '/tmp/t.mp4',
+      );
       await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia(
         [m],
       );
@@ -168,6 +247,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.text('次のコンテンツ'), findsOneWidget);
       expect(find.byType(TransportBar), findsNothing);
+      expect(find.byKey(const ValueKey('player-title')), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const ValueKey('player-title'))).data,
+        'テスト動画',
+      );
+      expect(find.byKey(const ValueKey('player-creator')), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const ValueKey('player-creator'))).data,
+        'テスト作者',
+      );
       final hoverTransport = find.byKey(
         const ValueKey('player-hover-transport'),
       );
@@ -214,6 +303,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(fake.playCalls, playCallsBeforeDoubleTap);
       expect(fake.pauseCalls, pauseCallsBeforeDoubleTap);
+      expect(c.read(cinemaModeProvider), isTrue);
+      c.read(cinemaModeProvider.notifier).state = false;
+      await tester.pump();
 
       await mouse.moveTo(cardRect.center);
       await tester.pump(const Duration(milliseconds: 300));
@@ -357,11 +449,13 @@ void main() {
     final nextContents = find.byKey(
       const ValueKey('compact-next-content-button'),
     );
+    expect(find.byIcon(Icons.queue_music_rounded), findsNothing);
     expect(nextContents, findsOneWidget);
     await tester.tap(nextContents);
     await tester.pumpAndSettle();
 
     expect(c.read(queueVisibleProvider), isTrue);
+    expect(find.byIcon(Icons.arrow_forward_rounded), findsNothing);
     expect(find.text('次のコンテンツ'), findsNWidgets(2));
     await tester.tap(find.text('歌詞'));
     await tester.pump(const Duration(milliseconds: 400));
@@ -611,6 +705,9 @@ void main() {
   testWidgets(
     'playback switches center to full-size player; nav returns to browse',
     (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'yureru_first_launch_complete_v1': true,
+      });
       tester.view.physicalSize = const Size(1440, 900);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -648,8 +745,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(PlayerCard), findsOneWidget);
       expect(find.byType(HomeScreen), findsNothing);
-      // Sidebar nav goes back to browsing; list content still reachable.
-      await tester.tap(find.text('すべての動画'));
+      // Reveal the edge sidebar to navigate back to browsing.
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: const Offset(1, 200));
+      await mouse.moveTo(const Offset(1, 200));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.video_library_rounded));
       await tester.pumpAndSettle();
       expect(find.byType(VideosScreen), findsOneWidget);
       expect(find.byType(PlayerCard), findsNothing);
@@ -892,15 +993,22 @@ void main() {
     c.read(queueProvider.notifier).start([media.id], shuffle: false);
     await tester.pumpAndSettle();
 
-    final creator = find.descendant(
-      of: find.byType(PlayerCard),
-      matching: find.text('作者A'),
+    final title = find.byKey(const ValueKey('player-title'));
+    final creator = find.byKey(const ValueKey('player-creator-search'));
+    final controls = find.byKey(const ValueKey('player-hover-transport'));
+    expect(title, findsOneWidget);
+    expect(creator, findsOneWidget);
+    expect(tester.widget<AnimatedOpacity>(controls).opacity, 0);
+    expect(
+      tester.getRect(title).bottom,
+      lessThan(tester.getRect(controls).top),
     );
     await tester.tap(creator);
     await tester.pumpAndSettle();
 
     expect(c.read(videoCreatorFilterProvider), '作者A');
     expect(find.text('投稿者: 作者A'), findsOneWidget);
+    expect(find.byType(VideosScreen), findsOneWidget);
   });
 
   testWidgets('home shows static preview; its play enters full player', (
@@ -1350,36 +1458,31 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('sidebar collapses to icon rail and back', (tester) async {
+  testWidgets('desktop sidebar can be pinned and follows its panel', (
+    tester,
+  ) async {
     await pumpHomeWithMedia(
       tester,
       MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
     );
-    expect(
-      tester.getSize(find.byType(Sidebar)).width,
-      moreOrLessEquals(248, epsilon: 1.0),
-    );
-    expect(find.text('プレイリスト'), findsWidgets);
-    await tester.tap(find.byTooltip('サイドバーを隠す'));
+    final sidebar = find.byType(Sidebar);
+    expect(tester.getRect(sidebar).right, lessThanOrEqualTo(0));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: const Offset(1, 200));
+    await mouse.moveTo(const Offset(1, 200));
     await tester.pumpAndSettle();
-    expect(
-      tester.getSize(find.byType(Sidebar)).width,
-      moreOrLessEquals(76, epsilon: 1.0),
-    );
-    // Labels hidden, navigation still works via tooltips.
-    expect(
-      find.descendant(of: find.byType(Sidebar), matching: find.text('プレイリスト')),
-      findsNothing,
-    );
-    await tester.tap(find.byTooltip('すべての動画'));
+    expect(tester.getRect(sidebar).right, greaterThan(0));
+    await tester.tap(find.byTooltip('サイドバーを固定'));
+    await mouse.moveTo(const Offset(500, 200));
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
-    expect(find.byType(VideosScreen), findsOneWidget);
-    await tester.tap(find.byTooltip('サイドバーを表示'));
+    expect(tester.getRect(sidebar).right, greaterThan(0));
+    await tester.tap(find.byTooltip('サイドバーの固定を解除'));
+    await mouse.moveTo(const Offset(700, 200));
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
-    expect(
-      tester.getSize(find.byType(Sidebar)).width,
-      moreOrLessEquals(248, epsilon: 1.0),
-    );
+    expect(tester.getRect(sidebar).right, lessThanOrEqualTo(0));
+    await mouse.removePointer();
     expect(tester.takeException(), isNull);
   });
 

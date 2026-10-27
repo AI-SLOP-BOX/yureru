@@ -243,7 +243,7 @@ void main() {
       expect(pixels.getUint8(topCenter), greaterThan(30));
       final topOutside = (160 * 4) + 3;
       final topNearVideo = (45 * 320 + 160) * 4 + 3;
-      expect(pixels.getUint8(topOutside), 0);
+      expect(pixels.getUint8(topOutside), greaterThan(50));
       expect(pixels.getUint8(topNearVideo), greaterThan(70));
       final topMidway = (14 * 320 + 160) * 4 + 3;
       expect(
@@ -253,8 +253,8 @@ void main() {
       expect(pixels.getUint8(topMidway), greaterThan(0));
       final innerVideo = (90 * 320 + 160) * 4 + 3;
       expect(pixels.getUint8(innerVideo), 0);
-      expect(pixels.getUint8((90 * 320 + 0) * 4 + 3), 0);
-      expect(pixels.getUint8((0 * 320 + 160) * 4 + 3), 0);
+      expect(pixels.getUint8((90 * 320 + 0) * 4 + 3), greaterThan(50));
+      expect(pixels.getUint8((0 * 320 + 160) * 4 + 3), greaterThan(50));
       final bottomRim = (138 * 320 + 160) * 4 + 3;
       final leftRim = (90 * 320 + 90) * 4 + 3;
       final rightRim = (90 * 320 + 230) * 4 + 3;
@@ -554,9 +554,9 @@ void main() {
       );
       final rgba = await frame.toByteData(format: ui.ImageByteFormat.rawRgba);
       int alphaAt(int y) => rgba!.getUint8((y * 320 + 160) * 4 + 3);
-      // Glow fades through the letterbox region and leaves the window edge
-      // transparent; it no longer paints an opaque board over the UI.
-      expect(alphaAt(0), 0);
+      // The spill reaches the window edge so the underlying black app surface
+      // does not create a dark rim. The video and its letterbox remain clear.
+      expect(alphaAt(0), greaterThan(50));
       expect(alphaAt(24), greaterThan(0));
       expect(alphaAt(48), 0);
       frame.dispose();

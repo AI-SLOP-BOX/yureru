@@ -28,11 +28,14 @@ void _setVideoOutputSizeInBackground(
 
 /// Toggle fullscreen display across desktop platforms (macOS / Linux / Windows).
 Future<void> toggleFullscreen() async {
-  if (!Platform.isMacOS) return;
   try {
-    await windowChannel.invokeMethod('toggleFullscreen');
+    if (Platform.isMacOS) {
+      await windowChannel.invokeMethod('toggleFullscreen');
+    } else if (Platform.isWindows || Platform.isLinux) {
+      await windowManager.setFullScreen(!await windowManager.isFullScreen());
+    }
   } catch (_) {
-    // Channel not available (e.g. tests or headless): ignore.
+    // Window-management APIs may be unavailable in tests or headless runs.
   }
 }
 

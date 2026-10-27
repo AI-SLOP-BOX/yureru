@@ -742,10 +742,9 @@ Future<ui.Image> renderAmbientGlow(
   ]);
   final depthBlend = (depth / 2).clamp(0.0, 1.0);
   final spreadPixels = math.min(width, height) * 0.55 * spread.clamp(0.5, 1.5);
-  // The room spill must reach beyond the immediate player border. At the old
-  // 40–80 source-pixel range, dark blue/teal shots disappeared into a black
-  // shell before the light reached the surrounding panels.
-  final glowFadeDistance = 80 + 80 * (spread.clamp(0.5, 1.5) - 0.5);
+  // Extend the sampled colors farther into the room. A small opacity floor at
+  // the window edge prevents the app's black base from showing as a hard rim.
+  final glowFadeDistance = 180 + 120 * (spread.clamp(0.5, 1.5) - 0.5);
 
   Color edgeColorAt(
     List<Color> edge,
@@ -784,7 +783,11 @@ Future<ui.Image> renderAmbientGlow(
       // Black silhouettes from a scene's lower edge should not turn into
       // jagged black cutouts beneath translucent controls. Keep their hue,
       // but softly lift the darkest spill toward the combined room color.
-      final lift = ((0.12 - luminance) / 0.12 * 0.7).clamp(0.0, 0.7);
+      // Dark silhouettes that survive the profile blur produce the jagged
+      // black fringe visible below translucent transport surfaces. Pull them
+      // almost fully toward the surrounding room color instead of retaining
+      // most of the silhouette's near-black source value.
+      final lift = ((0.12 - luminance) / 0.12 * 0.95).clamp(0.0, 0.95);
       return Color.lerp(source, roomAverage, lift)!;
     }
     if (luminance <= 0.68) return source;
@@ -980,9 +983,9 @@ Future<ui.Image> renderAmbientGlow(
                   ? 1
                   : 0);
       } else if (signedDistance > 0) {
-        // Fade each spill toward the actual window edges. Multiplying the
-        // rounded side distances gives corners a radial falloff instead of
-        // extending a top/bottom scanline as a hard rectangular stripe.
+        // Shape the spill around the rounded video, while allowing a faint
+        // amount to remain at the window boundary instead of exposing the
+        // black app surface as a sharp outline.
         final horizontalFade = insideX
             ? 1.0
             : x < apertureLeft
@@ -998,13 +1001,10 @@ Future<ui.Image> renderAmbientGlow(
               );
         final radialFade = horizontalFade * verticalFade;
         final eased = radialFade * radialFade * (3 - 2 * radialFade);
-        alpha = math.pow(eased, 1.35).toDouble();
-        // Let the spill dissolve into the app background within roughly
-        // 40–80 source pixels, controlled by the user's spread setting.
-        final distanceFade = math
+        final edgeFade = math
             .pow((1 - signedDistance / glowFadeDistance).clamp(0.0, 1.0), 1.5)
             .toDouble();
-        alpha = math.min(alpha, distanceFade);
+        alpha = math.max(math.pow(eased, 1.35).toDouble() * edgeFade, 0.24);
       }
       final averageBrightness = (color.r + color.g + color.b) / 3;
       if (!matteOnly && averageBrightness < 0.18) {

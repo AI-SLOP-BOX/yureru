@@ -47,7 +47,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         if (widget.transportOnly) {
           return FrostedPanel(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            fillOpacity: widget.ambient ? 0.68 : null,
+            fillOpacity: widget.ambient ? 0.84 : null,
             borderOpacity: widget.ambient ? 0.025 : null,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -66,7 +66,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         }
         return FrostedPanel(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
-          fillOpacity: widget.ambient ? 0.68 : null,
+          fillOpacity: widget.ambient ? 0.84 : null,
           borderOpacity: widget.ambient ? 0.025 : null,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -306,13 +306,9 @@ class _TransportBarState extends ConsumerState<TransportBar> {
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final desktop = MediaQuery.sizeOf(context).width >= 750;
-    final primaryIconColor = isDark ? kTextPrimary : const Color(0xFF2B2B2B);
     final arrowIconColor = isDark
         ? const Color(0xFFA9A9A9)
         : const Color(0xFF5D5D5D);
-    final playIconColor = isDark
-        ? const Color(0xFF9F9F9F)
-        : const Color(0xFF535353);
     final disabledIconColor = isDark
         ? kTextMuted.withValues(alpha: 0.55)
         : Colors.black26;
@@ -324,8 +320,8 @@ class _TransportBarState extends ConsumerState<TransportBar> {
       mainAxisSize: MainAxisSize.min,
       children: [
         PlaybackShuffleButton(
-          activeColor: primaryIconColor,
-          inactiveColor: disabledIconColor,
+          activeColor: arrowIconColor,
+          inactiveColor: has ? arrowIconColor : disabledIconColor,
         ),
         const SizedBox(width: 4),
         IconButton(
@@ -355,7 +351,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                   padding: EdgeInsets.all(desktop ? 12 : 9),
                   child: Icon(
                     isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                    color: has ? playIconColor : disabledIconColor,
+                    color: has ? arrowIconColor : disabledIconColor,
                     size: playPauseIconSize,
                   ),
                 ),
@@ -374,8 +370,8 @@ class _TransportBarState extends ConsumerState<TransportBar> {
           onPressed: has ? () => ctl.playNext() : null,
         ),
         PlaybackRepeatButton(
-          activeColor: primaryIconColor,
-          inactiveColor: disabledIconColor,
+          activeColor: arrowIconColor,
+          inactiveColor: has ? arrowIconColor : disabledIconColor,
         ),
       ],
     );

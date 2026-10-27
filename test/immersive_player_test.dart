@@ -17,6 +17,7 @@ import 'package:yureru/playback/sleep_timer_provider.dart';
 import 'package:yureru/playback/playback_controller.dart';
 import 'package:yureru/presentation/i18n.dart';
 import 'package:yureru/presentation/screens/immersive_player_screen.dart';
+import 'package:yureru/presentation/screens/videos_screen.dart';
 import 'package:yureru/presentation/shell.dart';
 import 'package:yureru/presentation/theme.dart';
 import 'package:yureru/presentation/widgets/player_card.dart';
@@ -141,6 +142,19 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('cinema fullscreen keeps title and creator on screen', (
+    tester,
+  ) async {
+    final (container, _) = await pumpPlayer(tester, const Size(1440, 900));
+    container.read(viewingPlayerProvider.notifier).state = true;
+    container.read(cinemaModeProvider.notifier).state = true;
+    await _settle(tester);
+
+    expect(find.byKey(const ValueKey('cinema-title')), findsNWidgets(2));
+    expect(find.byKey(const ValueKey('cinema-creator')), findsNWidgets(2));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('immersive seeking commits only when the slider is released', (
     tester,
   ) async {
@@ -164,6 +178,29 @@ void main() {
     expect(engine.seeks, [const Duration(milliseconds: 26000)]);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'immersive player shows searchable title and creator above controls',
+    (tester) async {
+      final (container, _) = await pumpPlayer(tester, const Size(1440, 900));
+      container.read(immersiveModeProvider.notifier).state = true;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final title = find.byKey(const ValueKey('immersive-title'));
+      final creator = find.byKey(const ValueKey('immersive-creator-search'));
+      final controls = find.byKey(const ValueKey('immersive-controls')).last;
+      expect(title, findsOneWidget);
+      expect(find.byKey(const ValueKey('immersive-creator')), findsOneWidget);
+      expect(tester.getRect(title).top, lessThan(tester.getRect(controls).top));
+      await tester.tap(creator);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(container.read(videoCreatorFilterProvider), 'Yureru Sessions');
+      expect(find.byType(ImmersivePlayerScreen), findsNothing);
+      expect(find.byType(VideosScreen), findsOneWidget);
+    },
+  );
 
   for (final size in [
     const Size(1440, 900),

@@ -1,5 +1,10 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yureru/playback/sleep_timer.dart';
+import 'package:yureru/playback/sleep_timer_provider.dart';
+import 'package:yureru/presentation/i18n.dart';
+import 'package:yureru/presentation/widgets/sleep_timer_button.dart';
 
 void main() {
   testWidgets('countdown pauses once and clears state', (tester) async {
@@ -77,5 +82,38 @@ void main() {
     timer.cancel();
     expect(timer.state.failed, false);
     timer.dispose();
+  });
+
+  testWidgets('sleep timer accepts custom hours and minutes', (tester) async {
+    final timer = SleepTimer(() async {});
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
+          sleepTimerProvider.overrideWith((ref) => timer),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(body: Center(child: SleepTimerButton())),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('時間を指定…'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '2');
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).last, '15');
+    await tester.pump();
+    expect(
+      tester.widget<TextField>(find.byType(TextField).last).controller!.text,
+      '15',
+    );
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+
+    final remaining = timer.state.deadline!.difference(DateTime.now());
+    expect(remaining.inMinutes, inInclusiveRange(134, 135));
   });
 }

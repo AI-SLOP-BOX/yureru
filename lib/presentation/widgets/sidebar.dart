@@ -20,6 +20,8 @@ class Sidebar extends ConsumerWidget {
   final ValueChanged<Nav> onNav;
   final ValueChanged<String> onPlaylist;
   final VoidCallback? onLogoHome;
+  final bool pinned;
+  final VoidCallback? onTogglePin;
   const Sidebar({
     super.key,
     this.width = 248,
@@ -30,6 +32,8 @@ class Sidebar extends ConsumerWidget {
     required this.onNav,
     required this.onPlaylist,
     this.onLogoHome,
+    this.pinned = false,
+    this.onTogglePin,
   });
 
   @override
@@ -43,19 +47,35 @@ class Sidebar extends ConsumerWidget {
     }
     final panel = Container(
       width: width,
-      // Keep labels readable over changing artwork while the heavy blur makes
-      // the pane boundary dissolve into the ambient background.
-      color: ambient ? panelColor.withValues(alpha: 0.56) : panelColor,
+      // Match the top bar's frosted surface opacity so the brand/header area
+      // reads as one continuous, even-colored strip while ambient light runs.
+      color: ambient ? panelColor.withValues(alpha: 0.84) : panelColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 20),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(10),
-              onTap: onLogoHome,
-              child: const YureruBrandHeader(iconSize: 32),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: onLogoHome,
+                    child: const YureruBrandHeader(iconSize: 32),
+                  ),
+                ),
+                if (onTogglePin != null)
+                  IconButton(
+                    tooltip: ref.tr(pinned ? 'unpin_sidebar' : 'pin_sidebar'),
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(
+                      pinned ? Icons.push_pin_rounded : Icons.menu_rounded,
+                      size: 20,
+                    ),
+                    onPressed: onTogglePin,
+                  ),
+              ],
             ),
           ),
           const SizedBox(height: 24),
@@ -179,11 +199,31 @@ class Sidebar extends ConsumerWidget {
     bool sel(bool v) => v && !viewingPlayer;
     final panel = Container(
       width: 76,
-      color: ambient ? panelColor.withValues(alpha: 0.56) : panelColor,
+      color: ambient ? panelColor.withValues(alpha: 0.84) : panelColor,
       child: Column(
         children: [
-          const SizedBox(height: 16),
-          _LogoButton(onTap: onLogoHome, tooltip: ref.tr('library')),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _LogoButton(onTap: onLogoHome, tooltip: ref.tr('library')),
+              if (onTogglePin != null)
+                IconButton(
+                  tooltip: ref.tr(pinned ? 'unpin_sidebar' : 'pin_sidebar'),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 28,
+                    height: 32,
+                  ),
+                  icon: Icon(
+                    pinned ? Icons.push_pin_rounded : Icons.menu_rounded,
+                    size: 18,
+                  ),
+                  onPressed: onTogglePin,
+                ),
+            ],
+          ),
           const SizedBox(height: 20),
           _RailButton(
             icon: Icons.home_rounded,

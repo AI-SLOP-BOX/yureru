@@ -16,8 +16,8 @@ import 'lyrics_panel.dart';
 /// Right panel: reorderable play queue (number, thumb, title, duration).
 class QueuePanel extends ConsumerStatefulWidget {
   final double width;
-  final VoidCallback? onClose;
   final VoidCallback? onToggleExpanded;
+  final VoidCallback? onClose;
   final bool showCompactPreview;
   final Widget? compactPreview;
   final EdgeInsetsGeometry? margin;
@@ -25,8 +25,8 @@ class QueuePanel extends ConsumerStatefulWidget {
   const QueuePanel({
     super.key,
     this.width = 336,
-    this.onClose,
     this.onToggleExpanded,
+    this.onClose,
     this.showCompactPreview = false,
     this.compactPreview,
     this.margin,
@@ -75,7 +75,7 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
       child: FrostedPanel(
         margin: widget.margin ?? const EdgeInsets.fromLTRB(0, 12, 12, 12),
         borderRadius: BorderRadius.circular(16),
-        fillOpacity: widget.ambient ? 0.68 : null,
+        fillOpacity: widget.ambient ? 0.84 : null,
         borderOpacity: widget.ambient ? 0.025 : null,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -200,13 +200,11 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                       if (widget.onClose != null) ...[
                         const Spacer(),
                         IconButton(
-                          icon: const Icon(
-                            Icons.arrow_forward_rounded,
-                            size: 20,
-                          ),
-                          tooltip: ref.tr('hide_queue'),
-                          splashRadius: 18,
+                          key: const ValueKey('close-queue-panel'),
+                          tooltip: ref.tr('close'),
+                          visualDensity: VisualDensity.compact,
                           onPressed: widget.onClose,
+                          icon: const Icon(Icons.close_rounded, size: 20),
                         ),
                       ],
                     ],

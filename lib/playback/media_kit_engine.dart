@@ -169,6 +169,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
 
   @override
   Future<void> setVolumeNormalizationEnabled(bool enabled) async {
+    if (_normalizationEnabled == enabled) return;
     final platform = _ensurePlayer().platform;
     if (platform is! mk.NativePlayer) {
       throw UnsupportedError('Native audio filtering is unavailable');
@@ -191,7 +192,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
           ? [
               'af',
               'add',
-              '@yureru_normalize:lavfi=[dynaudnorm=f=150:g=15:p=0.9:m=4:r=0.15]',
+              '@yureru_normalize:lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11:linear=false]',
             ]
           : ['af', 'remove', '@yureru_normalize'],
     );

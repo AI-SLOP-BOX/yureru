@@ -128,20 +128,20 @@ final ambientGeometryProvider =
 class AmbientFrameRateNotifier extends StateNotifier<int> {
   static const _key = 'yureru_ambient_frame_rate_v1';
 
-  AmbientFrameRateNotifier() : super(30) {
+  AmbientFrameRateNotifier() : super(0) {
     _load();
   }
 
   Future<void> _load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getInt(_key) ?? 30;
-      state = const [15, 30, 60].contains(saved) ? saved : 30;
+      final saved = prefs.getInt(_key) ?? 0;
+      state = const [0, 15, 30, 60].contains(saved) ? saved : 0;
     } catch (_) {}
   }
 
   void setFrameRate(int value) {
-    if (const [15, 30, 60].contains(value)) state = value;
+    if (const [0, 15, 30, 60].contains(value)) state = value;
   }
 
   Future<void> persist() async {

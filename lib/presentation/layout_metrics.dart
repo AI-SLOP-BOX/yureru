@@ -5,6 +5,10 @@ import 'package:flutter/material.dart';
 /// logical-pixel design tokens; structural widths and gutters use these rules.
 abstract final class LayoutMetrics {
   static const double _desktopReferenceWidth = 1440;
+  static const double largeDesktopQueueBreakpoint = 1000;
+
+  static bool isLargeDesktop(BuildContext context) =>
+      MediaQuery.sizeOf(context).width >= largeDesktopQueueBreakpoint;
 
   static double horizontalInset(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;

@@ -15,7 +15,7 @@ Import: Settings → Library Management → Import Videos.
 - `lib/domain/models.dart` — MediaItem (Media ID identity), Playlist (ID list), QueueBuilder
 - `lib/library/` — library state and mutations; media edits share one update/persistence path and session-only media stays out of storage
 - `lib/ambient/` — ambient-light settings and frame capture lifecycle, independently testable with a playback engine
-- `lib/data/` — `LibraryRepository` (+Prefs impl, InMemory for tests), `VideoImporter` (progress callbacks, artist-title split), `ThumbnailService` (native best-of-8 textured-bright frame, v3 disk cache + time sidecar, gradient fallback) + `DurationService` (native metadata probe) + `SessionStore` (queue + positions)
+- `lib/data/` — `LibraryRepository` (+Prefs impl, InMemory for tests), `VideoImporter` (progress callbacks, artist-title split), `ThumbnailService` (best-frame extraction on macOS and media_kit platforms, v3 disk cache + time sidecar, gradient fallback) + `DurationService` (cross-platform duration probe) + `SessionStore` (queue + positions)
 - `lib/playback/` — `playback_engine.dart` (abstract) + `media_kit_engine.dart` (only media_kit import) + `playback_controller.dart` (Queue→engine, UI-free) + `fake_engine.dart` (tests)
 - `lib/app_state.dart` — Riverpod `libraryProvider`, `queueProvider` (queue separate from playlist), `searchQueryProvider`, `viewingPlayerProvider` (player vs browse), `queueVisibleProvider`, `playerViewModeProvider` (media/image)
 - `lib/presentation/` — shell (wide 3-pane / narrow fallback, shortcuts, drag splitters) / Home (+PreviewBar info panel: idle pick / playing item + duration + next-up, bottom) / PlaylistDetail (responsive artwork + track list, playing indicator, durations) / Videos (manual and automatic sort, playing indicator, queue ops, add-to-playlist, probed durations) / Settings / LibraryManagement (progress) / PlayerCard (media/image, PiP window, fullscreen) / TransportBar (centered cluster + full-width timeline, compact mode, mute memory) / QueuePanel (resizable, insertNext/append, playback history retained) / MiniPlayer / Sidebar (collapsible rail)
@@ -51,6 +51,10 @@ persistence. Run `flutter analyze` and `flutter test` after changes.
   queue, shuffle, repeat) untouched.
 - Native macOS channel (`yureru/media_picker`): pickVideos / pickFolder /
   toggleFullscreen / makeThumbnail (best-of-N) / probeDuration.
+- Android release builds use the debug key for local testing unless a private
+  upload key is configured. Set `YURERU_ANDROID_KEYSTORE`,
+  `YURERU_ANDROID_STORE_PASSWORD`, `YURERU_ANDROID_KEY_ALIAS`, and
+  `YURERU_ANDROID_KEY_PASSWORD` in the build environment for signed releases.
 
 ## Tests
 
@@ -71,18 +75,18 @@ the previous layout without reloading playback.
 
 ### Automatic volume adjustment
 
-Settings → Audio → Reduce volume differences enables dynamic audio gain
-adjustment for media_kit playback on macOS, Windows, Linux, and Android. It is
-off by default and saved between launches. The processing does not rewrite files
-or change the manual volume/mute level. It can also change dynamics within a
-track; it does not perform whole-track loudness analysis.
+Settings → Audio → Reduce volume differences enables real-time loudness
+normalization for playback on iOS, macOS, Windows, Linux, and Android. It is off
+by default and saved between launches. The saved preference is applied before
+session playback resumes. Processing does not rewrite files or change the
+manual volume/mute level, and may change dynamics within a track.
 
-The effect uses FFmpeg's [dynaudnorm](https://ffmpeg.org/ffmpeg-filters.html#dynaudnorm)
+The effect uses FFmpeg's [loudnorm](https://ffmpeg.org/ffmpeg-filters.html#loudnorm)
 through a labeled [mpv audio filter](https://mpv.io/manual/stable/#audio-filters),
-so toggling it preserves other effects. The current iOS AVPlayer backend does
-not expose this processing; its setting is disabled with an explanation, keeping
-native PiP available. Processing failures retain the previous setting and show
-an error instead of reporting a successful change.
+so toggling it preserves other effects. iOS uses the same processing backend
+when normalization is enabled; ordinary playback can still use the native
+AVPlayer backend. Processing failures retain the previous setting and show an
+error instead of reporting a successful change.
 
 ### Favorites
 

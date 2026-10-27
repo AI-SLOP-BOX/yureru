@@ -15,7 +15,11 @@ void main() {
         'ambient_depth',
         'ambient_softness',
         'ambient_frame_rate',
+        'ambient_fps_auto',
         'ambient_frame_rate_desc',
+        'sleep_custom_duration',
+        'sleep_hours_label',
+        'sleep_minutes_label',
         'lyrics_timing',
         'save',
       ]) {

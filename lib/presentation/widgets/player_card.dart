@@ -9,10 +9,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
-import '../../platform/window_utils.dart';
 import '../../playback/playback_controller.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
+import '../layout_metrics.dart';
 import '../theme.dart';
 import 'queue_panel.dart';
 import 'app_svg_icon.dart';
@@ -34,7 +34,14 @@ import 'thumb_image.dart';
 /// - Smooth volume toggle with expandable slider ("niyoki-to" animation)
 /// - mpv video track toggle (`setVideoTrackEnabled`) for low-power audio mode
 class PlayerCard extends ConsumerStatefulWidget {
-  const PlayerCard({super.key});
+  const PlayerCard({
+    super.key,
+    this.leadingChromeInset = 0,
+    this.trailingChromeInset = 0,
+  });
+
+  final double leadingChromeInset;
+  final double trailingChromeInset;
 
   @override
   ConsumerState<PlayerCard> createState() => _PlayerCardState();
@@ -347,6 +354,137 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     );
   }
 
+  Widget _cinemaMetadata(MediaItem media, {double bottom = 32}) {
+    final creator = formatCreatorNames(media.artist);
+    return Positioned(
+      left: 28,
+      bottom: bottom,
+      child: IgnorePointer(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(context).width * 0.55,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                key: const ValueKey('cinema-title'),
+                displayTitle(media.title),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  shadows: [Shadow(color: Colors.black87, blurRadius: 10)],
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                key: const ValueKey('cinema-creator'),
+                creator.isEmpty ? ref.tr('creator_not_set') : creator,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  shadows: [Shadow(color: Colors.black87, blurRadius: 8)],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _desktopVideoMetadata(MediaItem media) {
+    final creator = formatCreatorNames(media.artist);
+    return Positioned(
+      bottom: 192,
+      left: 32,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.55,
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.58),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  key: const ValueKey('player-title'),
+                  displayTitle(media.title),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    shadows: [Shadow(color: Colors.black87, blurRadius: 8)],
+                  ),
+                ),
+                const SizedBox(height: 2),
+                if (creator.isNotEmpty)
+                  Tooltip(
+                    message: ref.tr('search_by_creator'),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        key: const ValueKey('player-creator-search'),
+                        borderRadius: BorderRadius.circular(4),
+                        onTap: () =>
+                            ref
+                                    .read(creatorVideosRequestProvider.notifier)
+                                    .state =
+                                creator,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Text(
+                            key: const ValueKey('player-creator'),
+                            creator,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                              shadows: [
+                                Shadow(color: Colors.black87, blurRadius: 6),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Text(
+                    key: const ValueKey('player-creator'),
+                    ref.tr('creator_not_set'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      shadows: [Shadow(color: Colors.black87, blurRadius: 6)],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _videoSurface(PlaybackEngine engine, {BoxFit fit = BoxFit.contain}) {
     // Video stays as an untouched foreground surface. Ambient colors are
     // rendered only in the surrounding app canvas beneath this aperture.
@@ -598,9 +736,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final transportIconColor = useVideoOverlay
         ? Colors.white70
         : (isDark ? const Color(0xFFA9A9A9) : const Color(0xFF5D5D5D));
-    final playIconColor = useVideoOverlay
-        ? Colors.white
-        : (isDark ? const Color(0xFF9F9F9F) : const Color(0xFF535353));
+    final playIconColor = transportIconColor;
     return MouseRegion(
       key: _playerHoverBoundsKey,
       // Hide the cursor only with the same idle state that hides the video
@@ -700,7 +836,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                   },
                   onDoubleTap: () {
                     _pendingVideoTapTimer?.cancel();
-                    toggleFullscreen();
+                    ref.read(cinemaModeProvider.notifier).state = !ref.read(
+                      cinemaModeProvider,
+                    );
                   },
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 280),
@@ -910,11 +1048,16 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
               ),
             ),
 
+            if (isCinema)
+              _cinemaMetadata(media)
+            else if (useVideoOverlay && !isCompact)
+              _desktopVideoMetadata(media),
+
             // 3. Top Floating Capsule: Collapse Button + Media / Image Mode Switcher (or pure cinema exit button)
             Positioned(
               top: 14,
-              left: 16,
-              right: 16,
+              left: 16 + widget.leadingChromeInset,
+              right: 16 + widget.trailingChromeInset,
               child: MouseRegion(
                 onExit: (_) => _onControlsExit(),
                 child: IgnorePointer(
@@ -1231,8 +1374,8 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               PlaybackShuffleButton(
-                                activeColor: Colors.white,
-                                inactiveColor: Colors.white60,
+                                activeColor: Colors.white70,
+                                inactiveColor: Colors.white70,
                               ),
                               IconButton(
                                 tooltip: ref.tr('prev_video'),
@@ -1268,8 +1411,8 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                 onPressed: q.hasCurrent ? ctl.playNext : null,
                               ),
                               PlaybackRepeatButton(
-                                activeColor: Colors.white,
-                                inactiveColor: Colors.white60,
+                                activeColor: Colors.white70,
+                                inactiveColor: Colors.white70,
                               ),
                             ],
                           ),
@@ -1494,178 +1637,171 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                           desktop: !isCompact,
                                           onHoverActivity: _onPointerHover,
                                         ),
-                                      // Floating Transport Control buttons:
-                                      // [シャッフル] [前の曲] (再生/一時停止) [リピート]
-                                      Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          // Shuffle
-                                          IconButton(
-                                            padding: EdgeInsets.all(
-                                              isUltraCompact
-                                                  ? 4
-                                                  : (isCompact ? 8 : 10),
-                                            ),
-                                            constraints: isUltraCompact
-                                                ? const BoxConstraints()
-                                                : null,
-                                            tooltip: ref.tr('shuffle'),
-                                            icon: TransportIcon.shuffle(
-                                              size: isUltraCompact
-                                                  ? 18
-                                                  : (isCompact ? 20 : 22),
-                                              color: useVideoOverlay
-                                                  ? (q.shuffle
-                                                        ? Colors.white
-                                                        : Colors.white70)
-                                                  : (q.shuffle
-                                                        ? textPrimary
-                                                        : (isDark
-                                                              ? Colors.white54
-                                                              : Colors
-                                                                    .black45)),
-                                            ),
-                                            onPressed: () {
-                                              _onPointerHover();
-                                              ref
-                                                  .read(queueProvider.notifier)
-                                                  .toggleShuffle();
-                                            },
-                                          ),
-                                          SizedBox(
-                                            width: isUltraCompact
-                                                ? 6
-                                                : (isCompact ? 10 : 12),
-                                          ),
-
-                                          // Prev
-                                          IconButton(
-                                            padding: EdgeInsets.all(
-                                              isUltraCompact
-                                                  ? 4
-                                                  : (isCompact ? 8 : 10),
-                                            ),
-                                            constraints: isUltraCompact
-                                                ? const BoxConstraints()
-                                                : null,
-                                            tooltip: ref.tr('prev_video'),
-                                            icon: TransportIcon.previous(
-                                              size: previousNextIconSize,
-                                              color: transportIconColor,
-                                            ),
-                                            onPressed: () {
-                                              _onPointerHover();
-                                              ctl.playPrev();
-                                            },
-                                          ),
-                                          SizedBox(
-                                            width: isUltraCompact
-                                                ? 6
-                                                : (isCompact ? 10 : 12),
-                                          ),
-
-                                          // Center Play / Pause button
-                                          Material(
-                                            color: isCompact
-                                                ? (isDark
-                                                      ? Colors.white
-                                                      : const Color(0xFF2B2B2B))
-                                                : Colors.transparent,
-                                            shape: const CircleBorder(),
-                                            elevation: isCompact ? 6 : 0,
-                                            child: InkWell(
-                                              customBorder:
-                                                  const CircleBorder(),
-                                              onTap: () {
+                                      // In full-player jacket mode, the shell's
+                                      // bottom TransportBar is the single
+                                      // transport surface. Keep this in-card
+                                      // row for video hover controls and
+                                      // non-full-player layouts only.
+                                      if (useVideoOverlay || !fullPlayerView)
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            // Shuffle
+                                            IconButton(
+                                              padding: EdgeInsets.all(
+                                                isUltraCompact
+                                                    ? 4
+                                                    : (isCompact ? 8 : 10),
+                                              ),
+                                              constraints: isUltraCompact
+                                                  ? const BoxConstraints()
+                                                  : null,
+                                              tooltip: ref.tr('shuffle'),
+                                              icon: TransportIcon.shuffle(
+                                                size: isUltraCompact
+                                                    ? 18
+                                                    : (isCompact ? 20 : 22),
+                                                color: transportIconColor,
+                                              ),
+                                              onPressed: () {
                                                 _onPointerHover();
-                                                ctl.toggle();
+                                                ref
+                                                    .read(
+                                                      queueProvider.notifier,
+                                                    )
+                                                    .toggleShuffle();
                                               },
-                                              child: Padding(
-                                                padding: EdgeInsets.all(
-                                                  isUltraCompact
-                                                      ? 8
-                                                      : (isCompact ? 10 : 18),
-                                                ),
-                                                child: _playPauseGlyph(
-                                                  snap.isPlaying,
-                                                  playPauseIconSize,
-                                                  playIconColor,
+                                            ),
+                                            SizedBox(
+                                              width: isUltraCompact
+                                                  ? 6
+                                                  : (isCompact ? 10 : 12),
+                                            ),
+
+                                            // Prev
+                                            IconButton(
+                                              padding: EdgeInsets.all(
+                                                isUltraCompact
+                                                    ? 4
+                                                    : (isCompact ? 8 : 10),
+                                              ),
+                                              constraints: isUltraCompact
+                                                  ? const BoxConstraints()
+                                                  : null,
+                                              tooltip: ref.tr('prev_video'),
+                                              icon: TransportIcon.previous(
+                                                size: previousNextIconSize,
+                                                color: transportIconColor,
+                                              ),
+                                              onPressed: () {
+                                                _onPointerHover();
+                                                ctl.playPrev();
+                                              },
+                                            ),
+                                            SizedBox(
+                                              width: isUltraCompact
+                                                  ? 6
+                                                  : (isCompact ? 10 : 12),
+                                            ),
+
+                                            // Center Play / Pause button
+                                            Material(
+                                              color: isCompact
+                                                  ? (isDark
+                                                        ? Colors.white
+                                                        : const Color(
+                                                            0xFF2B2B2B,
+                                                          ))
+                                                  : Colors.transparent,
+                                              shape: const CircleBorder(),
+                                              elevation: isCompact ? 6 : 0,
+                                              child: InkWell(
+                                                customBorder:
+                                                    const CircleBorder(),
+                                                onTap: () {
+                                                  _onPointerHover();
+                                                  ctl.toggle();
+                                                },
+                                                child: Padding(
+                                                  padding: EdgeInsets.all(
+                                                    isUltraCompact
+                                                        ? 8
+                                                        : (isCompact ? 10 : 18),
+                                                  ),
+                                                  child: _playPauseGlyph(
+                                                    snap.isPlaying,
+                                                    playPauseIconSize,
+                                                    playIconColor,
+                                                  ),
                                                 ),
                                               ),
                                             ),
-                                          ),
-                                          SizedBox(
-                                            width: isUltraCompact
-                                                ? 6
-                                                : (isCompact ? 10 : 12),
-                                          ),
+                                            SizedBox(
+                                              width: isUltraCompact
+                                                  ? 6
+                                                  : (isCompact ? 10 : 12),
+                                            ),
 
-                                          // Next
-                                          IconButton(
-                                            padding: EdgeInsets.all(
-                                              isUltraCompact
-                                                  ? 4
-                                                  : (isCompact ? 8 : 10),
+                                            // Next
+                                            IconButton(
+                                              padding: EdgeInsets.all(
+                                                isUltraCompact
+                                                    ? 4
+                                                    : (isCompact ? 8 : 10),
+                                              ),
+                                              constraints: isUltraCompact
+                                                  ? const BoxConstraints()
+                                                  : null,
+                                              tooltip: ref.tr('next_video'),
+                                              icon: SkipNextIcon(
+                                                size: previousNextIconSize,
+                                                color: transportIconColor,
+                                              ),
+                                              onPressed: () {
+                                                _onPointerHover();
+                                                ctl.playNext();
+                                              },
                                             ),
-                                            constraints: isUltraCompact
-                                                ? const BoxConstraints()
-                                                : null,
-                                            tooltip: ref.tr('next_video'),
-                                            icon: SkipNextIcon(
-                                              size: previousNextIconSize,
-                                              color: transportIconColor,
+                                            SizedBox(
+                                              width: isUltraCompact
+                                                  ? 6
+                                                  : (isCompact ? 10 : 12),
                                             ),
-                                            onPressed: () {
-                                              _onPointerHover();
-                                              ctl.playNext();
-                                            },
-                                          ),
-                                          SizedBox(
-                                            width: isUltraCompact
-                                                ? 6
-                                                : (isCompact ? 10 : 12),
-                                          ),
 
-                                          // Repeat
-                                          IconButton(
-                                            padding: EdgeInsets.all(
-                                              isUltraCompact
-                                                  ? 4
-                                                  : (isCompact ? 8 : 10),
-                                            ),
-                                            constraints: isUltraCompact
-                                                ? const BoxConstraints()
-                                                : null,
-                                            tooltip: q.repeat == 'one'
-                                                ? ref.tr('repeat_one')
-                                                : (q.repeat == 'off'
-                                                      ? ref.tr('repeat_off')
-                                                      : ref.tr('repeat_all')),
-                                            icon: RepeatIcon(
-                                              size: isUltraCompact
-                                                  ? 18
-                                                  : (isCompact ? 20 : 22),
-                                              color: useVideoOverlay
-                                                  ? (q.repeat == 'off'
-                                                        ? Colors.white70
-                                                        : Colors.white)
+                                            // Repeat
+                                            IconButton(
+                                              padding: EdgeInsets.all(
+                                                isUltraCompact
+                                                    ? 4
+                                                    : (isCompact ? 8 : 10),
+                                              ),
+                                              constraints: isUltraCompact
+                                                  ? const BoxConstraints()
+                                                  : null,
+                                              tooltip: q.repeat == 'one'
+                                                  ? ref.tr('repeat_one')
                                                   : (q.repeat == 'off'
-                                                        ? (isDark
-                                                              ? Colors.white54
-                                                              : Colors.black45)
-                                                        : textPrimary),
-                                              repeatMode: q.repeat,
+                                                        ? ref.tr('repeat_off')
+                                                        : ref.tr('repeat_all')),
+                                              icon: RepeatIcon(
+                                                size: isUltraCompact
+                                                    ? 18
+                                                    : (isCompact ? 20 : 22),
+                                                color: transportIconColor,
+                                                repeatMode: q.repeat,
+                                              ),
+                                              onPressed: () {
+                                                _onPointerHover();
+                                                ref
+                                                    .read(
+                                                      queueProvider.notifier,
+                                                    )
+                                                    .cycleRepeat();
+                                              },
                                             ),
-                                            onPressed: () {
-                                              _onPointerHover();
-                                              ref
-                                                  .read(queueProvider.notifier)
-                                                  .cycleRepeat();
-                                            },
-                                          ),
-                                        ],
-                                      ),
+                                          ],
+                                        ),
                                     ],
                                   ),
                                 ),
@@ -1727,6 +1863,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                       ),
                     ),
                   ),
+            _cinemaMetadata(media, bottom: 112),
             Positioned(
               top: MediaQuery.paddingOf(context).top + 8,
               right: 12,
@@ -1851,7 +1988,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     required PlaybackEngine engine,
   }) {
     final showQueue = ref.watch(queueVisibleProvider);
-    final isNarrowWindow = MediaQuery.sizeOf(context).width < 1000;
+    final lockQueueOpen = LayoutMetrics.isLargeDesktop(context);
+    final windowWidth = MediaQuery.sizeOf(context).width;
+    final isNarrowWindow = windowWidth < 1000;
+    final isPhoneSize = windowWidth < 600;
     final showQueueSheet = showQueue && isNarrowWindow;
     final useVideoOverlay = mode == PlayerViewMode.media;
     // Compact layouts are touch-first: keep the transport and seek bar visible
@@ -1868,9 +2008,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final transportArrowColor = isDark
         ? const Color(0xFFA9A9A9)
         : const Color(0xFF5D5D5D);
-    final playIconColor = isDark
-        ? const Color(0xFF9F9F9F)
-        : const Color(0xFF535353);
+    final playIconColor = transportArrowColor;
     final compactPlayPauseSize = (MediaQuery.sizeOf(context).width * 0.14)
         .clamp(48.0, 56.0)
         .toDouble();
@@ -1991,38 +2129,6 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                 );
                                               },
                                             ),
-                                            if (isNarrowWindow)
-                                              IconButton(
-                                                tooltip: showQueueSheet
-                                                    ? ref.tr('hide_queue')
-                                                    : ref.tr('next_contents'),
-                                                icon: Icon(
-                                                  Icons.queue_music_rounded,
-                                                  size: 22,
-                                                  color: showQueueSheet
-                                                      ? kAccent
-                                                      : textPrimary,
-                                                ),
-                                                onPressed: () {
-                                                  final open = !showQueueSheet;
-                                                  if (open) {
-                                                    ref
-                                                            .read(
-                                                              lyricsPanelProvider
-                                                                  .notifier,
-                                                            )
-                                                            .state =
-                                                        false;
-                                                  }
-                                                  ref
-                                                          .read(
-                                                            queueVisibleProvider
-                                                                .notifier,
-                                                          )
-                                                          .state =
-                                                      open;
-                                                },
-                                              ),
                                             if (!narrowToolbar)
                                               IconButton(
                                                 tooltip: ref.tr('immersive'),
@@ -2058,7 +2164,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                       true;
                                                 },
                                               ),
-                                            // Speed / More menu
+                                            // Queue visibility is controlled by the
+                                            // responsive content panel, not a separate
+                                            // queue button in the player toolbar.
                                             PopupMenuButton<String>(
                                               icon: Icon(
                                                 Icons.more_vert_rounded,
@@ -2479,140 +2587,140 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                             const SizedBox(height: 12),
 
                             // 5. Transport Bar (Shuffle, Prev, Play/Pause Circle, Repeat)
-                            AnimatedOpacity(
-                              key: useVideoOverlay
-                                  ? const ValueKey('compact-player-transport')
-                                  : null,
-                              opacity:
-                                  useVideoOverlay && !keepVideoControlsVisible
-                                  ? (_controlsVisible ? 1 : 0)
-                                  : 1,
-                              duration: const Duration(milliseconds: 240),
-                              curve: Curves.easeInOut,
-                              child: IgnorePointer(
-                                ignoring:
-                                    useVideoOverlay &&
-                                    !keepVideoControlsVisible &&
-                                    !_controlsVisible,
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceEvenly,
-                                    children: [
-                                      // Shuffle
-                                      IconButton(
-                                        tooltip: ref.tr('shuffle'),
-                                        icon: TransportIcon.shuffle(
-                                          size: 26,
-                                          color: q.shuffle
-                                              ? textPrimary
-                                              : textSub,
+                            if (useVideoOverlay || !fullPlayerView)
+                              AnimatedOpacity(
+                                key: useVideoOverlay
+                                    ? const ValueKey('compact-player-transport')
+                                    : null,
+                                opacity:
+                                    useVideoOverlay && !keepVideoControlsVisible
+                                    ? (_controlsVisible ? 1 : 0)
+                                    : 1,
+                                duration: const Duration(milliseconds: 240),
+                                curve: Curves.easeInOut,
+                                child: IgnorePointer(
+                                  ignoring:
+                                      useVideoOverlay &&
+                                      !keepVideoControlsVisible &&
+                                      !_controlsVisible,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceEvenly,
+                                      children: [
+                                        // Shuffle
+                                        IconButton(
+                                          tooltip: ref.tr('shuffle'),
+                                          icon: TransportIcon.shuffle(
+                                            size: 26,
+                                            color: transportArrowColor,
+                                          ),
+                                          onPressed: () {
+                                            ref
+                                                .read(queueProvider.notifier)
+                                                .toggleShuffle();
+                                          },
                                         ),
-                                        onPressed: () {
-                                          ref
-                                              .read(queueProvider.notifier)
-                                              .toggleShuffle();
-                                        },
-                                      ),
 
-                                      // Skip Previous
-                                      IconButton(
-                                        tooltip: ref.tr('prev_video'),
-                                        icon: TransportIcon.previous(
-                                          size: compactSkipSize,
-                                          color: transportArrowColor,
+                                        // Skip Previous
+                                        IconButton(
+                                          tooltip: ref.tr('prev_video'),
+                                          icon: TransportIcon.previous(
+                                            size: compactSkipSize,
+                                            color: transportArrowColor,
+                                          ),
+                                          onPressed: () => ctl.playPrev(),
                                         ),
-                                        onPressed: () => ctl.playPrev(),
-                                      ),
 
-                                      // Play / Pause Button
-                                      Material(
-                                        color: Colors.transparent,
-                                        shape: const CircleBorder(),
-                                        elevation: 0,
-                                        child: InkWell(
-                                          customBorder: const CircleBorder(),
-                                          onTap: () => ctl.toggle(),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(16),
-                                            child: _playPauseGlyph(
-                                              snap.isPlaying,
-                                              compactPlayPauseSize,
-                                              playIconColor,
+                                        // Play / Pause Button
+                                        Material(
+                                          color: Colors.transparent,
+                                          shape: const CircleBorder(),
+                                          elevation: 0,
+                                          child: InkWell(
+                                            customBorder: const CircleBorder(),
+                                            onTap: () => ctl.toggle(),
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(16),
+                                              child: _playPauseGlyph(
+                                                snap.isPlaying,
+                                                compactPlayPauseSize,
+                                                playIconColor,
+                                              ),
                                             ),
                                           ),
                                         ),
-                                      ),
 
-                                      // Skip Next
-                                      IconButton(
-                                        tooltip: ref.tr('next_video'),
-                                        icon: SkipNextIcon(
-                                          size: compactSkipSize,
-                                          color: transportArrowColor,
+                                        // Skip Next
+                                        IconButton(
+                                          tooltip: ref.tr('next_video'),
+                                          icon: SkipNextIcon(
+                                            size: compactSkipSize,
+                                            color: transportArrowColor,
+                                          ),
+                                          onPressed: () => ctl.playNext(),
                                         ),
-                                        onPressed: () => ctl.playNext(),
-                                      ),
 
-                                      // Repeat
-                                      IconButton(
-                                        tooltip: q.repeat == 'one'
-                                            ? ref.tr('repeat_one')
-                                            : (q.repeat == 'off'
-                                                  ? ref.tr('repeat_off')
-                                                  : ref.tr('repeat_all')),
-                                        icon: RepeatIcon(
-                                          size: 26,
-                                          color: q.repeat == 'off'
-                                              ? textSub
-                                              : textPrimary,
-                                          repeatMode: q.repeat,
+                                        // Repeat
+                                        IconButton(
+                                          tooltip: q.repeat == 'one'
+                                              ? ref.tr('repeat_one')
+                                              : (q.repeat == 'off'
+                                                    ? ref.tr('repeat_off')
+                                                    : ref.tr('repeat_all')),
+                                          icon: RepeatIcon(
+                                            size: 26,
+                                            color: transportArrowColor,
+                                            repeatMode: q.repeat,
+                                          ),
+                                          onPressed: () {
+                                            ref
+                                                .read(queueProvider.notifier)
+                                                .cycleRepeat();
+                                          },
                                         ),
-                                        onPressed: () {
-                                          ref
-                                              .read(queueProvider.notifier)
-                                              .cycleRepeat();
-                                        },
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
 
                             const SizedBox(height: 18),
 
                             // A touch-friendly entry point to the queue/lyrics
                             // sheet. QueuePanel already provides tabs for
                             // switching between next contents and lyrics.
-                            Center(
-                              child: TextButton.icon(
-                                key: const ValueKey(
-                                  'compact-next-content-button',
-                                ),
-                                onPressed: () {
-                                  ref.read(lyricsPanelProvider.notifier).state =
-                                      false;
-                                  ref
-                                          .read(queueVisibleProvider.notifier)
-                                          .state =
-                                      true;
-                                  setState(() => _queueSheetExpanded = false);
-                                },
-                                icon: const Icon(
-                                  Icons.keyboard_arrow_up_rounded,
-                                  size: 20,
-                                ),
-                                label: Text(ref.tr('next_contents')),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: textSub,
-                                  visualDensity: VisualDensity.compact,
+                            if (!lockQueueOpen)
+                              Center(
+                                child: TextButton.icon(
+                                  key: const ValueKey(
+                                    'compact-next-content-button',
+                                  ),
+                                  onPressed: () {
+                                    ref
+                                            .read(lyricsPanelProvider.notifier)
+                                            .state =
+                                        false;
+                                    ref
+                                            .read(queueVisibleProvider.notifier)
+                                            .state =
+                                        true;
+                                    setState(() => _queueSheetExpanded = false);
+                                  },
+                                  icon: const Icon(
+                                    Icons.keyboard_arrow_up_rounded,
+                                    size: 20,
+                                  ),
+                                  label: Text(ref.tr('next_contents')),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: textSub,
+                                    visualDensity: VisualDensity.compact,
+                                  ),
                                 ),
                               ),
-                            ),
 
                             const Spacer(flex: 1),
                           ],
@@ -2633,7 +2741,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                 right: 0,
                 bottom: 0,
                 height:
-                    MediaQuery.of(context).size.height *
+                    MediaQuery.sizeOf(context).height *
                     (_queueSheetExpanded ? 0.88 : 0.52),
                 child: QueuePanel(
                   width: double.infinity,
@@ -2653,10 +2761,12 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                   onToggleExpanded: () {
                     setState(() => _queueSheetExpanded = !_queueSheetExpanded);
                   },
-                  onClose: () {
-                    ref.read(queueVisibleProvider.notifier).state = false;
-                    setState(() => _queueSheetExpanded = false);
-                  },
+                  onClose: isPhoneSize
+                      ? () {
+                          ref.read(queueVisibleProvider.notifier).state = false;
+                          setState(() => _queueSheetExpanded = false);
+                        }
+                      : null,
                 ),
               ),
           ],

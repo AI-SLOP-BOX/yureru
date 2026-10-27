@@ -251,11 +251,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       width: double.infinity,
                       child: SegmentedButton<int>(
                         showSelectedIcon: false,
-                        segments: const [15, 30, 60]
+                        segments: const [0, 15, 30, 60]
                             .map(
                               (fps) => ButtonSegment<int>(
                                 value: fps,
-                                label: Text('$fps'),
+                                label: Text(
+                                  fps == 0
+                                      ? ref.tr('ambient_fps_auto')
+                                      : '$fps',
+                                ),
                               ),
                             )
                             .toList(),

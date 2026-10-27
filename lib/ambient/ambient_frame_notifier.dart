@@ -20,6 +20,7 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
   int _retryCaptureCount = 0;
   bool _wasInitialized;
   Duration _lastPosition;
+  int _requestedFramesPerSecond;
   int _framesPerSecond;
   int _effectiveFramesPerSecond;
   int _fastCaptureCount = 0;
@@ -28,19 +29,23 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
   double _depth;
   double _softness;
 
+  /// Current capture cadence, including automatic load-based adjustments.
+  int get effectiveFramesPerSecond => _effectiveFramesPerSecond;
+
   AmbientFrameNotifier(
     this.engine, {
     bool enabled = true,
     bool cinema = false,
-    int framesPerSecond = 30,
+    int framesPerSecond = 0,
     Rect? aperture,
     double spread = 1,
     double depth = 1,
     double softness = 1,
   }) : _enabled = enabled,
        _cinema = cinema,
-       _framesPerSecond = framesPerSecond,
-       _effectiveFramesPerSecond = framesPerSecond,
+       _requestedFramesPerSecond = framesPerSecond,
+       _framesPerSecond = framesPerSecond == 0 ? 60 : framesPerSecond,
+       _effectiveFramesPerSecond = framesPerSecond == 0 ? 60 : framesPerSecond,
        _aperture = aperture,
        _spread = spread,
        _depth = depth,
@@ -94,9 +99,10 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
   }
 
   void setFramesPerSecond(int value) {
-    if (_framesPerSecond == value) return;
-    _framesPerSecond = value;
-    _effectiveFramesPerSecond = value;
+    if (_requestedFramesPerSecond == value) return;
+    _requestedFramesPerSecond = value;
+    _framesPerSecond = value == 0 ? 60 : value;
+    _effectiveFramesPerSecond = _framesPerSecond;
     _fastCaptureCount = 0;
     if (_timer != null) {
       _timer?.cancel();
@@ -157,6 +163,9 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
   }
 
   void _adaptCaptureRate(int elapsedMicroseconds) {
+    // A numeric selection means an exact fixed rate. Auto (0) may reduce
+    // capture frequency under load and raise it again once captures are cheap.
+    if (_requestedFramesPerSecond != 0) return;
     final budget = 1000000 / _effectiveFramesPerSecond;
     if (elapsedMicroseconds > budget * 1.15 && _effectiveFramesPerSecond > 15) {
       _effectiveFramesPerSecond = _effectiveFramesPerSecond > 30 ? 30 : 15;
@@ -167,7 +176,7 @@ class AmbientFrameNotifier extends StateNotifier<ui.Image?> {
     if (_effectiveFramesPerSecond >= _framesPerSecond) return;
     if (elapsedMicroseconds < budget * 0.5) {
       _fastCaptureCount++;
-      if (_fastCaptureCount >= 60) {
+      if (_fastCaptureCount >= 20) {
         _effectiveFramesPerSecond = _effectiveFramesPerSecond < 30 ? 30 : 60;
         _fastCaptureCount = 0;
         _startTimer();

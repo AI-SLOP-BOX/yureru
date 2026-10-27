@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:window_manager/window_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
 import '../app_state.dart';
 import '../data/session.dart';
-import '../platform/window_utils.dart';
 import '../platform/system_media_provider.dart';
 import 'i18n.dart';
 import '../playback/playback_controller.dart';
@@ -21,12 +19,12 @@ import 'screens/playlist_detail_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/videos_screen.dart';
 import 'widgets/mini_player.dart';
-import 'widgets/frosted_panel.dart';
 import 'widgets/ambient_backdrop.dart';
 import 'widgets/player_card.dart';
 import 'widgets/queue_panel.dart';
 import 'widgets/search_overlay.dart';
 import 'widgets/sidebar.dart';
+import 'widgets/shell_chrome.dart';
 import 'widgets/top_bar.dart';
 import 'widgets/transport_bar.dart';
 import 'widgets/yureru_logo.dart';
@@ -53,6 +51,12 @@ class _AppShellState extends ConsumerState<AppShell>
   double _sideW = 248;
   double _queueW = 336;
   bool? _wasWide;
+  bool _desktopSidebarVisible = false;
+  bool _desktopSidebarPinned = false;
+  bool _desktopSidebarPointerInside = false;
+  bool _desktopQueuePinned = false;
+  Timer? _desktopSidebarHideTimer;
+  Timer? _desktopQueueHideTimer;
   PlaybackController? _playbackController;
 
   @override
@@ -105,6 +109,12 @@ class _AppShellState extends ConsumerState<AppShell>
           setState(() => nav = Nav.settings);
         }
       }
+      // Apply the saved audio-leveling preference before restoring a queued
+      // track; otherwise the first playback after launch bypasses it until
+      // the user opens Settings. Do this after first-launch navigation so the
+      // initial screen does not wait on audio-engine setup.
+      await ref.read(audioSettingsProvider.notifier).ready;
+      if (!mounted) return;
       await ref.read(playbackControllerProvider).restoreSession();
     });
   }
@@ -120,6 +130,8 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   void dispose() {
+    _desktopSidebarHideTimer?.cancel();
+    _desktopQueueHideTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyboardEvent);
     WidgetsBinding.instance.removeObserver(this);
     _playbackController?.saveCurrentPosition();
@@ -171,6 +183,8 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   void _browse() {
+    _desktopQueueHideTimer?.cancel();
+    _desktopQueuePinned = false;
     ref.read(immersiveModeProvider.notifier).state = false;
     ref.read(viewingPlayerProvider.notifier).state = false;
     ref.read(cinemaModeProvider.notifier).state = false;
@@ -296,48 +310,122 @@ class _AppShellState extends ConsumerState<AppShell>
     // the video gets the whole center pane.
     if (q.hasCurrent && viewing) {
       final inset = LayoutMetrics.horizontalInset(context);
+      final width = MediaQuery.sizeOf(context).width;
+      final desktopOverlays = LayoutMetrics.isLargeDesktop(context);
+      final sidebarInset = desktopOverlays && _desktopSidebarVisible
+          ? LayoutMetrics.desktopPane(_sideW, width, min: 200, max: 340) + 8
+          : 0.0;
+      final queueInset = desktopOverlays && ref.watch(queueVisibleProvider)
+          ? LayoutMetrics.desktopPane(_queueW, width, min: 280, max: 480) + 8
+          : 0.0;
       return Padding(
         padding: EdgeInsets.fromLTRB(inset, 4, inset, 12),
-        child: PlayerCard(),
+        child: PlayerCard(
+          leadingChromeInset: sidebarInset,
+          trailingChromeInset: queueInset,
+        ),
       );
     }
     return _centerPage();
   }
 
   void _toggleQueue() {
+    if (LayoutMetrics.isLargeDesktop(context) &&
+        ref.read(viewingPlayerProvider)) {
+      _showDesktopQueue();
+      return;
+    }
     ref.read(lyricsPanelProvider.notifier).state = false;
     ref.read(queueVisibleProvider.notifier).state = !ref.read(
       queueVisibleProvider,
     );
   }
 
+  void _showDesktopSidebar() {
+    _desktopSidebarHideTimer?.cancel();
+    if (!_desktopSidebarVisible && mounted) {
+      setState(() => _desktopSidebarVisible = true);
+    }
+  }
+
+  void _toggleDesktopSidebarPin() {
+    _desktopSidebarHideTimer?.cancel();
+    setState(() {
+      _desktopSidebarPinned = !_desktopSidebarPinned;
+      _desktopSidebarVisible = true;
+    });
+    if (!_desktopSidebarPinned && !_desktopSidebarPointerInside) {
+      _scheduleDesktopSidebarHide();
+    }
+  }
+
+  void _scheduleDesktopSidebarHide() {
+    if (_desktopSidebarPinned) return;
+    _desktopSidebarHideTimer?.cancel();
+    _desktopSidebarHideTimer = Timer(const Duration(milliseconds: 420), () {
+      if (mounted) setState(() => _desktopSidebarVisible = false);
+    });
+  }
+
+  void _showDesktopQueue() {
+    _desktopQueueHideTimer?.cancel();
+    ref.read(queueVisibleProvider.notifier).state = true;
+  }
+
+  void _toggleDesktopQueuePin() {
+    _desktopQueueHideTimer?.cancel();
+    if (_desktopQueuePinned) {
+      _desktopQueuePinned = false;
+      _scheduleDesktopQueueHide();
+    } else {
+      _desktopQueuePinned = true;
+      ref.read(queueVisibleProvider.notifier).state = true;
+    }
+    setState(() {});
+  }
+
+  void _scheduleDesktopQueueHide() {
+    if (_desktopQueuePinned) return;
+    _desktopQueueHideTimer?.cancel();
+    _desktopQueueHideTimer = Timer(const Duration(milliseconds: 420), () {
+      if (mounted) ref.read(queueVisibleProvider.notifier).state = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 1000;
-    // Auto-close the queue when shrinking to phone layout, auto-restore when widening.
+    // Desktop uses an edge-revealed queue overlay; compact layouts retain
+    // their explicit queue-sheet behavior.
     if (_wasWide != null && _wasWide != wide) {
-      final nowWide = wide;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        ref.read(queueVisibleProvider.notifier).state =
-            nowWide && ref.read(viewingPlayerProvider);
+        setState(() {
+          _desktopSidebarPinned = false;
+          _desktopSidebarVisible = false;
+          _desktopSidebarPointerInside = false;
+          _desktopQueuePinned = false;
+        });
+        _desktopQueueHideTimer?.cancel();
+        ref.read(queueVisibleProvider.notifier).state = false;
       });
     }
     _wasWide = wide;
-    // Fresh playback enters the player; the queue opens by default only on
-    // desktop. Auto-advance (playNext) leaves the current view alone.
+    // Fresh playback enters the player without covering it with the desktop
+    // queue overlay. Auto-advance leaves the current view alone.
     ref.listen<String?>(queueProvider.select((q) => q.currentId), (prev, next) {
       if (next != null && prev == null && mounted) {
         ref.read(viewingPlayerProvider.notifier).state = true;
-        // Keep the queue open by default on desktop, but let compact layouts
-        // enter the player without covering it with the queue sheet.
-        ref.read(queueVisibleProvider.notifier).state = wide;
+        _desktopQueuePinned = false;
+        // The desktop queue is revealed from the right edge on demand.
+        ref.read(queueVisibleProvider.notifier).state = false;
       }
     });
-    // Whenever player view is activated, default the queue open only on desktop.
+    // Do not cover the desktop player on entry; the queue is edge-revealed.
     ref.listen<bool>(viewingPlayerProvider, (prev, next) {
       if (next && mounted) {
-        ref.read(queueVisibleProvider.notifier).state = wide;
+        _desktopQueuePinned = false;
+        ref.read(queueVisibleProvider.notifier).state = false;
       }
     });
     // Persist the queue layout on every change for session restore.
@@ -373,7 +461,7 @@ class _AppShellState extends ConsumerState<AppShell>
     return Focus(
       autofocus: true,
       child: isPictureInPicture
-          ? const _PictureInPictureView()
+          ? const ShellPictureInPictureView()
           : immersive && hasMedia
           ? const ImmersivePlayerScreen()
           : wide
@@ -430,100 +518,150 @@ class _AppShellState extends ConsumerState<AppShell>
               child: Column(
                 children: [
                   Expanded(
-                    child: Row(
+                    child: Stack(
+                      clipBehavior: Clip.hardEdge,
                       children: [
-                        Sidebar(
-                          width: sideWidth,
-                          nav: nav,
-                          detailPlaylistId: detailPlaylistId,
-                          viewingPlayer: viewing,
-                          ambient: showAmbient,
-                          onNav: _setNav,
-                          onPlaylist: _openDetail,
-                          onLogoHome: _goLibrary,
+                        Column(
+                          children: [
+                            TopBar(
+                              onOpenSearch: _openSearch,
+                              onSubmitSearch: _submitSearch,
+                              onOpenFile: hasCurrent ? null : _openMediaFile,
+                              onSaveTemporary: _saveTemporaryCurrent,
+                              showMenuButton: false,
+                              onToggleQueuePin: viewing && hasCurrent
+                                  ? _toggleDesktopQueuePin
+                                  : null,
+                              queuePinned: _desktopQueuePinned,
+                              ambient: showAmbient,
+                              leadingInset: _desktopSidebarVisible
+                                  ? sideWidth + 8
+                                  : 0,
+                              trailingInset: viewing && hasCurrent && showQueue
+                                  ? queueWidth + 8
+                                  : 0,
+                            ),
+                            Expanded(
+                              child: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 140),
+                                switchInCurve: Curves.easeOut,
+                                switchOutCurve: Curves.easeOut,
+                                child: KeyedSubtree(
+                                  key: ValueKey(
+                                    'center-${viewing ? 'player' : nav.name}-${detailPlaylistId ?? ''}',
+                                  ),
+                                  child: _center(),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        _HSplitter(
-                          tooltip: ref.tr('sidebar_width'),
-                          ambient: showAmbient,
-                          onDelta: (dx) => setState(
-                            () => _sideW = ((sideWidth + dx) / sideScale).clamp(
-                              200.0,
-                              340.0,
+                        Positioned(
+                          left: 0,
+                          top: 0,
+                          bottom: 0,
+                          width: 16,
+                          child: MouseRegion(
+                            onEnter: (_) => _showDesktopSidebar(),
+                            child: const SizedBox.expand(),
+                          ),
+                        ),
+                        AnimatedPositioned(
+                          duration: const Duration(milliseconds: 240),
+                          curve: Curves.easeOutCubic,
+                          left: _desktopSidebarVisible ? 0 : -sideWidth - 8,
+                          top: 0,
+                          bottom: 0,
+                          width: sideWidth + 8,
+                          child: MouseRegion(
+                            onEnter: (_) {
+                              _desktopSidebarPointerInside = true;
+                              _desktopSidebarHideTimer?.cancel();
+                            },
+                            onExit: (_) {
+                              _desktopSidebarPointerInside = false;
+                              _scheduleDesktopSidebarHide();
+                            },
+                            child: Material(
+                              color: Colors.transparent,
+                              elevation: 18,
+                              shadowColor: Colors.black54,
+                              child: Row(
+                                children: [
+                                  Sidebar(
+                                    width: sideWidth,
+                                    nav: nav,
+                                    detailPlaylistId: detailPlaylistId,
+                                    viewingPlayer: viewing,
+                                    ambient: showAmbient,
+                                    onNav: _setNav,
+                                    onPlaylist: _openDetail,
+                                    onLogoHome: _goLibrary,
+                                    pinned: _desktopSidebarPinned,
+                                    onTogglePin: _toggleDesktopSidebarPin,
+                                  ),
+                                  ShellHorizontalSplitter(
+                                    tooltip: ref.tr('sidebar_width'),
+                                    ambient: showAmbient,
+                                    onDelta: (dx) => setState(
+                                      () => _sideW =
+                                          ((sideWidth + dx) / sideScale).clamp(
+                                            200.0,
+                                            340.0,
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              TopBar(
-                                onOpenSearch: _openSearch,
-                                onSubmitSearch: _submitSearch,
-                                onOpenFile: hasCurrent ? null : _openMediaFile,
-                                onSaveTemporary: _saveTemporaryCurrent,
-                                ambient: showAmbient,
-                              ),
-                              Expanded(
-                                child: LayoutBuilder(
-                                  builder: (context, centerConstraints) {
-                                    // Automatically hide queue if available width in center area is too small (< 620px),
-                                    // and automatically restore when widened.
-                                    final autoHideQueue =
-                                        centerConstraints.maxWidth < 620;
-                                    // `viewing` only controls the default state
-                                    // when entering the player. Once there, the
-                                    // queue button must be able to close the pane.
-                                    final effectiveShowQueue =
-                                        showQueue && !autoHideQueue;
-
-                                    return Row(
-                                      children: [
-                                        Expanded(
-                                          child: Stack(
-                                            children: [
-                                              Positioned.fill(
-                                                child: AnimatedSwitcher(
-                                                  duration: const Duration(
-                                                    milliseconds: 140,
-                                                  ),
-                                                  switchInCurve: Curves.easeOut,
-                                                  switchOutCurve:
-                                                      Curves.easeOut,
-                                                  child: KeyedSubtree(
-                                                    key: ValueKey(
-                                                      'center-${viewing ? 'player' : nav.name}-${detailPlaylistId ?? ''}',
-                                                    ),
-                                                    child: _center(),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        if (effectiveShowQueue) ...[
-                                          _HSplitter(
-                                            tooltip: ref.tr('queue_width'),
-                                            ambient: showAmbient,
-                                            onDelta: (dx) => setState(
-                                              () => _queueW =
-                                                  ((queueWidth - dx) /
-                                                          sideScale)
-                                                      .clamp(280.0, 480.0),
-                                            ),
-                                          ),
-                                          QueuePanel(
-                                            width: queueWidth,
-                                            ambient: showAmbient,
-                                            onClose: _toggleQueue,
-                                          ),
-                                        ],
-                                      ],
-                                    );
-                                  },
+                        if (viewing && hasCurrent)
+                          Positioned(
+                            right: 0,
+                            top: 68,
+                            bottom: 0,
+                            width: 16,
+                            child: MouseRegion(
+                              onEnter: (_) => _showDesktopQueue(),
+                              child: const SizedBox.expand(),
+                            ),
+                          ),
+                        if (viewing && hasCurrent)
+                          AnimatedPositioned(
+                            duration: const Duration(milliseconds: 240),
+                            curve: Curves.easeOutCubic,
+                            right: showQueue ? 0 : -queueWidth - 8,
+                            top: 68,
+                            bottom: 0,
+                            width: queueWidth + 8,
+                            child: MouseRegion(
+                              onEnter: (_) => _desktopQueueHideTimer?.cancel(),
+                              onExit: (_) => _scheduleDesktopQueueHide(),
+                              child: Material(
+                                color: Colors.transparent,
+                                elevation: 18,
+                                shadowColor: Colors.black54,
+                                child: Row(
+                                  children: [
+                                    ShellHorizontalSplitter(
+                                      tooltip: ref.tr('queue_width'),
+                                      ambient: showAmbient,
+                                      onDelta: (dx) => setState(
+                                        () => _queueW =
+                                            ((queueWidth - dx) / sideScale)
+                                                .clamp(280.0, 480.0),
+                                      ),
+                                    ),
+                                    QueuePanel(
+                                      width: queueWidth,
+                                      ambient: showAmbient,
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ],
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ),
@@ -544,7 +682,7 @@ class _AppShellState extends ConsumerState<AppShell>
           ),
           // Complete full screen cinema mode: occupies the entire window,
           // hiding sidebar, top bar, queue and transport bar.
-          if (isCinema) const Positioned.fill(child: _CinemaFadeIn()),
+          if (isCinema) const Positioned.fill(child: ShellCinemaFadeIn()),
         ],
       ),
     );
@@ -616,7 +754,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 ),
               ),
             ),
-            _CompactDrawerItem(
+            ShellCompactDrawerItem(
               icon: Icons.home_rounded,
               label: ref.tr('library'),
               selected: nav == Nav.library && detailId == null && !isPlayerMode,
@@ -625,7 +763,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 _setNav(Nav.library);
               },
             ),
-            _CompactDrawerItem(
+            ShellCompactDrawerItem(
               icon: Icons.playlist_play_rounded,
               label: ref.tr('playlists'),
               selected:
@@ -635,7 +773,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 _setNav(Nav.playlists);
               },
             ),
-            _CompactDrawerItem(
+            ShellCompactDrawerItem(
               icon: Icons.library_music_rounded,
               label: ref.tr('all_videos'),
               selected: nav == Nav.videos && !isPlayerMode,
@@ -644,7 +782,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 _setNav(Nav.videos);
               },
             ),
-            _CompactDrawerItem(
+            ShellCompactDrawerItem(
               icon: Icons.settings_rounded,
               label: ref.tr('settings'),
               selected: nav == Nav.settings && !isPlayerMode,
@@ -718,7 +856,6 @@ class _AppShellState extends ConsumerState<AppShell>
                                     8,
                                     8,
                                   ),
-                                  onClose: _toggleQueue,
                                 ),
                               ),
                             ),
@@ -745,7 +882,7 @@ class _AppShellState extends ConsumerState<AppShell>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       MiniPlayer(onExpand: () => showPlayerView(ref)),
-                      _CompactNavigationBar(
+                      ShellCompactNavigationBar(
                         selectedIndex: detailId != null ? 1 : index.clamp(0, 3),
                         labels: [
                           ref.tr('library'),
@@ -760,351 +897,6 @@ class _AppShellState extends ConsumerState<AppShell>
           ),
         ),
       ],
-    );
-  }
-}
-
-class _CompactDrawerItem extends StatelessWidget {
-  const _CompactDrawerItem({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final color = selected
-        ? (isDark ? kAccentLight : Colors.black87)
-        : (isDark ? kTextSub : Colors.black54);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-      child: Material(
-        color: selected
-            ? (isDark
-                  ? kAccent.withValues(alpha: 0.13)
-                  : Colors.black.withValues(alpha: 0.07))
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(13),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(13),
-          onTap: onTap,
-          child: SizedBox(
-            height: 48,
-            child: Row(
-              children: [
-                const SizedBox(width: 15),
-                Icon(icon, size: 21, color: color),
-                const SizedBox(width: 14),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: selected
-                        ? (isDark ? kTextPrimary : Colors.black87)
-                        : color,
-                    fontSize: 14,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CompactNavigationBar extends StatelessWidget {
-  const _CompactNavigationBar({
-    required this.selectedIndex,
-    required this.labels,
-    required this.onSelected,
-  });
-  final int selectedIndex;
-  final List<String> labels;
-  final ValueChanged<int> onSelected;
-  static const _icons = [
-    Icons.home_rounded,
-    Icons.playlist_play_rounded,
-    Icons.library_music_rounded,
-    Icons.settings_rounded,
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return FrostedPanel(
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 58,
-          child: Row(
-            children: [
-              for (var i = 0; i < _icons.length; i++)
-                Expanded(
-                  child: _CompactNavItem(
-                    icon: _icons[i],
-                    label: labels[i],
-                    selected: i == selectedIndex,
-                    isDark: isDark,
-                    onTap: () => onSelected(i),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CompactNavItem extends StatelessWidget {
-  const _CompactNavItem({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.isDark,
-    required this.onTap,
-  });
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final bool isDark;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final active = Theme.of(context).colorScheme.primary;
-    final idle = themeTextSub(context);
-    return InkWell(
-      onTap: onTap,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 21, color: selected ? active : idle),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: selected ? active : idle,
-              fontSize: 10,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CinemaFadeIn extends StatelessWidget {
-  const _CinemaFadeIn();
-
-  @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeInOut,
-      builder: (context, opacity, child) => Opacity(
-        opacity: opacity,
-        child: IgnorePointer(ignoring: opacity < 0.85, child: child),
-      ),
-      child: const ColoredBox(color: Colors.black, child: PlayerCard()),
-    );
-  }
-}
-
-class _PictureInPictureView extends ConsumerStatefulWidget {
-  const _PictureInPictureView();
-
-  @override
-  ConsumerState<_PictureInPictureView> createState() =>
-      _PictureInPictureViewState();
-}
-
-class _PictureInPictureViewState extends ConsumerState<_PictureInPictureView> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final ref = this.ref;
-    final engine = ref.watch(engineProvider);
-    final media = ref
-        .watch(libraryProvider)
-        .byId(
-          ref.watch(queueProvider.select((queue) => queue.currentId ?? '')),
-        );
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: MouseRegion(
-        onEnter: (_) {
-          if (!_hovered) setState(() => _hovered = true);
-        },
-        onExit: (_) {
-          if (_hovered) setState(() => _hovered = false);
-        },
-        child: GestureDetector(
-          // The compact macOS window has no title bar, and the Flutter video
-          // surface consumes pointer events before AppKit's background-drag
-          // handling can move the window. Start a native window drag when the
-          // user drags anywhere on the PiP surface; taps still reach controls.
-          behavior: HitTestBehavior.opaque,
-          onPanStart: (_) => windowManager.startDragging(),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                engine.buildVideoView(),
-                IgnorePointer(
-                  ignoring: !_hovered,
-                  child: AnimatedOpacity(
-                    opacity: _hovered ? 1 : 0,
-                    duration: const Duration(milliseconds: 180),
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Container(
-                        height: 58,
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [Colors.transparent, Color(0xCC000000)],
-                          ),
-                        ),
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                media?.title ?? ref.tr('playing'),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            StreamBuilder<bool>(
-                              stream: engine.playingStream,
-                              initialData: engine.snapshot.isPlaying,
-                              builder: (context, state) {
-                                final playing = state.data ?? false;
-                                return IconButton(
-                                  tooltip: ref.tr(playing ? 'pause' : 'play'),
-                                  color: Colors.white,
-                                  // Use the state shown by this StreamBuilder.
-                                  // PlaybackController.toggle() reads its cached
-                                  // snapshot, which can lag behind the platform
-                                  // stream during the PiP surface transition and
-                                  // issue pause again when the button shows Play.
-                                  onPressed: () =>
-                                      playing ? engine.pause() : engine.play(),
-                                  icon: Icon(
-                                    playing
-                                        ? Icons.pause_rounded
-                                        : Icons.play_arrow_rounded,
-                                  ),
-                                );
-                              },
-                            ),
-                            IconButton(
-                              tooltip: ref.tr('restore_window'),
-                              color: Colors.white,
-                              onPressed: () async {
-                                ref
-                                        .read(pictureInPictureProvider.notifier)
-                                        .state =
-                                    false;
-                                await WidgetsBinding.instance.endOfFrame;
-                                await restorePictureInPictureWindow(
-                                  engine: engine,
-                                );
-                              },
-                              icon: const Icon(
-                                Icons.picture_in_picture_alt_rounded,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Horizontal drag divider between resizable panes. Dragging resizes the
-/// neighbor panels; the center video flexes with whatever is left.
-class _HSplitter extends StatefulWidget {
-  final ValueChanged<double> onDelta;
-  final String tooltip;
-  final bool ambient;
-  const _HSplitter({
-    required this.onDelta,
-    required this.tooltip,
-    this.ambient = false,
-  });
-
-  @override
-  State<_HSplitter> createState() => _HSplitterState();
-}
-
-class _HSplitterState extends State<_HSplitter> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.resizeColumn,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onHorizontalDragUpdate: (d) => widget.onDelta(d.delta.dx),
-        child: Tooltip(
-          message: widget.tooltip,
-          child: Container(
-            width: 8,
-            color: Colors.transparent,
-            alignment: Alignment.center,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: _hover ? 2 : (widget.ambient ? 0 : 1),
-              decoration: BoxDecoration(
-                color: _hover
-                    ? kAccentLight
-                    : Colors.white.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(1),
-                boxShadow: _hover
-                    ? [
-                        BoxShadow(
-                          color: kAccent.withValues(alpha: 0.5),
-                          blurRadius: 6,
-                        ),
-                      ]
-                    : null,
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
