@@ -340,6 +340,39 @@ void main() {
     frame.dispose();
   });
 
+  test('upper room glow converges toward the lower edge color', () async {
+    final top = List<Color>.filled(ambientZoneCount, const Color(0xFFC04040));
+    final bottom = List<Color>.filled(
+      ambientZoneCount,
+      const Color(0xFF2070D0),
+    );
+    final side = List<Color>.filled(ambientZoneCount, const Color(0xFF305060));
+    final frame = await renderAmbientGlow(
+      AmbientEdgeColors(top: top, bottom: bottom, left: side, right: side),
+      aperture: const Rect.fromLTWH(0.2, 0.3, 0.6, 0.4),
+    );
+    final pixels = await frame.toByteData(format: ui.ImageByteFormat.rawRgba);
+    List<int> rgbAt(int x, int y) {
+      final i = (y * 320 + x) * 4;
+      final alpha = pixels!.getUint8(i + 3).clamp(1, 255);
+      return [
+        for (var channel = 0; channel < 3; channel++)
+          (pixels.getUint8(i + channel) * 255 / alpha).round().clamp(0, 255),
+      ];
+    }
+
+    final upper = rgbAt(160, 20);
+    final lower = rgbAt(160, 160);
+    final originalTopDistance =
+        (upper[0] - 192).abs() + (upper[1] - 64).abs() + (upper[2] - 64).abs();
+    final lowerDistance =
+        (upper[0] - lower[0]).abs() +
+        (upper[1] - lower[1]).abs() +
+        (upper[2] - lower[2]).abs();
+    expect(lowerDistance, lessThan(originalTopDistance));
+    frame.dispose();
+  });
+
   test(
     'blends the top corner into the side spill without a scanline seam',
     () async {

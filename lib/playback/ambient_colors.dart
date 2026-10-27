@@ -667,16 +667,25 @@ Future<ui.Image> renderAmbientGlow(
     softness: softness,
     blurFraction: 0.07,
   );
-  final roomTop = _softenAmbientProfile(
+  final softenedRoomTop = _softenAmbientProfile(
     top,
     softness: softness,
     blurFraction: 0.34,
   );
-  final roomBottom = _softenAmbientProfile(
+  final softenedRoomBottom = _softenAmbientProfile(
     bottom,
     softness: softness,
     blurFraction: 0.34,
   );
+  // Let the distant upper spill inherit the lower edge's color. The video
+  // edge itself remains faithful, while the room glow above the player blends
+  // into the same wash seen below it instead of creating a separate color band.
+  const upperToLowerBlend = 0.72;
+  final roomTop = [
+    for (var i = 0; i < softenedRoomTop.length; i++)
+      Color.lerp(softenedRoomTop[i], softenedRoomBottom[i], upperToLowerBlend)!,
+  ];
+  final roomBottom = softenedRoomBottom;
   final roomLeft = _softenAmbientProfile(
     left,
     softness: softness,
@@ -717,7 +726,11 @@ Future<ui.Image> renderAmbientGlow(
     );
   }
 
-  final averageTop = profileAverage(diffusedTop);
+  final averageTop = Color.lerp(
+    profileAverage(diffusedTop),
+    profileAverage(diffusedBottom),
+    upperToLowerBlend,
+  )!;
   final averageBottom = profileAverage(diffusedBottom);
   final averageLeft = profileAverage(diffusedLeft);
   final averageRight = profileAverage(diffusedRight);
