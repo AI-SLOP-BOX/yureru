@@ -568,7 +568,9 @@ class _TopBarState extends ConsumerState<TopBar> {
 
         final header = widget.ambient
             ? FrostedPanel(
-                fillOpacity: 0.68,
+                // Keep the ambient palette present without letting a bright
+                // frame tint the full-width search/header surface too strongly.
+                fillOpacity: 0.84,
                 borderOpacity: 0.025,
                 child: content,
               )
