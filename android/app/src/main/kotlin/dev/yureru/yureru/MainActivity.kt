@@ -16,6 +16,26 @@ class MainActivity : FlutterActivity() {
         pipChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         pipChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
+                "setBackgroundPlayback" -> {
+                    val playing = call.arguments as? Boolean ?: false
+                    val serviceIntent = android.content.Intent(
+                        this,
+                        PlaybackForegroundService::class.java,
+                    ).setAction(
+                        if (playing) PlaybackForegroundService.ACTION_START
+                        else PlaybackForegroundService.ACTION_STOP,
+                    )
+                    try {
+                        if (playing && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(serviceIntent)
+                        } else {
+                            startService(serviceIntent)
+                        }
+                        result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }
                 "enterSystemPictureInPicture" -> {
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
                         result.success(false)

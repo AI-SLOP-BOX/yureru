@@ -32,6 +32,8 @@ class IosPlaybackEngine implements PlaybackEngine {
   bool _switchingToFallback = false;
   double _volume = 1;
   double _speed = 1;
+  bool _normalizationEnabled = false;
+  Future<ui.Image?> Function()? _ambientFrameSource;
 
   static const _avFoundationExtensions = <String>{
     'mp4',
@@ -63,7 +65,7 @@ class IosPlaybackEngine implements PlaybackEngine {
     _snapshot = const PlaybackSnapshot();
     _snapshots.add(_snapshot);
 
-    if (!_isAvFoundationCandidate(source.uri)) {
+    if (_normalizationEnabled || !_isAvFoundationCandidate(source.uri)) {
       await _loadWithMediaKit(source, autoplay: autoplay);
       return;
     }
@@ -124,6 +126,8 @@ class IosPlaybackEngine implements PlaybackEngine {
     ]);
     await fallback.setVolume(_volume);
     await fallback.setSpeed(_speed);
+    await fallback.setVolumeNormalizationEnabled(_normalizationEnabled);
+    fallback.setAmbientFrameSource(_ambientFrameSource);
     await fallback.load(source, autoplay: autoplay);
   }
 
@@ -261,6 +265,7 @@ class IosPlaybackEngine implements PlaybackEngine {
 
   @override
   void setAmbientFrameSource(Future<ui.Image?> Function()? capture) {
+    _ambientFrameSource = capture;
     _fallback?.setAmbientFrameSource(capture);
   }
 
@@ -268,14 +273,23 @@ class IosPlaybackEngine implements PlaybackEngine {
   ValueListenable<ui.Image?>? get ambientMatteFrameListenable =>
       _fallback?.ambientMatteFrameListenable;
 
-  // Keep AVPlayer/PiP available; do not silently change backends for an effect.
+  // AVPlayer has no dynamic-normalization hook. When requested, route this
+  // source through mpv's audio filter while keeping AVPlayer as the default.
   @override
-  bool get supportsVolumeNormalization => false;
+  bool get supportsVolumeNormalization => true;
 
   @override
   Future<void> setVolumeNormalizationEnabled(bool enabled) async {
-    if (enabled) {
-      throw UnsupportedError('AVPlayer audio filtering is unavailable');
+    if (_normalizationEnabled == enabled) return;
+    _normalizationEnabled = enabled;
+    final fallback = _fallback;
+    if (fallback != null) {
+      await fallback.setVolumeNormalizationEnabled(enabled);
+      return;
+    }
+    final controller = _controller;
+    if (enabled && controller != null) {
+      await _switchToMediaKit(controller);
     }
   }
 

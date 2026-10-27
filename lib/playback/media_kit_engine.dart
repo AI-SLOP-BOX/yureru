@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:media_kit/media_kit.dart' as mk;
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
@@ -12,6 +13,9 @@ import 'playback_engine.dart';
 /// Owns one mk.Player + lazily-created mkv.VideoController for the view.
 /// yureru Queue stays outside: we open exactly one Media per load().
 class MediaKitPlaybackEngine implements PlaybackEngine {
+  static const _backgroundPlaybackChannel = MethodChannel(
+    'yureru/media_picker',
+  );
   mk.Player? _player;
   mkv.VideoController? _vc;
   PlaybackSnapshot _snap = const PlaybackSnapshot();
@@ -75,6 +79,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
           completed: false,
         );
         _snapCtrl.add(_snap);
+        unawaited(_setAndroidBackgroundPlayback(playing));
       }),
     );
     _subs.add(
@@ -124,6 +129,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
         await _applyVolumeNormalization(platform, true);
       }
     }
+    await _setAndroidBackgroundPlayback(autoplay && p.state.playing);
     if (_rate != 1.0) await p.setRate(_rate);
     _snap = PlaybackSnapshot(
       position: p.state.position,
@@ -241,9 +247,30 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
       load(PlaybackSource(mediaId: mediaId, uri: pathOrUrl), autoplay: true);
 
   @override
-  Future<void> play() async => _ensurePlayer().play();
+  Future<void> play() async {
+    await _ensurePlayer().play();
+    await _setAndroidBackgroundPlayback(true);
+  }
+
   @override
-  Future<void> pause() async => _ensurePlayer().pause();
+  Future<void> pause() async {
+    await _ensurePlayer().pause();
+    await _setAndroidBackgroundPlayback(false);
+  }
+
+  Future<void> _setAndroidBackgroundPlayback(bool playing) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _backgroundPlaybackChannel.invokeMethod<void>(
+        'setBackgroundPlayback',
+        playing,
+      );
+    } catch (_) {
+      // Foreground playback remains usable if the optional Android service
+      // cannot be started (for example, on an older or restricted device).
+    }
+  }
+
   @override
   Future<void> seekTo(Duration pos) async => _ensurePlayer().seek(pos);
   @override
@@ -420,6 +447,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
 
   @override
   Future<void> dispose() async {
+    await _setAndroidBackgroundPlayback(false);
     for (final s in _subs) {
       await s.cancel();
     }
