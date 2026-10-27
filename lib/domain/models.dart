@@ -30,7 +30,7 @@ class MediaItem {
   /// User-selected artwork, stored in the app's support directory.
   final String? artworkPath;
 
-  /// User-selected synchronized lyrics file (.lrc), if available.
+  /// User-selected lyrics file (.lrc or plain text), if available.
   final String? lyricsPath;
 
   /// Signed correction for synchronized lyrics. Positive values delay lines.

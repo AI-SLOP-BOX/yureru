@@ -63,6 +63,13 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
       );
       if (await File(sibling).exists()) path = sibling;
     }
+    if (path == null) {
+      final sibling = widget.media.localPath.replaceFirst(
+        RegExp(r'\.[^./\\]+$'),
+        '.txt',
+      );
+      if (await File(sibling).exists()) path = sibling;
+    }
     if (path != null) return _LyricsSource(path: path);
     return _LyricsSource(embedded: await widget.engine.readEmbeddedLyrics());
   }
@@ -70,7 +77,7 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
   Future<void> _chooseLyrics() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['lrc'],
+      allowedExtensions: const ['lrc', 'txt'],
       allowMultiple: false,
       withData: false,
     );
@@ -80,8 +87,11 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
       final support = await getApplicationSupportDirectory();
       final directory = Directory('${support.path}/yureru_lyrics');
       await directory.create(recursive: true);
+      final extension = sourcePath.toLowerCase().endsWith('.lrc')
+          ? 'lrc'
+          : 'txt';
       final destination =
-          '${directory.path}/${widget.media.id}_${DateTime.now().microsecondsSinceEpoch}.lrc';
+          '${directory.path}/${widget.media.id}_${DateTime.now().microsecondsSinceEpoch}.$extension';
       await File(sourcePath).copy(destination);
       await ref
           .read(libraryProvider.notifier)
