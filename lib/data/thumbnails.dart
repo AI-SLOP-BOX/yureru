@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:media_kit/media_kit.dart' as mk;
+import 'package:media_kit_video/media_kit_video.dart' as mkv;
 import 'package:path_provider/path_provider.dart';
 
 import 'importer.dart';
@@ -40,7 +42,10 @@ class ThumbnailService {
   /// Older generations are deleted on rewrite. The best-frame timestamp
   /// rides along in a `.txt` sidecar so the home preview can loop the
   /// bright section instead of black head.
-  static Future<File> cacheFileFor(String mediaId, {bool highRes = false}) async {
+  static Future<File> cacheFileFor(
+    String mediaId, {
+    bool highRes = false,
+  }) async {
     final dir = await getTemporaryDirectory();
     final suffix = highRes ? '.hi.v3.jpg' : '.v3.jpg';
     return File('${dir.path}/yureru_thumbs/$mediaId$suffix');
@@ -80,16 +85,17 @@ class ThumbnailService {
     final key = highRes ? '$mediaId@hi' : mediaId;
     return _inflight.putIfAbsent(
       key,
-      () => _make(
-        mediaId: mediaId,
-        localPath: localPath,
-        maxWidth: highRes ? 1280 : maxWidth,
-        highRes: highRes,
-        // NOTE: block body — returning _inflight.remove()'s value would
-        // resolve this future with itself (the stored entry) and deadlock.
-      ).whenComplete(() {
-        _inflight.remove(key);
-      }),
+      () =>
+          _make(
+            mediaId: mediaId,
+            localPath: localPath,
+            maxWidth: highRes ? 1280 : maxWidth,
+            highRes: highRes,
+            // NOTE: block body — returning _inflight.remove()'s value would
+            // resolve this future with itself (the stored entry) and deadlock.
+          ).whenComplete(() {
+            _inflight.remove(key);
+          }),
     );
   }
 
@@ -117,15 +123,103 @@ class ThumbnailService {
           return out;
         }
       }
-      return _throttled(() => _generate(mediaId, localPath, maxWidth, highRes: highRes));
+      if (_isWebm(localPath)) {
+        return _throttled(
+          () => _generateWebm(
+            mediaId: mediaId,
+            localPath: localPath,
+            output: out,
+          ),
+        );
+      }
+      return _throttled(
+        () => _generate(mediaId, localPath, maxWidth, highRes: highRes),
+      );
     } catch (e) {
       debugPrint('thumb: skipped $mediaId: $e');
       return null;
     }
   }
 
+  static bool _isWebm(String path) =>
+      path.toLowerCase().split('?').first.endsWith('.webm');
+
+  /// AVFoundation does not decode WebM on macOS. Use the same mpv backend as
+  /// playback for this container, then cache its JPEG frame just like the
+  /// AVFoundation path. The temporary player is always disposed to release
+  /// its decoder and file handles.
+  static Future<File?> _generateWebm({
+    required String mediaId,
+    required String localPath,
+    required File output,
+  }) async {
+    final player = mk.Player();
+    final controller = mkv.VideoController(
+      player,
+      configuration: const mkv.VideoControllerConfiguration(
+        width: 640,
+        height: 360,
+      ),
+    );
+    try {
+      await controller.platform.future.timeout(const Duration(seconds: 15));
+      await controller.setSize(width: 640, height: 360);
+      await player.setVolume(0);
+      await player
+          .open(mk.Media(localPath), play: true)
+          .timeout(const Duration(seconds: 30));
+      var duration = player.state.duration;
+      if (duration <= Duration.zero) {
+        duration = await player.stream.duration
+            .firstWhere((value) => value > Duration.zero)
+            .timeout(const Duration(seconds: 15));
+      }
+      await controller.waitUntilFirstFrameRendered.timeout(
+        const Duration(seconds: 15),
+      );
+      final target = duration > Duration.zero
+          ? Duration(milliseconds: duration.inMilliseconds ~/ 3)
+          : Duration.zero;
+      await player.seek(target).timeout(const Duration(seconds: 10));
+      // Let mpv decode the sought frame before requesting the screenshot.
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await player.pause();
+      final bytes = await player
+          .screenshot(format: 'image/jpeg')
+          .timeout(const Duration(seconds: 15));
+      if (bytes == null || bytes.isEmpty) return null;
+      await output.parent.create(recursive: true);
+      await output.writeAsBytes(bytes, flush: true);
+      if (target.inMilliseconds >= 0) {
+        try {
+          await File(
+            '${output.path}.txt',
+          ).writeAsString('${target.inMilliseconds}');
+        } catch (_) {}
+      }
+      // Drop older generations so the WebM thumbnail appears immediately.
+      try {
+        for (final legacy in await legacyCacheFilesFor(mediaId)) {
+          if (legacy.path != output.path && await legacy.exists()) {
+            await legacy.delete();
+          }
+        }
+      } catch (_) {}
+      return output;
+    } catch (e) {
+      debugPrint('thumb: mpv WebM skipped $mediaId: $e');
+      return null;
+    } finally {
+      await player.dispose();
+    }
+  }
+
   static Future<File?> _generate(
-      String mediaId, String localPath, int maxWidth, {bool highRes = false}) async {
+    String mediaId,
+    String localPath,
+    int maxWidth, {
+    bool highRes = false,
+  }) async {
     try {
       final out = await cacheFileFor(mediaId, highRes: highRes);
       // Another waiter may have finished first; re-check inside the gate.
@@ -136,10 +230,10 @@ class ThumbnailService {
           return out;
         }
       }
-      final res = await mediaPickerChannel.invokeMethod<Map>(
-        'makeThumbnail',
-        {'path': localPath, 'maxWidth': maxWidth},
-      );
+      final res = await mediaPickerChannel.invokeMethod<Map>('makeThumbnail', {
+        'path': localPath,
+        'maxWidth': maxWidth,
+      });
       final data = res?['jpg'] as Uint8List?;
       final bestMs = (res?['timeMs'] as num?)?.toInt();
       if (data == null || data.isEmpty) return null;
@@ -199,10 +293,9 @@ class DurationService {
       if (!await File(localPath).exists()) {
         return null;
       }
-      final ms = await mediaPickerChannel.invokeMethod<int>(
-        'probeDuration',
-        {'path': localPath},
-      );
+      final ms = await mediaPickerChannel.invokeMethod<int>('probeDuration', {
+        'path': localPath,
+      });
       if (ms == null || ms <= 0) return null;
       _cache[mediaId] = ms;
       return ms;

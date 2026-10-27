@@ -1,15 +1,16 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
+import '../i18n.dart';
 import '../theme.dart';
-import 'repeat_icon.dart';
-import 'skip_next_icon.dart';
+import 'playback_options.dart';
+import 'frosted_panel.dart';
 import 'transport_icon.dart';
 import 'thumb_image.dart';
 
@@ -21,10 +22,14 @@ const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 class TransportBar extends ConsumerStatefulWidget {
   final bool queueVisible;
   final VoidCallback onToggleQueue;
+  final bool transportOnly;
+  final bool ambient;
   const TransportBar({
     super.key,
     required this.queueVisible,
     required this.onToggleQueue,
+    this.transportOnly = false,
+    this.ambient = false,
   });
 
   @override
@@ -32,7 +37,6 @@ class TransportBar extends ConsumerStatefulWidget {
 }
 
 class _TransportBarState extends ConsumerState<TransportBar> {
-  double _beforeMute = 1.0;
   bool _volumeHover = false;
 
   @override
@@ -40,84 +44,75 @@ class _TransportBarState extends ConsumerState<TransportBar> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 750;
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        return ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: compact ? 0 : (isDark ? 48 : 36),
-              sigmaY: compact ? 0 : (isDark ? 48 : 36),
-            ),
-            child: Container(
-              decoration: BoxDecoration(
-                color: compact
-                    ? themePanelSolid(context)
-                    : (isDark
-                          ? const Color(0x704B4B52)
-                          : Colors.white.withValues(alpha: 0.24)),
-                gradient: !compact && isDark
-                    ? const LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Color(0x2AFFFFFF),
-                          Color(0x12FFFFFF),
-                          Color(0x08000000),
-                        ],
-                      )
-                    : null,
-                border: Border(
-                  top: BorderSide(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.17)
-                        : themeBorder(context),
-                    width: 1,
+        if (widget.transportOnly) {
+          return FrostedPanel(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            fillOpacity: widget.ambient ? 0.68 : null,
+            borderOpacity: widget.ambient ? 0.025 : null,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Center(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: _controls(ref),
                   ),
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(
-                      alpha: compact ? (isDark ? 0.6 : 0.08) : 0.22,
-                    ),
-                    blurRadius: compact ? 28 : 22,
-                    offset: const Offset(0, -6),
-                  ),
-                ],
-              ),
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Row 1: Volume & Song info (Left), Main Controls (Center), Tools & Queue (Right)
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: Row(
-                          children: [
-                            Expanded(child: _nowPlaying(ref, compact)),
-                            if (!compact) ...[
-                              const SizedBox(width: 8),
-                              _volumeControls(compact),
-                            ],
-                          ],
-                        ),
-                      ),
-                      Expanded(flex: 4, child: Center(child: _controls(ref))),
-                      Expanded(
-                        flex: 3,
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: _tools(ref, compact),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  // Row 2: Full-width scrub timeline with duration labels on both sides
-                  const _TimelineBar(),
-                ],
-              ),
+                const SizedBox(height: 4),
+                const _TimelineBar(),
+              ],
             ),
+          );
+        }
+        return FrostedPanel(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
+          fillOpacity: widget.ambient ? 0.68 : null,
+          borderOpacity: widget.ambient ? 0.025 : null,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (compact) ...[
+                Row(
+                  children: [
+                    Expanded(child: _nowPlaying(ref, true)),
+                    _tools(ref, true),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Center(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: _controls(ref),
+                  ),
+                ),
+              ] else
+                // Volume & song info (left), transport (center), tools (right).
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: Row(
+                        children: [
+                          Expanded(child: _nowPlaying(ref, false)),
+                          const SizedBox(width: 8),
+                          _volumeControls(false),
+                        ],
+                      ),
+                    ),
+                    Expanded(flex: 4, child: Center(child: _controls(ref))),
+                    Expanded(
+                      flex: 3,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: _tools(ref, false),
+                      ),
+                    ),
+                  ],
+                ),
+              const SizedBox(height: 6),
+              // Row 2: Full-width scrub timeline with duration labels on both sides
+              const _TimelineBar(),
+            ],
           ),
         );
       },
@@ -148,13 +143,13 @@ class _TransportBarState extends ConsumerState<TransportBar> {
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '再生中の曲はありません',
+                    ref.tr('playing_no_track'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -165,7 +160,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                   ),
                   SizedBox(height: 2),
                   Text(
-                    '動画を選択して再生',
+                    ref.tr('select_video_to_play'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -198,7 +193,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         child: Row(
           children: [
             Tooltip(
-              message: '動画を大画面で表示',
+              message: ref.tr('fullscreen_video_tip'),
               child: Container(
                 width: 48,
                 height: 48,
@@ -311,14 +306,16 @@ class _TransportBarState extends ConsumerState<TransportBar> {
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final desktop = MediaQuery.sizeOf(context).width >= 750;
-    final primaryIconColor = isDark ? Colors.white : const Color(0xFF1E293B);
+    final primaryIconColor = isDark ? kTextPrimary : const Color(0xFF2B2B2B);
     final arrowIconColor = isDark
-        ? const Color(0xFFA8A8AC)
-        : const Color(0xFF5C5C60);
+        ? const Color(0xFFA9A9A9)
+        : const Color(0xFF5D5D5D);
     final playIconColor = isDark
-        ? const Color(0xFF9E9EA2)
-        : const Color(0xFF525256);
-    final disabledIconColor = isDark ? Colors.white30 : Colors.black26;
+        ? const Color(0xFF9F9F9F)
+        : const Color(0xFF535353);
+    final disabledIconColor = isDark
+        ? kTextMuted.withValues(alpha: 0.55)
+        : Colors.black26;
     // Keep the desktop play-to-skip glyph ratio on compact layouts as well.
     final previousNextIconSize = 30.0;
     final playPauseIconSize = desktop ? 42.0 : previousNextIconSize * 42 / 30;
@@ -326,19 +323,13 @@ class _TransportBarState extends ConsumerState<TransportBar> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
-          tooltip: 'シャッフル',
-          icon: TransportIcon.shuffle(
-            size: 20,
-            color: q.shuffle ? primaryIconColor : disabledIconColor,
-          ),
-          onPressed: q.hasCurrent
-              ? () => ref.read(queueProvider.notifier).toggleShuffle()
-              : null,
+        PlaybackShuffleButton(
+          activeColor: primaryIconColor,
+          inactiveColor: disabledIconColor,
         ),
         const SizedBox(width: 4),
         IconButton(
-          tooltip: '前の動画',
+          tooltip: ref.tr('prev_video'),
           icon: TransportIcon.previous(
             size: previousNextIconSize,
             color: has ? arrowIconColor : disabledIconColor,
@@ -372,28 +363,9 @@ class _TransportBarState extends ConsumerState<TransportBar> {
             );
           },
         ),
-        const SizedBox(width: 4),
-        IconButton(
-          tooltip: '次の動画',
-          icon: SkipNextIcon(
-            size: previousNextIconSize,
-            color: has ? arrowIconColor : disabledIconColor,
-          ),
-          onPressed: q.hasCurrent ? () => ctl.playNext() : null,
-        ),
-        const SizedBox(width: 4),
-        IconButton(
-          tooltip: q.repeat == 'one'
-              ? '1曲リピート'
-              : (q.repeat == 'off' ? 'リピートなし' : '全曲リピート'),
-          icon: RepeatIcon(
-            size: 20,
-            color: q.repeat == 'off' ? disabledIconColor : primaryIconColor,
-            repeatMode: q.repeat,
-          ),
-          onPressed: q.hasCurrent
-              ? () => ref.read(queueProvider.notifier).cycleRepeat()
-              : null,
+        PlaybackRepeatButton(
+          activeColor: primaryIconColor,
+          inactiveColor: disabledIconColor,
         ),
       ],
     );
@@ -416,20 +388,14 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            tooltip: volume == 0 ? 'ミュート解除' : 'ミュート',
+            tooltip: ref.tr(volume == 0 ? 'unmute' : 'mute'),
             icon: Icon(
               volume == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded,
               size: 20,
             ),
-            color: isDark ? Colors.white70 : const Color(0xFF475569),
+            color: isDark ? kTextPrimary : const Color(0xFF575757),
             onPressed: () async {
-              if (volume == 0) {
-                final restore = _beforeMute > 0 ? _beforeMute : 1.0;
-                await playback.setVolume(restore);
-              } else {
-                _beforeMute = volume;
-                await playback.setVolume(0);
-              }
+              await playback.toggleMute();
             },
           ),
           if (!compact)
@@ -446,12 +412,12 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                       elevation: 2,
                     ),
                     activeTrackColor: isDark
-                        ? Colors.white
-                        : const Color(0xFF1E293B),
+                        ? kTextPrimary
+                        : const Color(0xFF2B2B2B),
                     inactiveTrackColor: isDark
-                        ? Colors.white24
+                        ? kTextMuted.withValues(alpha: 0.4)
                         : Colors.black12,
-                    thumbColor: isDark ? Colors.white : const Color(0xFF1E293B),
+                    thumbColor: isDark ? kTextPrimary : const Color(0xFF2B2B2B),
                   ),
                   child: Slider(
                     value: volume.clamp(0.0, 1.0),
@@ -476,18 +442,18 @@ class _TransportBarState extends ConsumerState<TransportBar> {
       children: [
         // Speed selection popup menu (Apple-style with checkmarks)
         PopupMenuButton<double>(
-          tooltip: '再生速度',
+          tooltip: ref.tr('playback_speed'),
           enabled: has,
           initialValue: q.speed,
           onSelected: (speed) async {
             await ctl.setSpeed(speed);
           },
-          color: isDark ? const Color(0xF21C1C26) : const Color(0xF2FFFFFF),
+          color: isDark ? const Color(0xF2262626) : const Color(0xF2FFFFFF),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
             side: BorderSide(
               color: isDark
-                  ? Colors.white.withValues(alpha: 0.12)
+                  ? kGlassBorder.withValues(alpha: 0.8)
                   : Colors.black.withValues(alpha: 0.08),
             ),
           ),
@@ -513,9 +479,9 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                     child: Row(
                       children: [
                         if (q.speed == s) ...[
-                          const Icon(
+                          Icon(
                             Icons.check_rounded,
-                            color: Colors.white,
+                            color: isDark ? kBg : Colors.white,
                             size: 18,
                           ),
                           const SizedBox(width: 8),
@@ -523,15 +489,15 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                           const SizedBox(width: 26),
                         ],
                         Text(
-                          '${s == s.toInt() ? s.toInt() : s} 倍速',
+                          '${s == s.toInt() ? s.toInt() : s}×',
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: q.speed == s
                                 ? FontWeight.w700
                                 : FontWeight.w500,
                             color: q.speed == s
-                                ? Colors.white
-                                : (isDark ? Colors.white : Colors.black87),
+                                ? kTextPrimary
+                                : (isDark ? kTextPrimary : Colors.black87),
                           ),
                         ),
                       ],
@@ -630,15 +596,15 @@ class _TimelineBarState extends ConsumerState<_TimelineBar> {
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final desktop = MediaQuery.sizeOf(context).width >= 750;
-    final timeColor = isDark ? Colors.white70 : const Color(0xFF334155);
-    final primaryIconColor = isDark ? Colors.white : const Color(0xFF1E293B);
+    final timeColor = isDark ? kTextSub : const Color(0xFF434343);
+    final primaryIconColor = isDark ? kTextPrimary : const Color(0xFF2B2B2B);
     final activeSeekColor = desktop
-        ? const Color(0xFFA0A0A3)
+        ? const Color(0xFFA1A1A1)
         : primaryIconColor;
     final inactiveSeekColor = desktop
-        ? const Color(0xFF66666A)
-        : (isDark ? Colors.white24 : Colors.black12);
-    final seekThumbColor = desktop ? const Color(0xFFD0D0D2) : primaryIconColor;
+        ? const Color(0xFF676767)
+        : (isDark ? kTextMuted.withValues(alpha: 0.4) : Colors.black12);
+    final seekThumbColor = desktop ? kAccentLight : primaryIconColor;
 
     return Row(
       children: [
@@ -671,40 +637,55 @@ class _TimelineBarState extends ConsumerState<_TimelineBar> {
                 overlayColor: activeSeekColor.withValues(alpha: 0.15),
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
               ),
-              child: Slider(
-                value: dur.inMilliseconds == 0
-                    ? 0
-                    : displayPos.inMilliseconds
-                          .clamp(0, dur.inMilliseconds)
-                          .toDouble(),
-                max: (dur.inMilliseconds <= 0 ? 1 : dur.inMilliseconds)
-                    .toDouble(),
-                onChangeStart: has
-                    ? (v) {
-                        setState(() {
-                          _isDragging = true;
-                          _draggedMs = v;
-                        });
-                      }
-                    : null,
-                onChanged: has
-                    ? (v) {
-                        setState(() {
-                          _draggedMs = v;
-                        });
-                      }
-                    : null,
-                onChangeEnd: has
-                    ? (v) async {
-                        _draggedMs = v;
-                        await ctl.seekTo(Duration(milliseconds: v.toInt()));
-                        if (mounted) {
+              child: Focus(
+                // This seekbar stays mounted while browsing. If arrow-key
+                // focus reaches it at a list's scroll boundary, Slider's
+                // built-in actions would unexpectedly seek. Keep seeking
+                // pointer-driven so navigation arrows never change time.
+                onKeyEvent: (node, event) =>
+                    {
+                      LogicalKeyboardKey.arrowLeft,
+                      LogicalKeyboardKey.arrowRight,
+                      LogicalKeyboardKey.arrowUp,
+                      LogicalKeyboardKey.arrowDown,
+                    }.contains(event.logicalKey)
+                    ? KeyEventResult.handled
+                    : KeyEventResult.ignored,
+                child: Slider(
+                  value: dur.inMilliseconds == 0
+                      ? 0
+                      : displayPos.inMilliseconds
+                            .clamp(0, dur.inMilliseconds)
+                            .toDouble(),
+                  max: (dur.inMilliseconds <= 0 ? 1 : dur.inMilliseconds)
+                      .toDouble(),
+                  onChangeStart: has
+                      ? (v) {
                           setState(() {
-                            _isDragging = false;
+                            _isDragging = true;
+                            _draggedMs = v;
                           });
                         }
-                      }
-                    : null,
+                      : null,
+                  onChanged: has
+                      ? (v) {
+                          setState(() {
+                            _draggedMs = v;
+                          });
+                        }
+                      : null,
+                  onChangeEnd: has
+                      ? (v) async {
+                          _draggedMs = v;
+                          await ctl.seekTo(Duration(milliseconds: v.toInt()));
+                          if (mounted) {
+                            setState(() {
+                              _isDragging = false;
+                            });
+                          }
+                        }
+                      : null,
+                ),
               ),
             ),
           ),

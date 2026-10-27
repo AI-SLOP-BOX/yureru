@@ -6,22 +6,25 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../platform/window_utils.dart';
+import '../../playback/playback_engine.dart';
+import '../i18n.dart';
 import '../theme.dart';
+import 'frosted_panel.dart';
 
 /// Top bar: logo-home + global search + window/panel icon actions.
 class TopBar extends ConsumerStatefulWidget {
-  final bool queueVisible;
-  final VoidCallback onToggleQueue;
-  final VoidCallback onLogoHome;
   final VoidCallback onOpenSearch;
   final ValueChanged<String> onSubmitSearch;
+  final VoidCallback? onOpenFile;
+  final VoidCallback? onSaveTemporary;
+  final bool ambient;
   const TopBar({
     super.key,
-    required this.queueVisible,
-    required this.onToggleQueue,
-    required this.onLogoHome,
     required this.onOpenSearch,
     required this.onSubmitSearch,
+    this.onOpenFile,
+    this.onSaveTemporary,
+    this.ambient = false,
   });
 
   @override
@@ -91,8 +94,29 @@ class _TopBarState extends ConsumerState<TopBar> {
   }
 
   Future<void> _enterPictureInPicture() async {
-    await setPictureInPictureWindow(true);
-    if (mounted) ref.read(pictureInPictureProvider.notifier).state = true;
+    final engine = ref.read(engineProvider);
+    final pipNotifier = ref.read(pictureInPictureProvider.notifier);
+    final isCompactDesktop =
+        defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.linux;
+    if (isCompactDesktop) {
+      // Swap to the PiP-only video surface before changing the native window
+      // size. Otherwise the first entry briefly compresses the entire app UI.
+      pipNotifier.state = true;
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    final started = await enterPictureInPictureWindow(engine: engine);
+    if (!started && isCompactDesktop) {
+      pipNotifier.state = false;
+    } else if (started && defaultTargetPlatform != TargetPlatform.iOS) {
+      pipNotifier.state = true;
+    }
+    if (!started && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(ref.tr('pip_unavailable'))));
+    }
   }
 
   void _onSearchSubmitted(String v) {
@@ -130,17 +154,15 @@ class _TopBarState extends ConsumerState<TopBar> {
       }
     });
 
-    final iconColor = isDark ? Colors.white70 : Colors.black87;
-    final searchBgColor = isDark
-        ? kPanelAlt
-        : Colors.black.withValues(alpha: 0.05);
+    final iconColor = themeTextSub(context);
+    final searchBgColor = theme.colorScheme.surfaceContainer;
     final searchBorderColor = _searchHasFocus
         ? (isDark
               ? kAccentLight.withValues(alpha: 0.7)
               : kAccent.withValues(alpha: 0.6))
         : (isDark ? kGlassBorder : const Color(0x1A000000));
 
-    final hintColor = isDark ? kTextMuted : Colors.black45;
+    final hintColor = themeTextSub(context);
     final inputTextColor = isDark ? kTextPrimary : Colors.black87;
     final shortcutBadgeBg = isDark
         ? kGlassHighlight
@@ -153,9 +175,23 @@ class _TopBarState extends ConsumerState<TopBar> {
         (defaultTargetPlatform == TargetPlatform.macOS ||
             defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux);
+    final supportsPictureInPicture =
+        isDesktop ||
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
     final canPictureInPicture = ref.watch(
       queueProvider.select((queue) => queue.hasCurrent),
     );
+    final currentId = ref.watch(
+      queueProvider.select((queue) => queue.currentId),
+    );
+    final currentIsTemporary =
+        currentId != null &&
+        ref.watch(
+          libraryProvider.select(
+            (library) => library.byId(currentId)?.isTemporary ?? false,
+          ),
+        );
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -196,6 +232,14 @@ class _TopBarState extends ConsumerState<TopBar> {
               }
               _searchFocusNode.requestFocus();
             },
+            SingleActivator(
+              LogicalKeyboardKey.keyO,
+              meta: isMacOS,
+              control: !isMacOS,
+            ): () {
+              if (ModalRoute.of(context)?.isCurrent != true) return;
+              widget.onOpenFile?.call();
+            },
           },
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -205,8 +249,10 @@ class _TopBarState extends ConsumerState<TopBar> {
                   Builder(
                     builder: (bContext) => IconButton(
                       tooltip: Scaffold.maybeOf(bContext)?.hasDrawer == true
-                          ? 'メニューを開く'
-                          : (collapsed ? 'サイドバーを表示' : 'サイドバーを隠す'),
+                          ? ref.tr('menu')
+                          : (collapsed
+                                ? ref.tr('show_sidebar')
+                                : ref.tr('hide_sidebar')),
                       icon: Icon(
                         Icons.menu_rounded,
                         size: 22,
@@ -223,28 +269,11 @@ class _TopBarState extends ConsumerState<TopBar> {
                       },
                     ),
                   ),
-                  if (constraints.maxWidth >= 340) ...[
-                    const SizedBox(width: 4),
-                    Material(
-                      type: MaterialType.transparency,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(10),
-                        onTap: widget.onLogoHome,
-                        child: const Tooltip(
-                          message: 'ライブラリに戻る',
-                          child: Padding(
-                            padding: EdgeInsets.all(4),
-                            child: _TopBarLogo(),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
+                  const SizedBox(width: 12),
                 ] else ...[
                   // Back button when search is expanded full-width on very small screens
                   IconButton(
-                    tooltip: '検索を閉じる (Esc)',
+                    tooltip: '${ref.tr('close')} (Esc)',
                     icon: Icon(
                       Icons.arrow_back_rounded,
                       size: 22,
@@ -258,7 +287,7 @@ class _TopBarState extends ConsumerState<TopBar> {
                 // Center Search Area: either collapsed icon or prominent search pill
                 if (collapseSearchField) ...[
                   IconButton(
-                    tooltip: '検索',
+                    tooltip: ref.tr('search'),
                     icon: Icon(
                       Icons.search_rounded,
                       size: 22,
@@ -332,7 +361,7 @@ class _TopBarState extends ConsumerState<TopBar> {
                                     ),
                                     Expanded(
                                       child: Semantics(
-                                        label: 'ライブラリ内検索',
+                                        label: ref.tr('search_library'),
                                         textField: true,
                                         child: TextField(
                                           controller: _ctrl,
@@ -354,8 +383,8 @@ class _TopBarState extends ConsumerState<TopBar> {
                                           ),
                                           decoration: InputDecoration(
                                             hintText: isVeryCompact
-                                                ? '検索...'
-                                                : '曲、動画、プレイリストを検索...',
+                                                ? ref.tr('search')
+                                                : ref.tr('search_hint'),
                                             hintStyle: TextStyle(
                                               fontSize: 14,
                                               color: hintColor,
@@ -382,7 +411,7 @@ class _TopBarState extends ConsumerState<TopBar> {
                                         );
                                         if (hasText) {
                                           return IconButton(
-                                            tooltip: 'クリア (Esc)',
+                                            tooltip: '${ref.tr('clear')} (Esc)',
                                             splashRadius: 18,
                                             icon: Icon(
                                               Icons.clear_rounded,
@@ -402,7 +431,9 @@ class _TopBarState extends ConsumerState<TopBar> {
                                             right: 8,
                                           ),
                                           child: Tooltip(
-                                            message: '全体検索',
+                                            message: ref.tr(
+                                              'global_search_tip',
+                                            ),
                                             child: InkWell(
                                               onTap: widget.onOpenSearch,
                                               borderRadius:
@@ -464,8 +495,29 @@ class _TopBarState extends ConsumerState<TopBar> {
                 if (!isCompactExpanded) ...[
                   const SizedBox(width: 8),
 
+                  if (widget.onOpenFile != null)
+                    IconButton(
+                      tooltip: '${ref.tr('open_file')} (⌘O)',
+                      icon: Icon(
+                        Icons.folder_open_rounded,
+                        size: 20,
+                        color: iconColor,
+                      ),
+                      onPressed: widget.onOpenFile,
+                    ),
+                  if (currentIsTemporary && widget.onSaveTemporary != null)
+                    IconButton(
+                      tooltip: ref.tr('save_library'),
+                      icon: Icon(
+                        Icons.library_add_rounded,
+                        size: 20,
+                        color: iconColor,
+                      ),
+                      onPressed: widget.onSaveTemporary,
+                    ),
+
                   IconButton(
-                    tooltip: !isDark ? 'ダークモードに切り替え' : 'ライトモードに切り替え',
+                    tooltip: ref.tr(!isDark ? 'dark_mode' : 'light_mode'),
                     icon: Icon(
                       !isDark
                           ? Icons.dark_mode_rounded
@@ -476,21 +528,31 @@ class _TopBarState extends ConsumerState<TopBar> {
                     onPressed: () =>
                         ref.read(themeModeProvider.notifier).toggle(),
                   ),
-                  if (isDesktop && !isCompact)
-                    IconButton(
-                      tooltip: 'ピクチャ・イン・ピクチャ',
-                      icon: Icon(
-                        Icons.picture_in_picture_alt_rounded,
-                        size: 21,
-                        color: iconColor,
-                      ),
-                      onPressed: canPictureInPicture
-                          ? _enterPictureInPicture
-                          : null,
+                  if (supportsPictureInPicture)
+                    StreamBuilder<PlaybackSnapshot>(
+                      stream: ref.read(engineProvider).snapshots,
+                      initialData: ref.read(engineProvider).snapshot,
+                      builder: (context, _) {
+                        final engine = ref.read(engineProvider);
+                        final platformCanStart =
+                            defaultTargetPlatform != TargetPlatform.iOS ||
+                            engine.supportsPictureInPicture;
+                        return IconButton(
+                          tooltip: ref.tr('pip'),
+                          icon: Icon(
+                            Icons.picture_in_picture_alt_rounded,
+                            size: 21,
+                            color: iconColor,
+                          ),
+                          onPressed: canPictureInPicture && platformCanStart
+                              ? _enterPictureInPicture
+                              : null,
+                        );
+                      },
                     ),
                   if (isDesktop && !isCompact)
                     IconButton(
-                      tooltip: 'フルスクリーン',
+                      tooltip: ref.tr('fullscreen'),
                       icon: Icon(
                         Icons.fullscreen_rounded,
                         size: 26,
@@ -503,6 +565,14 @@ class _TopBarState extends ConsumerState<TopBar> {
             ),
           ),
         );
+
+        final header = widget.ambient
+            ? FrostedPanel(
+                fillOpacity: 0.68,
+                borderOpacity: 0.025,
+                child: content,
+              )
+            : content;
 
         // When expanded full width on compact screens:
         // 1. Trap focus within an active FocusScope with canRequestFocus: true
@@ -524,39 +594,13 @@ class _TopBarState extends ConsumerState<TopBar> {
             child: FocusScope(
               autofocus: true,
               canRequestFocus: true,
-              child: content,
+              child: header,
             ),
           );
         }
 
-        return content;
+        return header;
       },
-    );
-  }
-}
-
-/// Static, const-constructible logo widget to prevent per-build heap allocations.
-class _TopBarLogo extends StatelessWidget {
-  const _TopBarLogo();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 36,
-      height: 36,
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(9),
-      ),
-      child: Image.asset(
-        'assets/yureru_logo.png',
-        width: 32,
-        height: 32,
-        fit: BoxFit.contain,
-        gaplessPlayback: true,
-        errorBuilder: (_, _, _) =>
-            const Icon(Icons.music_note_rounded, size: 28, color: kAccentLight),
-      ),
     );
   }
 }

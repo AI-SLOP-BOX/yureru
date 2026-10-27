@@ -19,6 +19,15 @@ void main() {
     });
   });
 
+  group('isSupportedMediaPath', () {
+    test('音声と動画を受け付け、その他は除外する', () {
+      expect(isSupportedMediaPath('/music/song.mp3'), isTrue);
+      expect(isSupportedMediaPath('/music/song.OPUS'), isTrue);
+      expect(isSupportedMediaPath('/music/song.webm'), isTrue);
+      expect(isSupportedMediaPath('/music/readme.txt'), isFalse);
+    });
+  });
+
   group('collectVideoPaths', () {
     test('再帰走査して動画だけ・隠しファイル除外で収集する', () async {
       final root = await Directory.systemTemp.createTemp('yureru_walk');
@@ -36,6 +45,18 @@ void main() {
     });
   });
 
+  test('collectMediaPaths は音声と動画を収集する', () async {
+    final root = await Directory.systemTemp.createTemp('yureru_media_');
+    try {
+      await File('${root.path}/song.mp3').writeAsString('audio');
+      await File('${root.path}/song.opus').writeAsString('audio');
+      await File('${root.path}/note.txt').writeAsString('ignore');
+      expect(await collectMediaPaths(root), hasLength(2));
+    } finally {
+      await root.delete(recursive: true);
+    }
+  });
+
   group('VideoImporter (メソッドチャネルをモック)', () {
     late TestWidgetsFlutterBinding binding;
     late TestDefaultBinaryMessenger messenger;
@@ -51,10 +72,13 @@ void main() {
         return ['/in/a.mp4', '/in/b.mp4'];
       });
       addTearDown(
-          () => messenger.setMockMethodCallHandler(mediaPickerChannel, null));
+        () => messenger.setMockMethodCallHandler(mediaPickerChannel, null),
+      );
 
-      final items = await VideoImporter()
-          .pickAndImport(copyIntoApp: false, skipSourcePaths: {'/in/a.mp4'});
+      final items = await VideoImporter().pickAndImport(
+        copyIntoApp: false,
+        skipSourcePaths: {'/in/a.mp4'},
+      );
       expect(items.map((e) => e.sourcePath).toList(), ['/in/b.mp4']);
       expect(items.single.title, 'b');
       expect(items.single.origin, 'referenced');
@@ -66,10 +90,10 @@ void main() {
         return ['/in/夜の海 - 蒼.mp4', '/in/ただの名前.mp4'];
       });
       addTearDown(
-          () => messenger.setMockMethodCallHandler(mediaPickerChannel, null));
+        () => messenger.setMockMethodCallHandler(mediaPickerChannel, null),
+      );
 
-      final items =
-          await VideoImporter().pickAndImport(copyIntoApp: false);
+      final items = await VideoImporter().pickAndImport(copyIntoApp: false);
       expect(items.length, 2);
       expect(items[0].artist, '夜の海');
       expect(items[0].title, '蒼');
@@ -89,7 +113,8 @@ void main() {
         return answer;
       });
       addTearDown(
-          () => messenger.setMockMethodCallHandler(mediaPickerChannel, null));
+        () => messenger.setMockMethodCallHandler(mediaPickerChannel, null),
+      );
 
       final importer = VideoImporter();
       final items = await importer.pickAndImportFolder(copyIntoApp: false);
@@ -126,10 +151,26 @@ void main() {
 
   group('MediaItem.sourcePath', () {
     test('JSON往復で保持され、無いデータは null', () {
-      final m = MediaItem(title: 'v', localPath: '/lib/v.mp4', sourcePath: '/in/v.mp4');
+      final m = MediaItem(
+        title: 'v',
+        localPath: '/lib/v.mp4',
+        sourcePath: '/in/v.mp4',
+        artworkPath: '/app/yureru_artwork/cover.png',
+        lyricsPath: '/app/yureru_lyrics/v.lrc',
+      );
       expect(MediaItem.fromJson(m.toJson()).sourcePath, '/in/v.mp4');
+      expect(
+        MediaItem.fromJson(m.toJson()).artworkPath,
+        '/app/yureru_artwork/cover.png',
+      );
+      expect(
+        MediaItem.fromJson(m.toJson()).lyricsPath,
+        '/app/yureru_lyrics/v.lrc',
+      );
       final old = MediaItem.fromJson({
-        'id': 'x', 'title': 'v', 'localPath': '/lib/v.mp4',
+        'id': 'x',
+        'title': 'v',
+        'localPath': '/lib/v.mp4',
         'createdAt': DateTime(2026, 1, 1).toIso8601String(),
       });
       expect(old.sourcePath, isNull);
@@ -140,16 +181,33 @@ void main() {
     test('同じ sourcePath は二重登録されない', () async {
       final repo = InMemoryLibraryRepository();
       final notifier = LibraryNotifier(repo);
-      await notifier.addMedia(
-          [MediaItem(title: 'a', localPath: '/lib/1', sourcePath: '/in/a.mp4')]);
-      await notifier.addMedia(
-          [MediaItem(title: 'a', localPath: '/lib/2', sourcePath: '/in/a.mp4')]);
+      await notifier.addMedia([
+        MediaItem(title: 'a', localPath: '/lib/1', sourcePath: '/in/a.mp4'),
+      ]);
+      await notifier.addMedia([
+        MediaItem(title: 'a', localPath: '/lib/2', sourcePath: '/in/a.mp4'),
+      ]);
       expect(notifier.state.media.length, 1);
-      await notifier.addMedia(
-          [MediaItem(title: 'b', localPath: '/lib/3', sourcePath: '/in/b.mp4')]);
+      await notifier.addMedia([
+        MediaItem(title: 'b', localPath: '/lib/3', sourcePath: '/in/b.mp4'),
+      ]);
       expect(notifier.state.media.length, 2);
       expect(repo.media.length, 2); // 永続化にも反映
     });
+  });
+
+  test('一時再生メディアは一覧・保存データに追加せず保持する', () async {
+    final repo = InMemoryLibraryRepository();
+    final notifier = LibraryNotifier(repo);
+    final temporary = MediaItem(
+      title: '試聴',
+      localPath: '/tmp/listen.opus',
+      origin: 'temporary',
+    );
+    notifier.addTemporaryMedia([temporary]);
+    expect(notifier.state.byId(temporary.id), isNotNull);
+    expect(notifier.state.savedMedia, isEmpty);
+    expect(repo.media, isEmpty);
   });
 
   group('LibraryNotifier.setDurationMs', () {

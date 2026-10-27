@@ -1,3 +1,6 @@
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 /// Snapshot of playback state. Pure Dart/Flutter types only.
@@ -53,6 +56,37 @@ abstract class PlaybackEngine {
 
   /// Enable or disable video track (for audio-only / battery saving mode)
   Future<void> setVideoTrackEnabled(bool enabled) async {}
+
+  /// Dynamic audio gain adjustment, without changing the user's volume slider.
+  bool get supportsVolumeNormalization => false;
+  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
+    if (enabled) throw UnsupportedError('Volume normalization is unavailable');
+  }
+
+  /// Reads embedded lyric metadata when the backend exposes file tags.
+  Future<String?> readEmbeddedLyrics() async => null;
+
+  /// Request a smaller native video output while rendering in a compact
+  /// window, or restore source-sized output with null dimensions.
+  Future<void> setVideoOutputSize({int? width, int? height}) async {}
+
+  /// A low-resolution color strip sampled from the video's upper edge.
+  Future<ui.Image?> captureAmbientFrame({
+    Rect? aperture,
+    double spread = 1,
+    double depth = 1,
+    double softness = 1,
+  }) async => null;
+
+  /// Local video-frame overlay that fills static edge mattes with ambient
+  /// colors while keeping the active picture transparent in the overlay.
+  ValueListenable<ui.Image?>? get ambientMatteFrameListenable => null;
+
+  /// Whether the current source can be handed to the system PiP player.
+  bool get supportsPictureInPicture => false;
+
+  /// Start native PiP for engines that expose a platform video layer.
+  Future<bool> enterPictureInPicture() async => false;
 
   Future<void> dispose();
 

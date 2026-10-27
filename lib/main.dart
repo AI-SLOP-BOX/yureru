@@ -27,12 +27,13 @@ class YureruApp extends ConsumerWidget {
     final currentThemeMode = ref.watch(themeModeProvider);
 
     return MaterialApp(
-      title: 'yureru',
+      title: 'Yureru',
       debugShowCheckedModeBanner: false,
       locale: activeLocale,
       theme: yureruLightTheme(),
       darkTheme: yureruDarkTheme(),
       themeMode: currentThemeMode,
+      themeAnimationDuration: Duration.zero,
       builder: (context, child) {
         return Directionality(
           textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,

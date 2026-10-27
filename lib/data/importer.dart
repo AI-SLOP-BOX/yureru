@@ -33,6 +33,20 @@ const videoExtensions = <String>{
   'divx',
   'f4v',
 };
+const audioExtensions = <String>{
+  'mp3',
+  'opus',
+  'ogg',
+  'oga',
+  'm4a',
+  'aac',
+  'wav',
+  'flac',
+  'aiff',
+  'aif',
+  'alac',
+  'caf',
+};
 
 String _baseName(String path) => path.split(RegExp(r'[/\\]')).last;
 
@@ -43,8 +57,27 @@ bool isVideoPath(String path) {
   return videoExtensions.contains(name.substring(dot + 1).toLowerCase());
 }
 
+bool isSupportedMediaPath(String path) {
+  final name = _baseName(path);
+  final dot = name.lastIndexOf('.');
+  if (dot <= 0) return false;
+  final ext = name.substring(dot + 1).toLowerCase();
+  return videoExtensions.contains(ext) || audioExtensions.contains(ext);
+}
+
 /// Recursively collect video files under [dir]; hidden entries are skipped.
 Future<List<String>> collectVideoPaths(Directory dir) async {
+  return _collectPaths(dir, isVideoPath);
+}
+
+Future<List<String>> collectMediaPaths(Directory dir) async {
+  return _collectPaths(dir, isSupportedMediaPath);
+}
+
+Future<List<String>> _collectPaths(
+  Directory dir,
+  bool Function(String) accepts,
+) async {
   final out = <String>[];
   Future<void> walk(Directory d) async {
     List<FileSystemEntity> entries;
@@ -59,9 +92,9 @@ Future<List<String>> collectVideoPaths(Directory dir) async {
       if (name.startsWith('.')) continue;
       if (e is Directory) {
         await walk(e);
-      } else if (e is File && isVideoPath(e.path)) {
+      } else if (e is File && accepts(e.path)) {
         out.add(e.path);
-      } else if (e is Link && isVideoPath(e.path)) {
+      } else if (e is Link && accepts(e.path)) {
         // Symlinked video file: import the link target path.
         out.add(e.path);
       }
@@ -76,6 +109,23 @@ Future<List<String>> collectVideoPaths(Directory dir) async {
 /// File access layer. Mobile: copy into app-managed dir (imported).
 /// PC future: reference folder without copying (origin='referenced').
 class VideoImporter {
+  /// Selects playable files without copying or registering them in the library.
+  Future<List<MediaItem>> pickForPlayback() async {
+    final paths = await _pickVideoPaths();
+    final seen = <String>{};
+    return [
+      for (final path in paths)
+        if (isSupportedMediaPath(path) && seen.add(path))
+          MediaItem(
+            title: _splitTitleArtist(_baseName(path)).$1,
+            artist: _splitTitleArtist(_baseName(path)).$2,
+            localPath: path,
+            sourcePath: path,
+            origin: 'temporary',
+          ),
+    ];
+  }
+
   /// Pick video files. Returns [] when cancelled.
   /// [onProgress] fires during the copy phase as (done, total); scan phase
   /// reports (0, 0) = indeterminate.
@@ -131,7 +181,7 @@ class VideoImporter {
     return [...reused, ...imported];
   }
 
-  /// Pick a folder and import every video inside it.
+  /// Pick a folder and import supported audio and video files inside it.
   /// Returns null when cancelled, [] when there is nothing new to import.
   Future<List<MediaItem>?> pickAndImportFolder({
     bool copyIntoApp = true,
@@ -163,11 +213,11 @@ class VideoImporter {
     final files = <String>[];
     for (final p in paths) {
       if (await FileSystemEntity.isDirectory(p)) {
-        files.addAll(await collectVideoPaths(Directory(p)));
+        files.addAll(await collectMediaPaths(Directory(p)));
       } else {
         // Single-file picks bypass folder scan: filter non-video here.
-        if (!isVideoPath(p)) {
-          debugPrint('import: skipped non-video file $p');
+        if (!isSupportedMediaPath(p)) {
+          debugPrint('import: skipped unsupported media file $p');
           continue;
         }
         files.add(p);
@@ -227,9 +277,10 @@ class VideoImporter {
       return paths?.whereType<String>().toList() ?? const [];
     }
     final res = await FilePicker.platform.pickFiles(
-      type: FileType.video,
+      type: FileType.custom,
       allowMultiple: true,
       withData: false,
+      allowedExtensions: [...videoExtensions, ...audioExtensions],
     );
     return res?.files.map((f) => f.path).whereType<String>().toList() ??
         const [];
@@ -242,7 +293,7 @@ class VideoImporter {
     }
     try {
       return await FilePicker.platform.getDirectoryPath(
-        dialogTitle: '動画フォルダを選択',
+        dialogTitle: 'メディアフォルダを選択',
       );
     } catch (e) {
       debugPrint('import: getDirectoryPath unavailable: $e');

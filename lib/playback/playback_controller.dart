@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../app_state.dart';
 import '../data/session.dart';
 import 'playback_engine.dart';
+import 'sleep_timer_provider.dart';
 
 /// UI-agnostic controller: Playlist -> yureru Queue -> current Media ID ->
 /// engine.load ONE item. Owns auto-advance (completed -> next).
@@ -11,6 +12,7 @@ import 'playback_engine.dart';
 class PlaybackController {
   final Ref ref;
   bool _hooked = false;
+  double _lastAudibleVolume = 1;
   DateTime _lastPosSave = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Media id currently loaded in the engine (for position bookkeeping).
@@ -18,6 +20,7 @@ class PlaybackController {
   final Set<String> _openingIds = {};
 
   PlaybackController(this.ref) {
+    if (engine.volume > 0) _lastAudibleVolume = engine.volume;
     _hookCompleted();
     _hookPositionSaver();
   }
@@ -26,9 +29,14 @@ class PlaybackController {
 
   Future<void> setVolume(double volume) async {
     final value = volume.clamp(0.0, 1.0).toDouble();
+    if (value > 0) _lastAudibleVolume = value;
     ref.read(volumeProvider.notifier).state = value;
     await engine.setVolume(value);
   }
+
+  /// Shared across layouts, so leaving a muted view preserves the restore level.
+  Future<void> toggleMute() =>
+      setVolume(ref.read(volumeProvider) == 0 ? _lastAudibleVolume : 0);
 
   void _hookCompleted() {
     if (_hooked) return;
@@ -67,6 +75,11 @@ class PlaybackController {
     await ref.read(sessionStoreProvider).savePosition(id, ms);
   }
 
+  Future<void> pauseAndRemember() async {
+    if (engine.snapshot.initialized) await engine.pause();
+    await _saveNow();
+  }
+
   Future<void> prepareForAppExit() async {
     await _saveNow();
     if (engine.snapshot.initialized) await engine.pause();
@@ -81,9 +94,13 @@ class PlaybackController {
     _lastEnded = now;
     final q = ref.read(queueProvider);
     final endedId = q.currentId;
+    final sleep = await ref
+        .read(sleepTimerProvider.notifier)
+        .trackEnded(endedId);
     if (endedId != null) {
       await ref.read(sessionStoreProvider).clearPosition(endedId);
     }
+    if (sleep) return;
     if (q.repeat == 'one') {
       try {
         await engine.seekTo(Duration.zero);
@@ -135,6 +152,8 @@ class PlaybackController {
     if (_loadedId == id && engine.snapshot.initialized) return;
     if (!_openingIds.add(id)) return;
     try {
+      // Restore audio processing before the first frame of a new source.
+      await ref.read(audioSettingsProvider.notifier).ready;
       // Push rate first so engine.load() opens with the right speed.
       await engine.setPlaybackRate(q.speed);
       // Remember where the outgoing track stopped before switching.
@@ -147,6 +166,7 @@ class PlaybackController {
           autoplay: true,
         );
         _loadedId = id;
+        await _recordPlayback(id);
       } catch (_) {
         // Missing/unreadable file: drop and move on instead of hanging.
         ref.read(queueProvider.notifier).removeId(id);
@@ -199,7 +219,18 @@ class PlaybackController {
       await engine.pause();
       unawaited(_saveNow());
     } else {
+      await ref.read(audioSettingsProvider.notifier).ready;
       await engine.play();
+      await _recordPlayback(_loadedId ?? ref.read(queueProvider).currentId);
+    }
+  }
+
+  Future<void> _recordPlayback(String? id) async {
+    if (id == null) return;
+    try {
+      await ref.read(libraryProvider.notifier).recordPlayback(id);
+    } catch (_) {
+      // History storage must never make a playable source get skipped.
     }
   }
 
@@ -246,6 +277,7 @@ class PlaybackController {
       final m = lib.byId(id);
       if (m == null) return;
       final start = await _savedStart(id, m.durationMs);
+      await ref.read(audioSettingsProvider.notifier).ready;
       await engine.setPlaybackRate(q.speed);
       await engine.load(
         PlaybackSource(mediaId: id, uri: m.localPath, start: start),

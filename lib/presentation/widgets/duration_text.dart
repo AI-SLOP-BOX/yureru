@@ -17,27 +17,37 @@ class DurationText extends ConsumerWidget {
     required this.mediaId,
     required this.localPath,
     this.durationMs,
-    this.style = const TextStyle(fontSize: 12, color: kTextSub),
+    this.style = const TextStyle(fontSize: 12),
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final resolvedStyle = style.copyWith(
+      color: style.color ?? themeTextSub(context),
+    );
     if (durationMs != null) {
-      return Text(fmtDuration(Duration(milliseconds: durationMs!)),
-          style: style);
+      return Text(
+        fmtDuration(Duration(milliseconds: durationMs!)),
+        style: resolvedStyle,
+      );
     }
     return FutureBuilder<int?>(
       future: DurationService.forMedia(mediaId: mediaId, localPath: localPath),
       builder: (c, s) {
         final ms = s.data;
         if (ms == null) {
-          return Text(s.connectionState == ConnectionState.done ? '—' : '…',
-              style: style);
+          return Text(
+            s.connectionState == ConnectionState.done ? '—' : '…',
+            style: resolvedStyle,
+          );
         }
         WidgetsBinding.instance.addPostFrameCallback((_) {
           ref.read(libraryProvider.notifier).setDurationMs(mediaId, ms);
         });
-        return Text(fmtDuration(Duration(milliseconds: ms)), style: style);
+        return Text(
+          fmtDuration(Duration(milliseconds: ms)),
+          style: resolvedStyle,
+        );
       },
     );
   }

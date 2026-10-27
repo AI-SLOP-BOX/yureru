@@ -1,3 +1,5 @@
+import 'package:yureru/presentation/i18n.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -24,6 +26,7 @@ class _FakeImporter extends VideoImporter {
     lastSkip = skipSourcePaths;
     return fileResult!();
   }
+
   @override
   Future<List<MediaItem>?> pickAndImportFolder({
     bool copyIntoApp = true,
@@ -37,16 +40,31 @@ class _FakeImporter extends VideoImporter {
 }
 
 Future<void> _pump(WidgetTester tester, VideoImporter importer) async {
-  await tester.pumpWidget(ProviderScope(overrides: [
-    importerProvider.overrideWithValue(importer),
-    repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
-  ], child: const MaterialApp(home: LibraryManagementScreen())));
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        activeLanguageCodeProvider.overrideWithValue('ja'),
+        importerProvider.overrideWithValue(importer),
+        repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
+      ],
+      child: const MaterialApp(home: LibraryManagementScreen()),
+    ),
+  );
 }
 
 void main() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    binding.platformDispatcher.localeTestValue = const Locale('ja', 'JP');
+  });
+  tearDown(() => binding.platformDispatcher.clearLocaleTestValue());
   testWidgets('「動画をインポート」タップでピッカーが呼ばれ、メディアが追加される', (tester) async {
-    final fake = _FakeImporter(fileResult: () async =>
-        [MediaItem(title: 'demo', localPath: '/tmp/demo.mp4')]);
+    final fake = _FakeImporter(
+      fileResult: () async => [
+        MediaItem(title: 'demo', localPath: '/tmp/demo.mp4'),
+      ],
+    );
     await _pump(tester, fake);
 
     await tester.tap(find.text('動画をインポート'));
@@ -54,7 +72,7 @@ void main() {
 
     expect(fake.calls, 1);
     expect(find.text('1本をインポートしました'), findsOneWidget);
-    expect(find.text('1件'), findsOneWidget); // 一覧の件数も更新される
+    expect(find.text('1本の動画'), findsOneWidget); // 一覧の件数も更新される
     expect(tester.takeException(), isNull);
   });
 
@@ -83,10 +101,12 @@ void main() {
   });
 
   testWidgets('「フォルダからインポート」タップでまとめて取り込まれる', (tester) async {
-    final fake = _FakeImporter(folderResult: () async => [
-      MediaItem(title: 'a', localPath: '/tmp/a.mp4', sourcePath: '/in/a.mp4'),
-      MediaItem(title: 'b', localPath: '/tmp/b.mp4', sourcePath: '/in/b.mp4'),
-    ]);
+    final fake = _FakeImporter(
+      folderResult: () async => [
+        MediaItem(title: 'a', localPath: '/tmp/a.mp4', sourcePath: '/in/a.mp4'),
+        MediaItem(title: 'b', localPath: '/tmp/b.mp4', sourcePath: '/in/b.mp4'),
+      ],
+    );
     await _pump(tester, fake);
 
     await tester.tap(find.text('フォルダからインポート'));
@@ -94,7 +114,7 @@ void main() {
 
     expect(fake.folderCalls, 1);
     expect(find.text('2本をインポートしました'), findsOneWidget);
-    expect(find.text('2件'), findsOneWidget);
+    expect(find.text('2本の動画'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -111,9 +131,16 @@ void main() {
   });
 
   testWidgets('「フォルダを参照追加」タップでコピーなし(origin=referenced)で取り込まれる', (tester) async {
-    final fake = _FakeImporter(folderResult: () async => [
-      MediaItem(title: 'ref1', localPath: '/ext/ref1.mp4', origin: 'referenced', sourcePath: '/ext/ref1.mp4'),
-    ]);
+    final fake = _FakeImporter(
+      folderResult: () async => [
+        MediaItem(
+          title: 'ref1',
+          localPath: '/ext/ref1.mp4',
+          origin: 'referenced',
+          sourcePath: '/ext/ref1.mp4',
+        ),
+      ],
+    );
     await _pump(tester, fake);
 
     await tester.tap(find.text('フォルダを参照追加'));
@@ -121,7 +148,7 @@ void main() {
 
     expect(fake.folderCalls, 1);
     expect(find.text('1本を参照追加しました（コピーなし）'), findsOneWidget);
-    expect(find.text('1件'), findsOneWidget);
+    expect(find.text('1本の動画'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

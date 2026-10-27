@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
+import '../i18n.dart';
 import '../theme.dart';
 import 'thumb_image.dart';
+import 'frosted_panel.dart';
 
 /// Compact now-playing strip (used by the narrow fallback layout).
 /// Tap (except the buttons) expands to the full-size player.
@@ -20,28 +22,11 @@ class MiniPlayer extends ConsumerWidget {
     if (media == null) return const SizedBox.shrink();
     final engine = ref.watch(engineProvider);
     final ctl = ref.read(playbackControllerProvider);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isVideoPlaying = engine.snapshot.initialized;
+    final showLiveVideo =
+        engine.snapshot.initialized &&
+        ref.watch(playerViewModeProvider) == PlayerViewMode.media;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: themePanelSolid(context),
-        border: Border(
-          top: BorderSide(
-            color: isDark
-                ? const Color(0x1FFFFFFF)
-                : Colors.black.withValues(alpha: 0.08),
-            width: 1,
-          ),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.08),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
+    return FrostedPanel(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
@@ -53,10 +38,9 @@ class MiniPlayer extends ConsumerWidget {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(6),
-                    child: SizedBox(
-                      width: 58,
-                      height: 34,
-                      child: isVideoPlaying
+                    child: SizedBox.square(
+                      dimension: 48,
+                      child: showLiveVideo
                           ? FittedBox(
                               fit: BoxFit.cover,
                               clipBehavior: Clip.antiAlias,
@@ -70,7 +54,7 @@ class MiniPlayer extends ConsumerWidget {
                               seed: media.id,
                               mediaId: media.id,
                               localPath: media.localPath,
-                              size: 34,
+                              size: 48,
                               radius: 0,
                             ),
                     ),
@@ -98,9 +82,9 @@ class MiniPlayer extends ConsumerWidget {
                             formatCreatorNames(media.artist),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 11.5,
-                              color: kTextSub,
+                              color: themeTextSub(context),
                             ),
                           ),
                         ],
@@ -112,12 +96,12 @@ class MiniPlayer extends ConsumerWidget {
             ),
           ),
           IconButton(
-            tooltip: '再生画面に戻る',
+            tooltip: ref.tr('return_to_player'),
             icon: const Icon(Icons.open_in_full_rounded),
             onPressed: onExpand,
           ),
           IconButton(
-            tooltip: engine.snapshot.isPlaying ? '一時停止' : '再生',
+            tooltip: ref.tr(engine.snapshot.isPlaying ? 'pause' : 'play'),
             icon: Icon(
               engine.snapshot.isPlaying
                   ? Icons.pause_rounded

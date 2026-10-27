@@ -1,6 +1,12 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+const _brandWaveColors = [
+  Color(0xFF38BDF8),
+  Color(0xFF8B5CF6),
+  Color(0xFFEC4899),
+];
+
 /// Crisp, vector-rendered animated wave logo blended with soundwave aesthetics.
 class YureruWaveLogo extends StatefulWidget {
   final double size;
@@ -84,26 +90,48 @@ class _WaveLogoPainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
 
-    // Glowing ambient background ring
-    final bgPaint = Paint()
-      ..shader = const RadialGradient(
+    final glowPaint = Paint()
+      ..shader = RadialGradient(
         colors: [
-          Color(0x33A855F7),
+          _brandWaveColors[1].withValues(alpha: 0.18),
+          _brandWaveColors[0].withValues(alpha: 0.05),
           Colors.transparent,
         ],
       ).createShader(Rect.fromLTWH(0, 0, w, h));
-    canvas.drawCircle(Offset(w / 2, h / 2), w * 0.48, bgPaint);
+    canvas.drawCircle(Offset(w / 2, h / 2), w * 0.48, glowPaint);
 
     // Three sleek fluid wave pills
     final bars = [
-      _BarData(xRatio: 0.28, baseH: 0.45, animAmp: 0.12, speedMult: 1.0, color: const Color(0xFF38BDF8)),
-      _BarData(xRatio: 0.50, baseH: 0.70, animAmp: 0.16, speedMult: 1.4, color: const Color(0xFF8B5CF6)),
-      _BarData(xRatio: 0.72, baseH: 0.48, animAmp: 0.10, speedMult: 1.2, color: const Color(0xFFEC4899)),
+      _BarData(
+        xRatio: 0.28,
+        baseH: 0.45,
+        animAmp: 0.12,
+        speedMult: 1.0,
+        color: _brandWaveColors[0],
+      ),
+      _BarData(
+        xRatio: 0.50,
+        baseH: 0.70,
+        animAmp: 0.16,
+        speedMult: 1.4,
+        color: _brandWaveColors[1],
+      ),
+      _BarData(
+        xRatio: 0.72,
+        baseH: 0.48,
+        animAmp: 0.10,
+        speedMult: 1.2,
+        color: _brandWaveColors[2],
+      ),
     ];
 
     for (final bar in bars) {
       final barW = w * 0.14;
-      final currentHeightRatio = (bar.baseH + math.sin(phase * bar.speedMult) * bar.animAmp).clamp(0.2, 0.85);
+      final currentHeightRatio =
+          (bar.baseH + math.sin(phase * bar.speedMult) * bar.animAmp).clamp(
+            0.2,
+            0.85,
+          );
       final barH = h * currentHeightRatio;
       final x = w * bar.xRatio - barW / 2;
       final y = (h - barH) / 2;
@@ -113,23 +141,19 @@ class _WaveLogoPainter extends CustomPainter {
         Radius.circular(barW / 2),
       );
 
+      canvas.drawRRect(
+        rect,
+        Paint()
+          ..color = bar.color.withValues(alpha: 0.3)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+      );
+
       final barPaint = Paint()
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            bar.color,
-            bar.color.withValues(alpha: 0.75),
-          ],
+          colors: [bar.color, bar.color.withValues(alpha: 0.75)],
         ).createShader(Rect.fromLTWH(x, y, barW, barH));
-
-      // Glow shadow
-      canvas.drawRRect(
-        rect,
-        Paint()
-          ..color = bar.color.withValues(alpha: 0.35)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
-      );
 
       canvas.drawRRect(rect, barPaint);
     }
@@ -145,14 +169,20 @@ class YureruBrandHeader extends StatelessWidget {
   final double iconSize;
   final bool animate;
   final Color? color;
-  const YureruBrandHeader({super.key, this.iconSize = 32, this.animate = false, this.color});
+  const YureruBrandHeader({
+    super.key,
+    this.iconSize = 32,
+    this.animate = false,
+    this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final textColor = color ??
+    final textColor =
+        color ??
         (Theme.of(context).brightness == Brightness.dark
             ? Colors.white
-            : const Color(0xFF0F172A));
+            : const Color(0xFF242424));
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -160,7 +190,7 @@ class YureruBrandHeader extends StatelessWidget {
         YureruWaveLogo(size: iconSize, animate: animate),
         const SizedBox(width: 10),
         Text(
-          'yureru',
+          'Yureru',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w800,

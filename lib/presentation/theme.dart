@@ -1,256 +1,241 @@
 import 'package:flutter/material.dart';
+import 'widgets/app_svg_icon.dart';
 
-/// yureru modern theme palette
-/// Ultra-deep obsidian black canvas, translucent surfaces, and vibrant cyan-violet glow.
-const kBg = Color(0xFF030304);
-const kPanel = Color(0xCC0A0A0E); // 80% opacity for frosted glass
-const kPanelSolid = Color(0xFF0D0D12);
-const kPanelAlt = Color(0xFF14141B);
-const kCard = Color(0xFF161620);
-const kCardHover = Color(0xFF222230);
-const kGlassBorder = Color(0x1FFFFFFF); // 12% white highlight
-const kGlassHighlight = Color(0x28FFFFFF); // 16% white reflection
-const kAccent = Color(0xFF8B5CF6); // Vibrant Electric Purple
-const kAccentLight = Color(0xFFA78BFA); // Soft Lavender Glow
-const kAccentCyan = Color(0xFF06B6D4); // Neon Cyan for secondary accents
-const kTextPrimary = Color(0xFFF8FAFC);
-const kTextSub = Color(0xFF94A3B8);
-const kTextMuted = Color(0xFF64748B);
+// Calm charcoal surfaces let artwork carry its own color; a warm coral accent
+// gives selected and active playback controls a clear, non-purple identity.
+const kBg = Color(0xFF181818);
+const kPanel = Color(0xE6202020);
+const kPanelSolid = Color(0xFF222222);
+const kPanelAlt = Color(0xFF2A2A2A);
+const kCard = Color(0xFF303030);
+const kCardHover = Color(0xFF3B3B3B);
+const kGlassBorder = Color(0xFF484848);
+const kGlassHighlight = Color(0xFF565656);
+const kAccent = Color(0xFF9B533F);
+const kAccentLight = Color(0xFFE4A087);
+const kTextPrimary = Color(0xFFEBEBEB);
+const kTextSub = Color(0xFFBDBDBD);
+const kTextMuted = Color(0xFFA1A1A1);
+const kLightBg = Color(0xFFF5F5F5);
+const kLightPanel = Color(0xFFEDEDED);
+const kLightCard = Color(0xFFFFFFFF);
+const kLightBorder = Color(0xFFDADADA);
+const kLightText = Color(0xFF242424);
+const kLightSub = Color(0xFF626262);
 
-ThemeData yureruTheme({bool isDark = true}) {
-  return isDark ? yureruDarkTheme() : yureruLightTheme();
-}
+ThemeData yureruTheme({bool isDark = true}) => _theme(isDark);
+ThemeData yureruDarkTheme() => _theme(true);
+ThemeData yureruLightTheme() => _theme(false);
 
-ThemeData yureruDarkTheme() {
-  final base = ThemeData(
-    useMaterial3: true,
-    brightness: Brightness.dark,
-    colorSchemeSeed: kAccent,
+ThemeData _theme(bool dark) {
+  final scheme =
+      ColorScheme.fromSeed(
+        seedColor: kAccent,
+        dynamicSchemeVariant: DynamicSchemeVariant.tonalSpot,
+        brightness: dark ? Brightness.dark : Brightness.light,
+      ).copyWith(
+        primary: dark ? kAccentLight : kAccent,
+        onPrimary: dark ? const Color(0xFF242424) : Colors.white,
+        primaryContainer: dark
+            ? const Color(0xFF4B3029)
+            : const Color(0xFFF5E1D9),
+        onPrimaryContainer: dark
+            ? const Color(0xFFFFE6DE)
+            : const Color(0xFF542F24),
+        secondary: dark ? kTextSub : kLightSub,
+        surface: dark ? kPanelSolid : kLightCard,
+        surfaceContainerLowest: dark ? kBg : kLightBg,
+        surfaceContainerLow: dark ? kPanelSolid : kLightPanel,
+        surfaceContainer: dark ? kPanelAlt : kLightPanel,
+        surfaceContainerHigh: dark ? kCard : const Color(0xFFF0F0F0),
+        surfaceContainerHighest: dark ? kCardHover : const Color(0xFFE6E6E6),
+        onSurface: dark ? kTextPrimary : kLightText,
+        onSurfaceVariant: dark ? kTextSub : kLightSub,
+        outline: dark ? const Color(0xFF787878) : const Color(0xFF858585),
+        outlineVariant: dark ? kGlassBorder : kLightBorder,
+        surfaceTint: Colors.transparent,
+      );
+  final base = ThemeData(useMaterial3: true, colorScheme: scheme);
+  final rounded = RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(12),
   );
   return base.copyWith(
-    scaffoldBackgroundColor: kBg,
-    dividerColor: kGlassBorder,
+    scaffoldBackgroundColor: dark ? kBg : kLightBg,
+    dividerColor: scheme.outlineVariant,
     textTheme: base.textTheme.apply(
-      bodyColor: kTextPrimary,
-      displayColor: kTextPrimary,
+      bodyColor: scheme.onSurface,
+      displayColor: scheme.onSurface,
+    ),
+    cardTheme: CardThemeData(
+      color: dark ? kCard : kLightCard,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+    ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: scheme.surface,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: scheme.surfaceContainerHigh,
+      surfaceTintColor: Colors.transparent,
+      shape: rounded,
+      textStyle: TextStyle(color: scheme.onSurface),
+    ),
+    chipTheme: base.chipTheme.copyWith(
+      backgroundColor: dark ? kPanelSolid : kLightCard,
+      selectedColor: scheme.primaryContainer,
+      side: BorderSide(color: scheme.outlineVariant),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      labelStyle: TextStyle(color: scheme.onSurface, fontSize: 13),
+      secondaryLabelStyle: TextStyle(
+        color: scheme.onPrimaryContainer,
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+    segmentedButtonTheme: SegmentedButtonThemeData(
+      style: ButtonStyle(
+        shape: WidgetStatePropertyAll(rounded),
+        side: WidgetStatePropertyAll(BorderSide(color: scheme.outlineVariant)),
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? scheme.primaryContainer
+              : Colors.transparent,
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? scheme.onSurface.withValues(alpha: 0.38)
+              : states.contains(WidgetState.selected)
+              ? scheme.onPrimaryContainer
+              : scheme.onSurfaceVariant,
+        ),
+      ),
     ),
     sliderTheme: base.sliderTheme.copyWith(
-      activeTrackColor: kAccentLight,
-      thumbColor: Colors.white,
-      inactiveTrackColor: Colors.white12,
-      overlayColor: kAccent.withValues(alpha: 0.2),
+      activeTrackColor: scheme.primary,
+      thumbColor: scheme.primary,
+      inactiveTrackColor: scheme.outlineVariant,
+      overlayColor: scheme.primary.withValues(alpha: 0.12),
       trackHeight: 3.5,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: kPanelAlt,
-      hintStyle: const TextStyle(color: kTextMuted, fontSize: 13.5),
+      fillColor: dark ? kPanelAlt : kLightPanel,
+      hintStyle: TextStyle(
+        color: dark ? kTextMuted : kLightSub,
+        fontSize: 13.5,
+      ),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(28),
-        borderSide: const BorderSide(color: kGlassBorder),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: scheme.outlineVariant),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(28),
-        borderSide: const BorderSide(color: kGlassBorder),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: scheme.outlineVariant),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(28),
-        borderSide: const BorderSide(color: kAccentLight, width: 1.5),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: scheme.primary, width: 1.5),
       ),
       isDense: true,
     ),
-    listTileTheme: const ListTileThemeData(
-      iconColor: kTextSub,
+    listTileTheme: ListTileThemeData(
+      iconColor: scheme.onSurfaceVariant,
+      selectedColor: scheme.onPrimaryContainer,
+      selectedTileColor: scheme.primaryContainer,
       titleTextStyle: TextStyle(
-        color: kTextPrimary,
+        color: scheme.onSurface,
         fontSize: 14,
         fontWeight: FontWeight.w500,
       ),
-      subtitleTextStyle: TextStyle(color: kTextSub, fontSize: 12),
+      subtitleTextStyle: TextStyle(
+        color: scheme.onSurfaceVariant,
+        fontSize: 12,
+      ),
     ),
-    iconButtonTheme: const IconButtonThemeData(
+    iconButtonTheme: IconButtonThemeData(
       style: ButtonStyle(
-        foregroundColor: WidgetStatePropertyAll(Colors.white70),
-        overlayColor: WidgetStatePropertyAll(Color(0x1AFFFFFF)),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => scheme.onSurfaceVariant.withValues(
+            alpha: states.contains(WidgetState.disabled) ? 0.38 : 1,
+          ),
+        ),
+        overlayColor: WidgetStatePropertyAll(
+          scheme.primary.withValues(alpha: 0.08),
+        ),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        backgroundColor: dark
+            ? const Color(0xFFE7E7E7)
+            : const Color(0xFF282828),
+        foregroundColor: dark ? const Color(0xFF181818) : Colors.white,
         elevation: 0,
+        shape: rounded,
         textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white,
-        side: const BorderSide(color: kGlassBorder),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        foregroundColor: scheme.onSurface,
+        side: BorderSide(color: scheme.outlineVariant),
+        shape: rounded,
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        foregroundColor: scheme.primary,
+        shape: rounded,
       ),
     ),
     snackBarTheme: SnackBarThemeData(
-      backgroundColor: kCard,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: kGlassBorder),
-      ),
-      contentTextStyle: const TextStyle(color: Colors.white, fontSize: 13),
+      backgroundColor: scheme.surfaceContainerHigh,
+      shape: rounded.copyWith(side: BorderSide(color: scheme.outlineVariant)),
+      contentTextStyle: TextStyle(color: scheme.onSurface, fontSize: 13),
     ),
     scrollbarTheme: base.scrollbarTheme.copyWith(
-      thickness: const WidgetStatePropertyAll(5.0),
+      thickness: const WidgetStatePropertyAll(5),
       radius: const Radius.circular(999),
-      thumbColor: const WidgetStatePropertyAll(Colors.white24),
+      thumbColor: WidgetStatePropertyAll(
+        scheme.onSurfaceVariant.withValues(alpha: 0.38),
+      ),
     ),
     textSelectionTheme: TextSelectionThemeData(
-      cursorColor: kAccentLight,
-      selectionColor: kAccent.withValues(alpha: 0.35),
-      selectionHandleColor: kAccentLight,
+      cursorColor: scheme.primary,
+      selectionColor: scheme.primary.withValues(alpha: 0.22),
+      selectionHandleColor: scheme.primary,
     ),
   );
 }
 
-ThemeData yureruLightTheme() {
-  final base = ThemeData(
-    useMaterial3: true,
-    brightness: Brightness.light,
-    colorSchemeSeed: kAccent,
-  );
-  return base.copyWith(
-    // Soft off-white canvas — far more premium than pure white
-    scaffoldBackgroundColor: const Color(0xFFF1F3F9),
-    dividerColor: const Color(0x18000000),
-    textTheme: base.textTheme.apply(
-      // Deep indigo-slate — pairs beautifully with lavender accent
-      bodyColor: const Color(0xFF1E1B4B),
-      displayColor: const Color(0xFF1E1B4B),
-    ),
-    sliderTheme: base.sliderTheme.copyWith(
-      activeTrackColor: kAccent,
-      thumbColor: kAccent,
-      inactiveTrackColor: const Color(0x22000000),
-      overlayColor: kAccent.withValues(alpha: 0.15),
-      trackHeight: 3.5,
-    ),
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: const Color(0xFFEEF0F7),
-      hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13.5),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(28),
-        borderSide: const BorderSide(color: Color(0x1A000000)),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(28),
-        borderSide: const BorderSide(color: Color(0x1A000000)),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(28),
-        borderSide: const BorderSide(color: kAccent, width: 1.5),
-      ),
-      isDense: true,
-    ),
-    listTileTheme: const ListTileThemeData(
-      iconColor: Color(0xFF333333),
-      selectedColor: Colors.black,
-      selectedTileColor: Color(0x0F000000),
-      titleTextStyle: TextStyle(
-        color: Color(0xFF1E1B4B),
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
-      ),
-      subtitleTextStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
-    ),
-    iconButtonTheme: const IconButtonThemeData(
-      style: ButtonStyle(
-        foregroundColor: WidgetStatePropertyAll(Color(0xFF222222)),
-        overlayColor: WidgetStatePropertyAll(Color(0x0A6D28D9)),
-      ),
-    ),
-    filledButtonTheme: FilledButtonThemeData(
-      style: FilledButton.styleFrom(
-        backgroundColor: kAccent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      ),
-    ),
-    outlinedButtonTheme: OutlinedButtonThemeData(
-      style: OutlinedButton.styleFrom(
-        foregroundColor: kAccent,
-        side: const BorderSide(color: Color(0xFFD1D5DB)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      ),
-    ),
-    snackBarTheme: SnackBarThemeData(
-      backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0x18000000)),
-      ),
-      contentTextStyle: const TextStyle(color: Color(0xFF1E1B4B), fontSize: 13),
-    ),
-    scrollbarTheme: base.scrollbarTheme.copyWith(
-      thickness: const WidgetStatePropertyAll(5.0),
-      radius: const Radius.circular(999),
-      thumbColor: const WidgetStatePropertyAll(Color(0x448B5CF6)),
-    ),
-    textSelectionTheme: TextSelectionThemeData(
-      cursorColor: kAccent,
-      selectionColor: kAccent.withValues(alpha: 0.20),
-      selectionHandleColor: kAccent,
-    ),
-  );
-}
+Color themePanel(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? kPanel : kLightBg;
+Color themePanelSolid(BuildContext context) =>
+    Theme.of(context).colorScheme.surfaceContainerLow;
+Color themeCard(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? kCard : kLightCard;
+Color themeBorder(BuildContext context) =>
+    Theme.of(context).colorScheme.outlineVariant;
+Color themeTextPrimary(BuildContext context) =>
+    Theme.of(context).colorScheme.onSurface;
+Color themeTextSub(BuildContext context) =>
+    Theme.of(context).colorScheme.onSurfaceVariant;
 
-// ---- Theme-adaptive surface color helpers ----
-// These let widgets automatically use the correct surface color
-// for dark (obsidian) and light (frosted pearl) modes.
-
-/// Sidebar / top-bar panel background (translucent in dark, frosted in light).
-Color themePanel(BuildContext context) {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
-  return isDark ? kPanel : const Color(0xF0FAFAFF);
-}
-
-/// Solid background for bottom bars and secondary panels.
-Color themePanelSolid(BuildContext context) {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
-  return isDark ? kPanelSolid : const Color(0xFFF8F9FE);
-}
-
-/// Card / item background.
-Color themeCard(BuildContext context) {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
-  return isDark ? kCard : const Color(0xFFFFFFFF);
-}
-
-/// Subtle border / glass separator.
-Color themeBorder(BuildContext context) {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
-  return isDark ? kGlassBorder : const Color(0x1A000000);
-}
-
-/// Primary text color (already theme-aware via Theme.of).
-Color themeTextPrimary(BuildContext context) {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
-  return isDark ? kTextPrimary : const Color(0xFF1E1B4B);
-}
-
-/// Secondary / subtitle text.
-Color themeTextSub(BuildContext context) {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
-  return isDark ? kTextSub : const Color(0xFF64748B);
-}
-
-/// Deterministic per-id gradient so every thumbnail looks distinct.
+/// Deterministic music-cover gradient for items without usable artwork.
 LinearGradient thumbGradient(String seed) {
-  final hue =
-      seed.runes.fold<int>(17, (a, r) => (a * 31 + r) & 0x7fffffff) % 360;
-  final c1 = HSVColor.fromAHSV(1, hue.toDouble(), 0.6, 0.78).toColor();
-  final c2 = HSVColor.fromAHSV(1, (hue + 45) % 360, 0.65, 0.42).toColor();
+  const hues = [8.0, 27.0, 43.0, 128.0, 167.0, 190.0, 336.0];
+  final hash = seed.runes.fold<int>(17, (a, r) => (a * 31 + r) & 0x7fffffff);
+  final hue = hues[hash % hues.length];
+  final c1 = HSVColor.fromAHSV(1, hue, 0.62, 0.82).toColor();
+  final c2 = HSVColor.fromAHSV(1, (hue + 16) % 360, 0.72, 0.5).toColor();
   return LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
@@ -299,8 +284,8 @@ class ThumbBox extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius),
       ),
       child: Center(
-        child: Icon(
-          Icons.music_video_rounded,
+        child: AppSvgIcon(
+          'music_note',
           color: Colors.white.withValues(alpha: 0.8),
           size: expand ? 36 : size * 0.45,
         ),

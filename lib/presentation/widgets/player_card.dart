@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui';
+import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
@@ -10,20 +11,25 @@ import '../../domain/models.dart';
 import '../../platform/window_utils.dart';
 import '../../playback/playback_controller.dart';
 import '../../playback/playback_engine.dart';
+import '../i18n.dart';
 import '../theme.dart';
 import 'queue_panel.dart';
+import 'app_svg_icon.dart';
+import 'favorite_button.dart';
+import 'sleep_timer_button.dart';
+import 'playback_options.dart';
 import 'repeat_icon.dart';
 import 'skip_next_icon.dart';
 import 'transport_icon.dart';
 import 'thumb_image.dart';
 
 /// Playing screen:
-/// - Smooth video / artwork visualizer with breathing ambient aura
+/// - Video and artwork playback surface
 /// - IINA / macOS inspired floating frosted-glass OSC (On Screen Controller)
 /// - Auto-hiding controls with mouse motion tracking and cursor blanking
 /// - Two-finger / mouse linear horizontal drag scrubbing over video area
 /// - Hover / drag floating time bubble preview above the seekbar
-/// - Morphing AnimatedIcon play/pause button
+/// - Quiet play/pause state change
 /// - Smooth volume toggle with expandable slider ("niyoki-to" animation)
 /// - mpv video track toggle (`setVideoTrackEnabled`) for low-power audio mode
 class PlayerCard extends ConsumerStatefulWidget {
@@ -33,22 +39,23 @@ class PlayerCard extends ConsumerStatefulWidget {
   ConsumerState<PlayerCard> createState() => _PlayerCardState();
 }
 
-class _PlayerCardState extends ConsumerState<PlayerCard>
-    with TickerProviderStateMixin {
+class _PlayerCardState extends ConsumerState<PlayerCard> {
+  final GlobalKey _playerHoverBoundsKey = GlobalKey();
+  final GlobalKey _ambientVideoBoundsKey = GlobalKey();
+  late StateController<Rect?> _ambientApertureController;
+  Rect? _lastAmbientAperture;
+  bool _ambientBoundsReportScheduled = false;
+  bool _ambientBoundsNeeded = false;
   StreamSubscription? _sub;
-  bool _controlsVisible = true;
+  bool _controlsVisible = false;
+  bool _isPlaybackPlaying = false;
   bool _pointerOverPlayer = false;
-  bool _pointerOverControls = false;
   bool _pointerPressed = false;
+  Offset? _lastPointerActivityPosition;
   Timer? _hideTimer;
+  Timer? _pendingVideoTapTimer;
   Timer? _compactCinemaHideTimer;
   bool _compactCinemaControlsVisible = false;
-
-  // Animation controller for play/pause morphing
-  late final AnimationController _playPauseAnim;
-
-  // Breathing Aura pulse controller for audio mode
-  late final AnimationController _pulseAnim;
 
   // Linear drag scrub over the video
   bool _isLinearDragging = false;
@@ -56,71 +63,168 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
   Duration _dragStartPos = Duration.zero;
   bool _queueSheetExpanded = false;
 
+  void _reportAmbientVideoBounds() {
+    _ambientBoundsNeeded = true;
+    if (_ambientBoundsReportScheduled) return;
+    _ambientBoundsReportScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ambientBoundsReportScheduled = false;
+      if (!mounted) return;
+      if (!_ambientBoundsNeeded) {
+        _clearAmbientVideoBounds();
+        return;
+      }
+      final renderObject = _ambientVideoBoundsKey.currentContext
+          ?.findRenderObject();
+      final window = MediaQuery.sizeOf(context);
+      if (renderObject is! RenderBox ||
+          !renderObject.hasSize ||
+          window.width <= 0 ||
+          window.height <= 0) {
+        return;
+      }
+      // The video frame sits inside FittedBox/RotatedBox in several layouts.
+      // RenderBox.size is pre-transform, so use its transformed bounds or the
+      // ambient aperture will be the wrong size and shifted from the video.
+      final transformed = MatrixUtils.transformRect(
+        renderObject.getTransformTo(null),
+        Offset.zero & renderObject.size,
+      );
+      if (transformed.isEmpty) return;
+      // Keep the full media bounds even when the window clips part of the
+      // player. Clamping here to the visible slice recenters and stretches
+      // the edge profile, which makes the ambient continuation lean to one
+      // side whenever the video extends beyond the screen edge.
+      final aperture = Rect.fromLTWH(
+        transformed.left / window.width,
+        transformed.top / window.height,
+        transformed.width / window.width,
+        transformed.height / window.height,
+      );
+      final previous = _lastAmbientAperture;
+      if (previous != null &&
+          (previous.left - aperture.left).abs() < 0.001 &&
+          (previous.top - aperture.top).abs() < 0.001 &&
+          (previous.width - aperture.width).abs() < 0.001 &&
+          (previous.height - aperture.height).abs() < 0.001) {
+        return;
+      }
+      _lastAmbientAperture = aperture;
+      _ambientApertureController.state = aperture;
+    });
+  }
+
+  void _clearAmbientVideoBounds() {
+    _ambientBoundsNeeded = false;
+    final previous = _lastAmbientAperture;
+    if (previous == null) return;
+    // Another player surface may already have published its own aperture.
+    // Clear only the bounds this widget last supplied.
+    if (_ambientApertureController.state == previous) {
+      _ambientApertureController.state = null;
+    }
+    _lastAmbientAperture = null;
+  }
+
+  void _trackGlobalMousePosition(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.mouse || event is! PointerHoverEvent) {
+      return;
+    }
+    final renderObject = _playerHoverBoundsKey.currentContext
+        ?.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return;
+    final bounds = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    final isInsidePlayer = bounds.contains(event.position);
+    if (isInsidePlayer) {
+      _showControlsForPointer(event.position);
+    } else if (_pointerOverPlayer) {
+      _hideTimer?.cancel();
+      _pointerOverPlayer = false;
+      _lastPointerActivityPosition = null;
+      if ((_isPlaybackPlaying || _autoHideVideoControls) &&
+          !_isLinearDragging &&
+          mounted) {
+        setState(() => _controlsVisible = false);
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _ambientApertureController = ref.read(
+      ambientVideoApertureProvider.notifier,
+    );
+    WidgetsBinding.instance.pointerRouter.addGlobalRoute(
+      _trackGlobalMousePosition,
+    );
     final engine = ref.read(engineProvider);
     bool lastInit = engine.snapshot.initialized;
     bool lastPlaying = engine.snapshot.isPlaying;
-
-    _playPauseAnim = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-      value: lastPlaying ? 1.0 : 0.0,
-    );
-
-    _pulseAnim = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2400),
-      lowerBound: 0.92,
-      upperBound: 1.08,
-      value: 1.0,
-    );
-
-    // Only start infinite loop in non-test production environment
-    final isTest = WidgetsBinding.instance.runtimeType.toString().contains(
-      'Test',
-    );
-    if (lastPlaying && !isTest) {
-      _pulseAnim.repeat(reverse: true);
-    }
+    _isPlaybackPlaying = lastPlaying;
+    double? lastVideoAspectRatio = engine.videoAspectRatio;
 
     _sub = engine.snapshots.listen((s) {
       if (!mounted) return;
+      final videoAspectRatio = engine.videoAspectRatio;
+      final previousAspectRatio = lastVideoAspectRatio;
+      final aspectRatioChanged =
+          (videoAspectRatio == null) != (previousAspectRatio == null) ||
+          (videoAspectRatio != null &&
+              previousAspectRatio != null &&
+              (videoAspectRatio - previousAspectRatio).abs() > 0.001);
+      lastVideoAspectRatio = videoAspectRatio;
       if (s.initialized != lastInit) {
         lastInit = s.initialized;
         setState(() {});
       }
       if (s.isPlaying != lastPlaying) {
         lastPlaying = s.isPlaying;
+        _isPlaybackPlaying = s.isPlaying;
         if (s.isPlaying) {
-          _playPauseAnim.forward();
-          if (!_pulseAnim.isAnimating && !isTest) {
-            _pulseAnim.repeat(reverse: true);
-          }
+          _startHideTimer(reset: true);
+        } else if (_autoHideVideoControls) {
+          // Video controls follow pointer activity even while paused. Show
+          // them briefly on pause, then let the same idle timer hide them.
+          _controlsVisible = true;
+          _startHideTimer(reset: true);
         } else {
-          _playPauseAnim.reverse();
-          _pulseAnim.stop();
+          // Keep the music/image transport available while playback is paused.
+          _hideTimer?.cancel();
+          _controlsVisible = true;
         }
+        setState(() {});
       }
+      // media_kit can mark a new source initialized before its video output
+      // reports dimensions. Rebuild when the aspect ratio arrives as well;
+      // otherwise the new frame can stay hidden behind the artwork until a
+      // pause or seek happens to trigger another widget update.
+      if (aspectRatioChanged) setState(() {});
     }, onError: (_) {});
     _startHideTimer();
   }
 
-  void _startHideTimer() {
+  void _startHideTimer({bool reset = false}) {
+    // Rebuilds, stream notifications, and duplicate hover routes must not
+    // restart an already-running countdown. Only actual user activity opts in
+    // to resetting it.
+    if (!reset && _hideTimer?.isActive == true) return;
     _hideTimer?.cancel();
-    if (_pointerOverPlayer ||
-        _pointerOverControls ||
-        _pointerPressed ||
-        _isLinearDragging) {
+    if (!_isPlaybackPlaying && !_autoHideVideoControls) {
+      // Paused playback has no idle timeout: users may need time to choose a
+      // seek position or another queued item in the music/image player.
+      if (!_controlsVisible && mounted) {
+        setState(() => _controlsVisible = true);
+      }
       return;
     }
-    _hideTimer = Timer(const Duration(milliseconds: 1000), () {
+    if (!_controlsVisible || _pointerPressed || _isLinearDragging) {
+      return;
+    }
+    _hideTimer = Timer(const Duration(milliseconds: 2400), () {
       if (mounted &&
           _controlsVisible &&
-          !_pointerOverPlayer &&
           !_isLinearDragging &&
-          !_pointerOverControls &&
           !_pointerPressed) {
         setState(() {
           _controlsVisible = false;
@@ -129,26 +233,44 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     });
   }
 
+  bool get _autoHideVideoControls =>
+      ref.read(playerViewModeProvider) == PlayerViewMode.media &&
+      !ref.read(cinemaModeProvider);
+
+  void _showControlsForPointer(Offset position) {
+    // The global pointer route and this player's MouseRegion both receive each
+    // move. Ignore duplicate events and tiny trackpad jitter so they cannot
+    // continually restart the idle timer while the pointer is effectively at
+    // rest. Comparing against the last accepted position still lets gradual
+    // real movement accumulate until it crosses the threshold.
+    final previous = _lastPointerActivityPosition;
+    if (previous != null && (position - previous).distance < 3) return;
+    _lastPointerActivityPosition = position;
+    if (!_pointerOverPlayer || !_controlsVisible) {
+      setState(() {
+        _pointerOverPlayer = true;
+        _controlsVisible = true;
+      });
+    }
+    _startHideTimer(reset: true);
+  }
+
   void _onPointerHover() {
     if (!_controlsVisible) {
       setState(() {
         _controlsVisible = true;
       });
     }
-    _startHideTimer();
-  }
-
-  void _onControlsEnter() {
-    _pointerOverControls = true;
-    _hideTimer?.cancel();
-    if (!_controlsVisible) {
-      setState(() => _controlsVisible = true);
-    }
+    _startHideTimer(reset: true);
   }
 
   void _onControlsExit() {
-    _pointerOverControls = false;
-    _startHideTimer();
+    if (_pointerOverPlayer) {
+      _startHideTimer();
+    } else if (!_isLinearDragging && !_pointerPressed && mounted) {
+      _hideTimer?.cancel();
+      setState(() => _controlsVisible = false);
+    }
   }
 
   void _onPointerDown(PointerDownEvent _) {
@@ -161,7 +283,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
 
   void _onPointerUp(PointerEvent _) {
     _pointerPressed = false;
-    _startHideTimer();
+    _startHideTimer(reset: true);
   }
 
   void _toggleControlsVisibility() {
@@ -169,7 +291,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
       _controlsVisible = !_controlsVisible;
     });
     if (_controlsVisible) {
-      _startHideTimer();
+      _startHideTimer(reset: true);
     } else {
       _hideTimer?.cancel();
     }
@@ -196,36 +318,26 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     if (snap.initialized) {
       if (rotateForPhone) {
         return RotatedBox(
+          key: _ambientVideoBoundsKey,
           quarterTurns: 1,
-          child: engine.buildVideoView(fit: BoxFit.cover),
+          child: engine.videoAspectRatio == null
+              ? const SizedBox.shrink()
+              : engine.buildVideoView(fit: BoxFit.cover),
         );
       }
       return Stack(
         fit: StackFit.expand,
         children: [
-          // Fill the unused space with a softened still while keeping only one
-          // live video surface mounted. media_kit does not render reliably
-          // when the same controller is mounted twice at once.
-          Positioned.fill(
-            child: ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-              child: Opacity(
-                opacity: 0.42,
-                child: ThumbImage(
-                  seed: media.id,
-                  mediaId: media.id,
-                  localPath: media.localPath,
-                  expand: true,
-                  highRes: true,
-                ),
-              ),
-            ),
-          ),
-          const Positioned.fill(child: ColoredBox(color: Color(0x66000000))),
+          // Leave space outside the source frame black instead of stretching
+          // a thumbnail into a blurred, unrelated-looking backdrop.
+          const Positioned.fill(child: ColoredBox(color: Colors.black)),
           Center(
             child: AspectRatio(
+              key: _ambientVideoBoundsKey,
               aspectRatio: engine.videoAspectRatio ?? (16 / 9),
-              child: engine.buildVideoView(fit: BoxFit.contain),
+              child: engine.videoAspectRatio == null
+                  ? const SizedBox.shrink()
+                  : engine.buildVideoView(fit: BoxFit.contain),
             ),
           ),
         ],
@@ -239,6 +351,13 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     );
   }
 
+  Widget _videoSurface(PlaybackEngine engine, {BoxFit fit = BoxFit.contain}) {
+    // Keep the decoded video as the topmost picture layer. Drawing a sampled
+    // matte image over it can mistake dark scene detail for letterboxing and
+    // wash out the actual frame; ambient color remains behind the player.
+    return engine.buildVideoView(fit: fit);
+  }
+
   void _onSwitchMode(PlayerViewMode newMode) {
     _onPointerHover();
     ref.read(playerViewModeProvider.notifier).state = newMode;
@@ -247,12 +366,51 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     engine.setVideoTrackEnabled(newMode == PlayerViewMode.media);
   }
 
+  Widget _playPauseGlyph(bool isPlaying, double size, Color color) =>
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 90),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, animation) =>
+            FadeTransition(opacity: animation, child: child),
+        child: Icon(
+          isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          key: ValueKey(isPlaying),
+          color: color,
+          size: size,
+        ),
+      );
+
+  Future<void> _saveTemporaryToLibrary(
+    BuildContext context,
+    MediaItem media,
+  ) async {
+    try {
+      await ref.read(libraryProvider.notifier).saveTemporaryMedia(media.id);
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(ref.tr('saved_to_library'))));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ref.tr('file_open_failed').replaceAll('{error}', '$error'),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   void _showAddToPlaylist(BuildContext context, MediaItem media) {
     final playlists = ref.read(libraryProvider).playlists;
     if (playlists.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('先にプレイリストを作成してください')));
+      ).showSnackBar(SnackBar(content: Text(ref.tr('empty_playlist'))));
       return;
     }
     showModalBottomSheet<void>(
@@ -261,10 +419,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
         child: ListView(
           shrinkWrap: true,
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(20, 18, 20, 8),
               child: Text(
-                'プレイリストに追加',
+                ref.tr('add_playlist'),
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
               ),
             ),
@@ -281,7 +439,12 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(
-                          '「${displayTitle(playlist.name)}」に追加しました',
+                          ref
+                              .tr('added_to_playlist')
+                              .replaceAll(
+                                '{name}',
+                                displayTitle(playlist.name),
+                              ),
                         ),
                         duration: const Duration(seconds: 2),
                       ),
@@ -298,28 +461,50 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _pendingVideoTapTimer?.cancel();
     _compactCinemaHideTimer?.cancel();
     _sub?.cancel();
-    _playPauseAnim.dispose();
-    _pulseAnim.dispose();
+    WidgetsBinding.instance.pointerRouter.removeGlobalRoute(
+      _trackGlobalMousePosition,
+    );
+    _clearAmbientVideoBounds();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final availableWidth = constraints.hasBoundedWidth
+          ? constraints.maxWidth
+          : MediaQuery.sizeOf(context).width;
+      return _buildForWidth(context, availableWidth);
+    },
+  );
+
+  Widget _buildForWidth(BuildContext context, double screenWidth) {
     final q = ref.watch(queueProvider);
     final lib = ref.watch(libraryProvider);
     final engine = ref.watch(engineProvider);
     final ctl = ref.read(playbackControllerProvider);
     final mode = ref.watch(playerViewModeProvider);
+    final ambientLightEnabled = ref.watch(ambientLightProvider);
+    final fullPlayerView = ref.watch(viewingPlayerProvider);
     final snap = engine.snapshot;
     final media = q.currentId == null ? null : lib.byId(q.currentId!);
     if (media == null) return const SizedBox.shrink();
-
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    final videoAspectRatio = engine.videoAspectRatio ?? (16 / 9);
+    final reportedAspectRatio = engine.videoAspectRatio;
+    final hasValidVideoAspectRatio =
+        reportedAspectRatio != null &&
+        reportedAspectRatio.isFinite &&
+        reportedAspectRatio > 0;
+    final videoAspectRatio = hasValidVideoAspectRatio
+        ? reportedAspectRatio
+        : (16 / 9);
     final videoLayoutWidth = screenWidth;
-    final isCompact = screenWidth < 1000;
+    // The player lives inside the center pane, which is already narrower than
+    // the window when the sidebar and queue are open. Keep the desktop layout
+    // until that actual pane can no longer fit its toolbar and transport row.
+    final isCompact = screenWidth < 760;
     final isUltraCompact = screenWidth < 380;
     final previousNextIconSize = isUltraCompact
         ? 24.0
@@ -328,6 +513,24 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     // at every responsive size so the primary action remains visually primary.
     final playPauseIconSize = previousNextIconSize * 60 / 34;
     final isCinema = ref.watch(cinemaModeProvider);
+    final useVideoOverlay = mode == PlayerViewMode.media && !isCinema;
+    if (snap.initialized && mode == PlayerViewMode.media && !isCinema) {
+      _reportAmbientVideoBounds();
+    } else {
+      _ambientBoundsNeeded = false;
+      if (_lastAmbientAperture != null && !_ambientBoundsReportScheduled) {
+        _ambientBoundsReportScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _ambientBoundsReportScheduled = false;
+          if (!mounted) return;
+          if (_ambientBoundsNeeded) {
+            _reportAmbientVideoBounds();
+          } else {
+            _clearAmbientVideoBounds();
+          }
+        });
+      }
+    }
 
     if (isCompact) {
       return AnimatedSwitcher(
@@ -369,38 +572,41 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = themeTextPrimary(context);
     final textSub = themeTextSub(context);
-    final transportIconColor = isDark
-        ? const Color(0xFFA8A8AC)
-        : const Color(0xFF5C5C60);
-    final playIconColor = isDark
-        ? const Color(0xFF9E9EA2)
-        : const Color(0xFF525256);
+    final playerTextPrimary = useVideoOverlay ? Colors.white : textPrimary;
+    final playerTextSub = useVideoOverlay ? Colors.white70 : textSub;
+    final transportIconColor = useVideoOverlay
+        ? Colors.white70
+        : (isDark ? const Color(0xFFA9A9A9) : const Color(0xFF5D5D5D));
+    final playIconColor = useVideoOverlay
+        ? Colors.white
+        : (isDark ? const Color(0xFF9F9F9F) : const Color(0xFF535353));
     return MouseRegion(
+      key: _playerHoverBoundsKey,
+      // Hide the cursor only with the same idle state that hides the video
+      // controls; movement reveals both together so the cursor cannot linger
+      // over an otherwise clean playback frame.
       cursor: _controlsVisible
           ? SystemMouseCursors.basic
           : SystemMouseCursors.none,
-      onEnter: (_) {
-        _pointerOverPlayer = true;
-        if (_controlsVisible) {
-          setState(() {});
-        } else {
-          _onPointerHover();
-        }
-      },
-      onHover: (_) {
-        _pointerOverPlayer = true;
-        _onPointerHover();
+      // Do not reveal on enter alone: on macOS this may be synthesized when
+      // the window/widget appears beneath a stationary cursor. Actual pointer
+      // movement arrives through onHover and the global pointer route.
+      onHover: (event) {
+        if (mounted) _showControlsForPointer(event.position);
       },
       onExit: (_) {
-        _pointerOverPlayer = false;
-        if (mounted &&
-            _controlsVisible &&
-            !_isLinearDragging &&
-            !_pointerPressed) {
-          // Immediately hide controls when cursor leaves the player area (IINA style)
+        if (mounted) {
           _hideTimer?.cancel();
+          // A release can be swallowed when the pointer exits through an
+          // overlapping pane. Leaving the player ends ordinary press state;
+          // active seek drags remain tracked separately.
+          _pointerPressed = false;
           setState(() {
-            _controlsVisible = false;
+            _pointerOverPlayer = false;
+            _lastPointerActivityPosition = null;
+            if (!_isLinearDragging) {
+              _controlsVisible = false;
+            }
           });
         }
       },
@@ -435,9 +641,14 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                     _onPointerHover();
                     _dragAccumulatedDelta += details.delta.dx;
                     final dur = engine.snapshot.duration;
-                    if (dur.inMilliseconds > 0) {
-                      // 1 pixel = ~120ms of playback scrub
-                      final deltaMs = (_dragAccumulatedDelta * 120).toInt();
+                    if (dur.inMilliseconds > 0 && videoLayoutWidth > 0) {
+                      // Scale the drag to total duration so the same gesture
+                      // covers a comparable fraction of short clips and
+                      // feature-length videos on any center-pane width.
+                      final dragFraction =
+                          _dragAccumulatedDelta / videoLayoutWidth;
+                      final deltaMs = (dragFraction * dur.inMilliseconds)
+                          .round();
                       final targetMs = (_dragStartPos.inMilliseconds + deltaMs)
                           .clamp(0, dur.inMilliseconds);
                       ctl.seekTo(Duration(milliseconds: targetMs));
@@ -445,17 +656,30 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                   },
                   onHorizontalDragEnd: (details) {
                     _isLinearDragging = false;
-                    _startHideTimer();
+                    _startHideTimer(reset: true);
                   },
                   onTap: () {
-                    if (isCompact) {
-                      _toggleControlsVisibility();
-                    } else {
-                      _onPointerHover();
-                      ctl.toggle();
-                    }
+                    // Delay the single-tap action just beyond Flutter's
+                    // double-tap recognition window so the first tap of a
+                    // fullscreen gesture cannot also pause the video.
+                    _pendingVideoTapTimer?.cancel();
+                    _pendingVideoTapTimer = Timer(
+                      const Duration(milliseconds: 330),
+                      () {
+                        if (!mounted) return;
+                        if (isCompact) {
+                          _toggleControlsVisibility();
+                        } else {
+                          _onPointerHover();
+                          ctl.toggle();
+                        }
+                      },
+                    );
                   },
-                  onDoubleTap: toggleFullscreen,
+                  onDoubleTap: () {
+                    _pendingVideoTapTimer?.cancel();
+                    toggleFullscreen();
+                  },
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 280),
                     switchInCurve: Curves.easeInOut,
@@ -477,85 +701,120 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                                     fit: isCinema
                                         ? BoxFit.cover
                                         : BoxFit.contain,
-                                    clipBehavior: Clip.hardEdge,
+                                    clipBehavior: Clip.none,
                                     child: SizedBox(
                                       width: videoLayoutWidth,
                                       height:
                                           videoLayoutWidth / videoAspectRatio,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: Colors.black,
-                                          borderRadius: isCinema
-                                              ? BorderRadius.zero
-                                              : BorderRadius.circular(20),
-                                          border: isCinema
-                                              ? null
-                                              : Border.all(
-                                                  color: themeBorder(context),
-                                                  width: 1,
-                                                ),
-                                          boxShadow: isCinema
-                                              ? null
-                                              : [
-                                                  BoxShadow(
-                                                    color: Colors.black
-                                                        .withValues(
-                                                          alpha: isDark
-                                                              ? 0.7
-                                                              : 0.2,
+                                      child: Stack(
+                                        clipBehavior: Clip.none,
+                                        children: [
+                                          Container(
+                                            key: _ambientVideoBoundsKey,
+                                            decoration: BoxDecoration(
+                                              color: Colors.black,
+                                              borderRadius: isCinema
+                                                  ? BorderRadius.zero
+                                                  : BorderRadius.circular(20),
+                                              boxShadow:
+                                                  isCinema ||
+                                                      ambientLightEnabled
+                                                  ? null
+                                                  : [
+                                                      BoxShadow(
+                                                        color: Colors.black
+                                                            .withValues(
+                                                              alpha: isDark
+                                                                  ? 0.7
+                                                                  : 0.2,
+                                                            ),
+                                                        blurRadius: 40,
+                                                        offset: const Offset(
+                                                          0,
+                                                          14,
                                                         ),
-                                                    blurRadius: 40,
-                                                    offset: const Offset(0, 14),
-                                                  ),
-                                                ],
-                                        ),
-                                        clipBehavior: Clip.antiAlias,
-                                        child: snap.initialized
-                                            ? Stack(
-                                                fit: StackFit.expand,
-                                                children: [
-                                                  ThumbImage(
-                                                    seed: media.id,
-                                                    mediaId: media.id,
-                                                    localPath: media.localPath,
-                                                    expand: true,
-                                                  ),
-                                                  engine.buildVideoView(),
-                                                ],
-                                              )
-                                            : Stack(
-                                                fit: StackFit.expand,
-                                                children: [
-                                                  ThumbImage(
-                                                    seed: media.id,
-                                                    mediaId: media.id,
-                                                    localPath: media.localPath,
-                                                    expand: true,
-                                                  ),
-                                                  Container(
-                                                    color: Colors.black45,
-                                                    child: const Column(
-                                                      mainAxisAlignment:
-                                                          MainAxisAlignment
-                                                              .center,
-                                                      children: [
-                                                        CircularProgressIndicator(
-                                                          strokeWidth: 3,
+                                                      ),
+                                                    ],
+                                            ),
+                                            // Preserve one fine outline so
+                                            // the video remains distinct from
+                                            // its blurred ambient spill.
+                                            foregroundDecoration:
+                                                ambientLightEnabled && !isCinema
+                                                ? BoxDecoration(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          20,
                                                         ),
-                                                        SizedBox(height: 14),
-                                                        Text(
-                                                          '読み込み中...',
-                                                          style: TextStyle(
-                                                            fontSize: 13,
-                                                            color:
-                                                                Colors.white70,
+                                                    border: Border.all(
+                                                      // The player itself is
+                                                      // dark even in light UI;
+                                                      // use a light keyline in
+                                                      // both themes so the
+                                                      // video/glow boundary
+                                                      // stays visible.
+                                                      color: Colors.white
+                                                          .withValues(
+                                                            alpha: 0.16,
                                                           ),
-                                                        ),
-                                                      ],
+                                                      width: 1,
                                                     ),
+                                                  )
+                                                : null,
+                                            clipBehavior: Clip.antiAlias,
+                                            child: snap.initialized
+                                                ? Stack(
+                                                    fit: StackFit.expand,
+                                                    children: [
+                                                      ThumbImage(
+                                                        seed: media.id,
+                                                        mediaId: media.id,
+                                                        localPath:
+                                                            media.localPath,
+                                                        expand: true,
+                                                      ),
+                                                      if (hasValidVideoAspectRatio)
+                                                        _videoSurface(engine),
+                                                    ],
+                                                  )
+                                                : Stack(
+                                                    fit: StackFit.expand,
+                                                    children: [
+                                                      ThumbImage(
+                                                        seed: media.id,
+                                                        mediaId: media.id,
+                                                        localPath:
+                                                            media.localPath,
+                                                        expand: true,
+                                                      ),
+                                                      Container(
+                                                        color: Colors.black45,
+                                                        child: Column(
+                                                          mainAxisAlignment:
+                                                              MainAxisAlignment
+                                                                  .center,
+                                                          children: [
+                                                            CircularProgressIndicator(
+                                                              strokeWidth: 3,
+                                                            ),
+                                                            SizedBox(
+                                                              height: 14,
+                                                            ),
+                                                            Text(
+                                                              ref.tr('loading'),
+                                                              style: TextStyle(
+                                                                fontSize: 13,
+                                                                color: Colors
+                                                                    .white70,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
-                                                ],
-                                              ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
@@ -563,29 +822,29 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                         : Center(
                             key: const ValueKey('player-mode-image'),
                             child: AspectRatio(
-                              // Keep artwork in the source video's frame ratio
-                              // in both normal and cinema views. A fixed square
-                              // made wide and portrait videos crop differently
-                              // every time the view mode changed.
-                              aspectRatio: videoAspectRatio,
+                              // Artwork is presented as a square sleeve;
+                              // video mode keeps the video's own frame ratio.
+                              aspectRatio: 1,
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: themeCard(context),
                                   borderRadius: BorderRadius.circular(24),
-                                  border: Border.all(
-                                    color: themeBorder(context),
-                                    width: 1,
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: isDark ? 0.6 : 0.15,
-                                      ),
-                                      blurRadius: 48,
-                                      spreadRadius: 4,
-                                      offset: const Offset(0, 16),
-                                    ),
-                                  ],
+                                  // Ambient light already gives the sleeve a
+                                  // soft separation from the room. The usual
+                                  // heavy drop shadow reads as a thin second
+                                  // outline against that moving background.
+                                  boxShadow: ambientLightEnabled
+                                      ? const []
+                                      : [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(
+                                              alpha: isDark ? 0.6 : 0.15,
+                                            ),
+                                            blurRadius: 48,
+                                            spreadRadius: 4,
+                                            offset: const Offset(0, 16),
+                                          ),
+                                        ],
                                 ),
                                 clipBehavior: Clip.antiAlias,
                                 child: Stack(
@@ -630,566 +889,758 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
               left: 16,
               right: 16,
               child: MouseRegion(
-                onEnter: (_) => _onControlsEnter(),
                 onExit: (_) => _onControlsExit(),
-                child: AnimatedOpacity(
-                  // In cinema mode, reveal the exit affordance only while the
-                  // pointer is over the player. Touch layouts keep their own
-                  // always-visible exit button below.
-                  opacity: (isCinema ? _pointerOverPlayer : _controlsVisible)
-                      ? 1.0
-                      : 0.0,
-                  duration: const Duration(milliseconds: 240),
-                  curve: Curves.easeInOut,
-                  child: isCinema
-                      ? Align(
-                          alignment: Alignment.topRight,
-                          child: ClipOval(
-                            child: BackdropFilter(
-                              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: isDark
-                                      ? const Color(0xFFE1E1E4)
-                                      : const Color(0xFF202127),
-                                  border: Border.all(
-                                    color: isDark
-                                        ? Colors.white.withValues(alpha: 0.2)
-                                        : Colors.black.withValues(alpha: 0.15),
-                                    width: 1,
+                child: IgnorePointer(
+                  ignoring: !(isCinema
+                      ? _pointerOverPlayer
+                      : useVideoOverlay
+                      ? _controlsVisible
+                      : _controlsVisible),
+                  child: ExcludeSemantics(
+                    excluding: !(isCinema
+                        ? _pointerOverPlayer
+                        : useVideoOverlay
+                        ? _controlsVisible
+                        : _controlsVisible),
+                    child: AnimatedOpacity(
+                      // In cinema mode, reveal the exit affordance only while
+                      // the pointer is over the player. Touch layouts keep
+                      // their always-visible exit button below.
+                      opacity:
+                          (isCinema
+                              ? _pointerOverPlayer
+                              : useVideoOverlay
+                              ? _controlsVisible
+                              : _controlsVisible)
+                          ? 1.0
+                          : 0.0,
+                      duration: const Duration(milliseconds: 240),
+                      curve: Curves.easeInOut,
+                      child: isCinema
+                          ? Align(
+                              alignment: Alignment.topRight,
+                              child: ClipOval(
+                                child: BackdropFilter(
+                                  filter: ui.ImageFilter.blur(
+                                    sigmaX: 18,
+                                    sigmaY: 18,
                                   ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.5,
-                                      ),
-                                      blurRadius: 16,
-                                      offset: const Offset(0, 4),
-                                    ),
-                                  ],
-                                ),
-                                child: IconButton(
-                                  tooltip: '大画面を閉じる (Esc)',
-                                  icon: const Icon(
-                                    Icons.fullscreen_exit_rounded,
-                                    size: 26,
-                                  ),
-                                  color: isDark
-                                      ? const Color(0xFF343438)
-                                      : Colors.white,
-                                  onPressed: () {
-                                    _onPointerHover();
-                                    ref
-                                            .read(cinemaModeProvider.notifier)
-                                            .state =
-                                        false;
-                                  },
-                                ),
-                              ),
-                            ),
-                          ),
-                        )
-                      : Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            // Collapse / Back to library button (especially important for mobile/narrow view)
-                            ClipOval(
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(
-                                  sigmaX: 18,
-                                  sigmaY: 18,
-                                ),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: isDark
-                                        ? Colors.black.withValues(alpha: 0.5)
-                                        : Colors.white.withValues(alpha: 0.85),
-                                    border: Border.all(
-                                      color: themeBorder(context),
-                                      width: 1,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(
-                                          alpha: isDark ? 0.3 : 0.1,
-                                        ),
-                                        blurRadius: 16,
-                                        offset: const Offset(0, 4),
-                                      ),
-                                    ],
-                                  ),
-                                  child: IconButton(
-                                    tooltip: 'ライブラリに戻る',
-                                    icon: const Icon(
-                                      Icons.keyboard_arrow_down_rounded,
-                                      size: 26,
-                                    ),
-                                    color: textPrimary,
-                                    onPressed: () {
-                                      ref
-                                              .read(
-                                                viewingPlayerProvider.notifier,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: isDark
+                                          ? const Color(0xFFE2E2E2)
+                                          : const Color(0xFF232323),
+                                      border: Border.all(
+                                        color: isDark
+                                            ? Colors.white.withValues(
+                                                alpha: 0.2,
                                               )
-                                              .state =
-                                          false;
-                                      ref
-                                              .read(
-                                                queueVisibleProvider.notifier,
+                                            : Colors.black.withValues(
+                                                alpha: 0.15,
+                                              ),
+                                        width: 1,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(
+                                            alpha: 0.5,
+                                          ),
+                                          blurRadius: 16,
+                                          offset: const Offset(0, 4),
+                                        ),
+                                      ],
+                                    ),
+                                    child: IconButton(
+                                      tooltip:
+                                          '${ref.tr('close_fullscreen')} (Esc)',
+                                      icon: const Icon(
+                                        Icons.fullscreen_exit_rounded,
+                                        size: 26,
+                                      ),
+                                      color: isDark
+                                          ? const Color(0xFF353535)
+                                          : Colors.white,
+                                      onPressed: () {
+                                        _onPointerHover();
+                                        ref
+                                                .read(
+                                                  cinemaModeProvider.notifier,
+                                                )
+                                                .state =
+                                            false;
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          : Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                // Collapse / Back to library button (especially important for mobile/narrow view)
+                                ClipOval(
+                                  child: BackdropFilter(
+                                    filter: ui.ImageFilter.blur(
+                                      sigmaX: 18,
+                                      sigmaY: 18,
+                                    ),
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: isDark
+                                            ? Colors.black.withValues(
+                                                alpha: 0.5,
                                               )
-                                              .state =
-                                          false;
-                                    },
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                            // Media / Image Mode Switcher capsule
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(24),
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(
-                                  sigmaX: 18,
-                                  sigmaY: 18,
-                                ),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: isDark
-                                        ? Colors.black.withValues(alpha: 0.5)
-                                        : Colors.white.withValues(alpha: 0.85),
-                                    borderRadius: BorderRadius.circular(24),
-                                    border: Border.all(
-                                      color: themeBorder(context),
-                                      width: 1,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(
-                                          alpha: isDark ? 0.3 : 0.1,
+                                            : Colors.white.withValues(
+                                                alpha: 0.85,
+                                              ),
+                                        border: Border.all(
+                                          color: themeBorder(context),
+                                          width: 1,
                                         ),
-                                        blurRadius: 20,
-                                        offset: const Offset(0, 6),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(
+                                              alpha: isDark ? 0.3 : 0.1,
+                                            ),
+                                            blurRadius: 16,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
-                                  padding: const EdgeInsets.all(4),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _ModeButton(
-                                        label: 'メディア',
-                                        icon: Icons.smart_display_rounded,
-                                        selected: mode == PlayerViewMode.media,
-                                        onTap: () =>
-                                            _onSwitchMode(PlayerViewMode.media),
-                                      ),
-                                      _ModeButton(
-                                        label: '画像',
-                                        icon: Icons.image_rounded,
-                                        selected: mode == PlayerViewMode.image,
-                                        onTap: () =>
-                                            _onSwitchMode(PlayerViewMode.image),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                            // Complete big screen / Cinema mode toggle button
-                            ClipOval(
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(
-                                  sigmaX: 18,
-                                  sigmaY: 18,
-                                ),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: isDark
-                                        ? Colors.black.withValues(alpha: 0.5)
-                                        : Colors.white.withValues(alpha: 0.85),
-                                    border: Border.all(
-                                      color: themeBorder(context),
-                                      width: 1,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(
-                                          alpha: isDark ? 0.3 : 0.1,
+                                      child: IconButton(
+                                        tooltip: ref.tr('library'),
+                                        icon: const Icon(
+                                          Icons.keyboard_arrow_down_rounded,
+                                          size: 26,
                                         ),
-                                        blurRadius: 16,
-                                        offset: const Offset(0, 4),
+                                        color: textPrimary,
+                                        onPressed: () {
+                                          ref
+                                                  .read(
+                                                    viewingPlayerProvider
+                                                        .notifier,
+                                                  )
+                                                  .state =
+                                              false;
+                                          ref
+                                                  .read(
+                                                    queueVisibleProvider
+                                                        .notifier,
+                                                  )
+                                                  .state =
+                                              false;
+                                        },
                                       ),
-                                    ],
-                                  ),
-                                  child: IconButton(
-                                    tooltip: '動画だけ完全大画面',
-                                    icon: const Icon(
-                                      Icons.fullscreen_rounded,
-                                      size: 24,
                                     ),
-                                    color: textPrimary,
-                                    onPressed: () {
-                                      _onPointerHover();
-                                      ref
-                                              .read(cinemaModeProvider.notifier)
-                                              .state =
-                                          true;
-                                    },
                                   ),
                                 ),
-                              ),
+
+                                // Media / Image Mode Switcher capsule
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(24),
+                                  child: BackdropFilter(
+                                    filter: ui.ImageFilter.blur(
+                                      sigmaX: 18,
+                                      sigmaY: 18,
+                                    ),
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: isDark
+                                            ? Colors.black.withValues(
+                                                alpha: 0.5,
+                                              )
+                                            : Colors.white.withValues(
+                                                alpha: 0.85,
+                                              ),
+                                        borderRadius: BorderRadius.circular(24),
+                                        border: Border.all(
+                                          color: themeBorder(context),
+                                          width: 1,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(
+                                              alpha: isDark ? 0.3 : 0.1,
+                                            ),
+                                            blurRadius: 20,
+                                            offset: const Offset(0, 6),
+                                          ),
+                                        ],
+                                      ),
+                                      padding: const EdgeInsets.all(4),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          _ModeButton(
+                                            label: ref.tr('media'),
+                                            icon: Icons.smart_display_rounded,
+                                            selected:
+                                                mode == PlayerViewMode.media,
+                                            onTap: () => _onSwitchMode(
+                                              PlayerViewMode.media,
+                                            ),
+                                          ),
+                                          _ModeButton(
+                                            label: ref.tr('image'),
+                                            icon: Icons.image_rounded,
+                                            selected:
+                                                mode == PlayerViewMode.image,
+                                            onTap: () => _onSwitchMode(
+                                              PlayerViewMode.image,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                const SleepTimerButton(),
+                                FavoriteButton(mediaId: media.id),
+                                Tooltip(
+                                  message: ref.tr('immersive'),
+                                  child: TextButton.icon(
+                                    label: Text(ref.tr('immersive')),
+                                    icon: const AppSvgIcon('immersive'),
+                                    onPressed: () =>
+                                        ref
+                                                .read(
+                                                  immersiveModeProvider
+                                                      .notifier,
+                                                )
+                                                .state =
+                                            true,
+                                  ),
+                                ),
+                                // Complete big screen / Cinema mode toggle button
+                                ClipOval(
+                                  child: BackdropFilter(
+                                    filter: ui.ImageFilter.blur(
+                                      sigmaX: 18,
+                                      sigmaY: 18,
+                                    ),
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: isDark
+                                            ? Colors.black.withValues(
+                                                alpha: 0.5,
+                                              )
+                                            : Colors.white.withValues(
+                                                alpha: 0.85,
+                                              ),
+                                        border: Border.all(
+                                          color: themeBorder(context),
+                                          width: 1,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(
+                                              alpha: isDark ? 0.3 : 0.1,
+                                            ),
+                                            blurRadius: 16,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ],
+                                      ),
+                                      child: IconButton(
+                                        tooltip: ref.tr('fullscreen_video'),
+                                        icon: const Icon(
+                                          Icons.fullscreen_rounded,
+                                          size: 24,
+                                        ),
+                                        color: textPrimary,
+                                        onPressed: () {
+                                          _onPointerHover();
+                                          ref
+                                                  .read(
+                                                    cinemaModeProvider.notifier,
+                                                  )
+                                                  .state =
+                                              true;
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
+                    ),
+                  ),
                 ),
               ),
             ),
 
             // 4. Bottom Floating IINA-style Frosted Glass OSC (On Screen Controller)
             // Hidden when in pure cinema mode so nothing blocks the video
+            if (isCinema)
+              Positioned(
+                bottom: 30,
+                left: 24,
+                right: 24,
+                child: MouseRegion(
+                  onExit: (_) => _onControlsExit(),
+                  child: IgnorePointer(
+                    ignoring: !_pointerOverPlayer,
+                    child: AnimatedOpacity(
+                      opacity: _pointerOverPlayer ? 1 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.48),
+                            borderRadius: BorderRadius.circular(32),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.12),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              PlaybackShuffleButton(
+                                activeColor: Colors.white,
+                                inactiveColor: Colors.white60,
+                              ),
+                              IconButton(
+                                tooltip: ref.tr('prev_video'),
+                                icon: TransportIcon.previous(
+                                  size: 26,
+                                  color: Colors.white,
+                                ),
+                                onPressed: q.hasCurrent ? ctl.playPrev : null,
+                              ),
+                              StreamBuilder<bool>(
+                                stream: engine.playingStream,
+                                initialData: engine.snapshot.isPlaying,
+                                builder: (context, state) => IconButton(
+                                  tooltip: ref.tr(
+                                    state.data == true ? 'pause' : 'play',
+                                  ),
+                                  iconSize: 42,
+                                  color: Colors.white,
+                                  onPressed: q.hasCurrent ? ctl.toggle : null,
+                                  icon: Icon(
+                                    state.data == true
+                                        ? Icons.pause_rounded
+                                        : Icons.play_arrow_rounded,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: ref.tr('next_video'),
+                                icon: SkipNextIcon(
+                                  size: 26,
+                                  color: Colors.white,
+                                ),
+                                onPressed: q.hasCurrent ? ctl.playNext : null,
+                              ),
+                              PlaybackRepeatButton(
+                                activeColor: Colors.white,
+                                inactiveColor: Colors.white60,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (!isCinema)
               Positioned(
                 bottom: isCompact ? 10 : 34,
                 left: isCompact ? 10 : 24,
                 right: isCompact ? 10 : 24,
                 child: MouseRegion(
-                  onEnter: (_) => _onControlsEnter(),
                   onExit: (_) => _onControlsExit(),
                   child: AnimatedOpacity(
-                    opacity: _controlsVisible ? 1.0 : 0.0,
+                    key: useVideoOverlay
+                        ? const ValueKey('player-hover-transport')
+                        : null,
+                    opacity: useVideoOverlay
+                        ? (_controlsVisible ? 1.0 : 0.0)
+                        : (_controlsVisible ? 1.0 : 0.0),
                     duration: const Duration(milliseconds: 240),
                     curve: Curves.easeInOut,
                     child: IgnorePointer(
-                      ignoring: !_controlsVisible,
+                      ignoring: useVideoOverlay
+                          ? !_controlsVisible
+                          : !_controlsVisible,
                       child: Center(
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 660),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(
-                              isCompact ? 18 : 22,
-                            ),
-                            child: BackdropFilter(
-                              filter: ImageFilter.blur(
-                                sigmaX: isCompact ? 22 : (isDark ? 48 : 36),
-                                sigmaY: isCompact ? 22 : (isDark ? 48 : 36),
+                          constraints: BoxConstraints(
+                            maxWidth: useVideoOverlay ? double.infinity : 660,
+                          ),
+                          child: SizedBox(
+                            width: useVideoOverlay ? double.infinity : null,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(
+                                isCompact ? 18 : 22,
                               ),
-                              child: Container(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: isCompact ? 12 : 20,
-                                  vertical: isCompact ? 10 : 12,
+                              child: BackdropFilter(
+                                filter: ui.ImageFilter.blur(
+                                  sigmaX: isCompact ? 22 : (isDark ? 48 : 36),
+                                  sigmaY: isCompact ? 22 : (isDark ? 48 : 36),
                                 ),
-                                decoration: BoxDecoration(
-                                  color: isCompact
-                                      ? (isDark
-                                            ? const Color(0x73181822)
-                                            : Colors.white.withValues(
-                                                alpha: 0.88,
-                                              ))
-                                      : (isDark
-                                            ? const Color(0x704B4B52)
-                                            : Colors.white.withValues(
-                                                alpha: 0.24,
-                                              )),
-                                  gradient: !isCompact && isDark
-                                      ? const LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            Color(0x2AFFFFFF),
-                                            Color(0x12FFFFFF),
-                                            Color(0x08000000),
-                                          ],
-                                        )
-                                      : null,
-                                  borderRadius: BorderRadius.circular(
-                                    isCompact ? 18 : 22,
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: isCompact ? 12 : 20,
+                                    vertical: isCompact ? 10 : 12,
                                   ),
-                                  border: Border.all(
-                                    color: isDark
-                                        ? Colors.white.withValues(alpha: 0.17)
-                                        : themeBorder(context),
-                                    width: 1,
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: isDark ? 0.55 : 0.15,
-                                      ),
-                                      blurRadius: 32,
-                                      offset: const Offset(0, 10),
+                                  decoration: BoxDecoration(
+                                    color: isCompact
+                                        ? (isDark
+                                              ? const Color(0x73181822)
+                                              : Colors.white.withValues(
+                                                  alpha: 0.88,
+                                                ))
+                                        : (isDark
+                                              ? const Color(0x704B4B52)
+                                              : Colors.white.withValues(
+                                                  alpha: 0.24,
+                                                )),
+                                    gradient: !isCompact && isDark
+                                        ? const LinearGradient(
+                                            begin: Alignment.topCenter,
+                                            end: Alignment.bottomCenter,
+                                            colors: [
+                                              Color(0x2AFFFFFF),
+                                              Color(0x12FFFFFF),
+                                              Color(0x08000000),
+                                            ],
+                                          )
+                                        : null,
+                                    borderRadius: BorderRadius.circular(
+                                      isCompact ? 18 : 22,
                                     ),
-                                  ],
-                                ),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // Prominent Music Track Info & Artwork Pill
-                                    Padding(
-                                      padding: EdgeInsets.fromLTRB(
-                                        isCompact ? 2 : 6,
-                                        2,
-                                        isCompact ? 2 : 6,
-                                        isCompact ? 4 : 8,
+                                    border: Border.all(
+                                      color: isDark
+                                          ? Colors.white.withValues(alpha: 0.17)
+                                          : themeBorder(context),
+                                      width: 1,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(
+                                          alpha: isDark ? 0.55 : 0.15,
+                                        ),
+                                        blurRadius: 32,
+                                        offset: const Offset(0, 10),
                                       ),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.black
-                                                      .withValues(
-                                                        alpha: isDark
-                                                            ? 0.35
-                                                            : 0.15,
+                                    ],
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      // Prominent Music Track Info & Artwork Pill
+                                      if (!useVideoOverlay)
+                                        Padding(
+                                          padding: EdgeInsets.fromLTRB(
+                                            isCompact ? 2 : 6,
+                                            2,
+                                            isCompact ? 2 : 6,
+                                            isCompact ? 4 : 8,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Container(
+                                                decoration: BoxDecoration(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: Colors.black
+                                                          .withValues(
+                                                            alpha: isDark
+                                                                ? 0.35
+                                                                : 0.15,
+                                                          ),
+                                                      blurRadius: 6,
+                                                      offset: const Offset(
+                                                        0,
+                                                        2,
                                                       ),
-                                                  blurRadius: 6,
-                                                  offset: const Offset(0, 2),
-                                                ),
-                                              ],
-                                            ),
-                                            child: ThumbImage(
-                                              seed: media.id,
-                                              mediaId: media.id,
-                                              localPath: media.localPath,
-                                              size: isCompact ? 36 : 42,
-                                              radius: 8,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Text(
-                                                  displayTitle(media.title),
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: TextStyle(
-                                                    fontSize: isCompact
-                                                        ? 13.5
-                                                        : 15,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: textPrimary,
-                                                    letterSpacing: -0.2,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 2),
-                                                if (media.artist
-                                                        ?.trim()
-                                                        .isNotEmpty ==
-                                                    true)
-                                                  Text(
-                                                    formatCreatorNames(
-                                                      media.artist,
                                                     ),
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: TextStyle(
-                                                      fontSize: isCompact
-                                                          ? 11
-                                                          : 12,
-                                                      fontWeight:
-                                                          FontWeight.w500,
-                                                      color: textSub,
+                                                  ],
+                                                ),
+                                                child: ThumbImage(
+                                                  seed: media.id,
+                                                  mediaId: media.id,
+                                                  localPath: media.localPath,
+                                                  size: isCompact ? 36 : 42,
+                                                  radius: 8,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Text(
+                                                      displayTitle(media.title),
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                        fontSize: isCompact
+                                                            ? 13.5
+                                                            : 15,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color:
+                                                            playerTextPrimary,
+                                                        letterSpacing: -0.2,
+                                                      ),
                                                     ),
-                                                  ),
-                                              ],
+                                                    const SizedBox(height: 2),
+                                                    if (media.artist
+                                                            ?.trim()
+                                                            .isNotEmpty ==
+                                                        true)
+                                                      InkWell(
+                                                        onTap: () =>
+                                                            ref
+                                                                    .read(
+                                                                      creatorVideosRequestProvider
+                                                                          .notifier,
+                                                                    )
+                                                                    .state =
+                                                                formatCreatorNames(
+                                                                  media.artist,
+                                                                ),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              4,
+                                                            ),
+                                                        child: Text(
+                                                          formatCreatorNames(
+                                                            media.artist,
+                                                          ),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: TextStyle(
+                                                            fontSize: isCompact
+                                                                ? 11
+                                                                : 12,
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                            color:
+                                                                playerTextSub,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                  ],
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              // Expandable volume slider
+                                              _ExpandableVolume(
+                                                onHoverActivity:
+                                                    _onPointerHover,
+                                              ),
+                                              const SizedBox(width: 6),
+                                              // Speed Indicator Pill
+                                              _PlayerSpeedButton(
+                                                speed: q.speed,
+                                                tooltip: ref.tr(
+                                                  'playback_speed',
+                                                ),
+                                                onSelected: (s) =>
+                                                    ctl.setSpeed(s),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      // Floating Timeline Slider with Bubble Preview
+                                      if (useVideoOverlay || !fullPlayerView)
+                                        _FloatingTimeline(
+                                          desktop: !isCompact,
+                                          onHoverActivity: _onPointerHover,
+                                        ),
+                                      // Floating Transport Control buttons:
+                                      // [シャッフル] [前の曲] (再生/一時停止) [リピート]
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          // Shuffle
+                                          IconButton(
+                                            padding: EdgeInsets.all(
+                                              isUltraCompact
+                                                  ? 4
+                                                  : (isCompact ? 8 : 10),
+                                            ),
+                                            constraints: isUltraCompact
+                                                ? const BoxConstraints()
+                                                : null,
+                                            tooltip: ref.tr('shuffle'),
+                                            icon: TransportIcon.shuffle(
+                                              size: isUltraCompact
+                                                  ? 18
+                                                  : (isCompact ? 20 : 22),
+                                              color: useVideoOverlay
+                                                  ? (q.shuffle
+                                                        ? Colors.white
+                                                        : Colors.white70)
+                                                  : (q.shuffle
+                                                        ? textPrimary
+                                                        : (isDark
+                                                              ? Colors.white54
+                                                              : Colors
+                                                                    .black45)),
+                                            ),
+                                            onPressed: () {
+                                              _onPointerHover();
+                                              ref
+                                                  .read(queueProvider.notifier)
+                                                  .toggleShuffle();
+                                            },
+                                          ),
+                                          SizedBox(
+                                            width: isUltraCompact
+                                                ? 6
+                                                : (isCompact ? 10 : 12),
+                                          ),
+
+                                          // Prev
+                                          IconButton(
+                                            padding: EdgeInsets.all(
+                                              isUltraCompact
+                                                  ? 4
+                                                  : (isCompact ? 8 : 10),
+                                            ),
+                                            constraints: isUltraCompact
+                                                ? const BoxConstraints()
+                                                : null,
+                                            tooltip: ref.tr('prev_video'),
+                                            icon: TransportIcon.previous(
+                                              size: previousNextIconSize,
+                                              color: transportIconColor,
+                                            ),
+                                            onPressed: () {
+                                              _onPointerHover();
+                                              ctl.playPrev();
+                                            },
+                                          ),
+                                          SizedBox(
+                                            width: isUltraCompact
+                                                ? 6
+                                                : (isCompact ? 10 : 12),
+                                          ),
+
+                                          // Center Play / Pause button
+                                          Material(
+                                            color: isCompact
+                                                ? (isDark
+                                                      ? Colors.white
+                                                      : const Color(0xFF2B2B2B))
+                                                : Colors.transparent,
+                                            shape: const CircleBorder(),
+                                            elevation: isCompact ? 6 : 0,
+                                            child: InkWell(
+                                              customBorder:
+                                                  const CircleBorder(),
+                                              onTap: () {
+                                                _onPointerHover();
+                                                ctl.toggle();
+                                              },
+                                              child: Padding(
+                                                padding: EdgeInsets.all(
+                                                  isUltraCompact
+                                                      ? 8
+                                                      : (isCompact ? 10 : 18),
+                                                ),
+                                                child: _playPauseGlyph(
+                                                  snap.isPlaying,
+                                                  playPauseIconSize,
+                                                  playIconColor,
+                                                ),
+                                              ),
                                             ),
                                           ),
-                                          const SizedBox(width: 8),
-                                          // Expandable volume slider
-                                          _ExpandableVolume(
-                                            onHoverActivity: _onPointerHover,
+                                          SizedBox(
+                                            width: isUltraCompact
+                                                ? 6
+                                                : (isCompact ? 10 : 12),
                                           ),
-                                          const SizedBox(width: 6),
-                                          // Speed Indicator Pill
-                                          _PlayerSpeedButton(
-                                            speed: q.speed,
-                                            onSelected: (s) => ctl.setSpeed(s),
+
+                                          // Next
+                                          IconButton(
+                                            padding: EdgeInsets.all(
+                                              isUltraCompact
+                                                  ? 4
+                                                  : (isCompact ? 8 : 10),
+                                            ),
+                                            constraints: isUltraCompact
+                                                ? const BoxConstraints()
+                                                : null,
+                                            tooltip: ref.tr('next_video'),
+                                            icon: SkipNextIcon(
+                                              size: previousNextIconSize,
+                                              color: transportIconColor,
+                                            ),
+                                            onPressed: () {
+                                              _onPointerHover();
+                                              ctl.playNext();
+                                            },
+                                          ),
+                                          SizedBox(
+                                            width: isUltraCompact
+                                                ? 6
+                                                : (isCompact ? 10 : 12),
+                                          ),
+
+                                          // Repeat
+                                          IconButton(
+                                            padding: EdgeInsets.all(
+                                              isUltraCompact
+                                                  ? 4
+                                                  : (isCompact ? 8 : 10),
+                                            ),
+                                            constraints: isUltraCompact
+                                                ? const BoxConstraints()
+                                                : null,
+                                            tooltip: q.repeat == 'one'
+                                                ? ref.tr('repeat_one')
+                                                : (q.repeat == 'off'
+                                                      ? ref.tr('repeat_off')
+                                                      : ref.tr('repeat_all')),
+                                            icon: RepeatIcon(
+                                              size: isUltraCompact
+                                                  ? 18
+                                                  : (isCompact ? 20 : 22),
+                                              color: useVideoOverlay
+                                                  ? (q.repeat == 'off'
+                                                        ? Colors.white70
+                                                        : Colors.white)
+                                                  : (q.repeat == 'off'
+                                                        ? (isDark
+                                                              ? Colors.white54
+                                                              : Colors.black45)
+                                                        : textPrimary),
+                                              repeatMode: q.repeat,
+                                            ),
+                                            onPressed: () {
+                                              _onPointerHover();
+                                              ref
+                                                  .read(queueProvider.notifier)
+                                                  .cycleRepeat();
+                                            },
                                           ),
                                         ],
                                       ),
-                                    ),
-                                    // Floating Timeline Slider with Bubble Preview
-                                    _FloatingTimeline(
-                                      desktop: !isCompact,
-                                      onHoverActivity: _onPointerHover,
-                                    ),
-                                    // Floating Transport Control buttons:
-                                    // [シャッフル] [前の曲] (再生/一時停止) [リピート]
-                                    Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: [
-                                        // Shuffle
-                                        IconButton(
-                                          padding: EdgeInsets.all(
-                                            isUltraCompact
-                                                ? 4
-                                                : (isCompact ? 8 : 10),
-                                          ),
-                                          constraints: isUltraCompact
-                                              ? const BoxConstraints()
-                                              : null,
-                                          tooltip: 'シャッフル',
-                                          icon: TransportIcon.shuffle(
-                                            size: isUltraCompact
-                                                ? 18
-                                                : (isCompact ? 20 : 22),
-                                            color: q.shuffle
-                                                ? textPrimary
-                                                : (isDark
-                                                      ? Colors.white54
-                                                      : Colors.black45),
-                                          ),
-                                          onPressed: () {
-                                            _onPointerHover();
-                                            ref
-                                                .read(queueProvider.notifier)
-                                                .toggleShuffle();
-                                          },
-                                        ),
-                                        SizedBox(
-                                          width: isUltraCompact
-                                              ? 6
-                                              : (isCompact ? 10 : 12),
-                                        ),
-
-                                        // Prev
-                                        IconButton(
-                                          padding: EdgeInsets.all(
-                                            isUltraCompact
-                                                ? 4
-                                                : (isCompact ? 8 : 10),
-                                          ),
-                                          constraints: isUltraCompact
-                                              ? const BoxConstraints()
-                                              : null,
-                                          tooltip: '前の動画',
-                                          icon: TransportIcon.previous(
-                                            size: previousNextIconSize,
-                                            color: transportIconColor,
-                                          ),
-                                          onPressed: () {
-                                            _onPointerHover();
-                                            ctl.playPrev();
-                                          },
-                                        ),
-                                        SizedBox(
-                                          width: isUltraCompact
-                                              ? 6
-                                              : (isCompact ? 10 : 12),
-                                        ),
-
-                                        // Center Play / Pause button
-                                        Material(
-                                          color: isCompact
-                                              ? (isDark
-                                                    ? Colors.white
-                                                    : const Color(0xFF1E293B))
-                                              : Colors.transparent,
-                                          shape: const CircleBorder(),
-                                          elevation: isCompact ? 6 : 0,
-                                          child: InkWell(
-                                            customBorder: const CircleBorder(),
-                                            onTap: () {
-                                              _onPointerHover();
-                                              ctl.toggle();
-                                            },
-                                            child: Padding(
-                                              padding: EdgeInsets.all(
-                                                isUltraCompact
-                                                    ? 8
-                                                    : (isCompact ? 10 : 18),
-                                              ),
-                                              child: AnimatedIcon(
-                                                icon: AnimatedIcons.play_pause,
-                                                progress: _playPauseAnim,
-                                                color: playIconColor,
-                                                size: playPauseIconSize,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        SizedBox(
-                                          width: isUltraCompact
-                                              ? 6
-                                              : (isCompact ? 10 : 12),
-                                        ),
-
-                                        // Next (->)
-                                        IconButton(
-                                          padding: EdgeInsets.all(
-                                            isUltraCompact
-                                                ? 4
-                                                : (isCompact ? 8 : 10),
-                                          ),
-                                          constraints: isUltraCompact
-                                              ? const BoxConstraints()
-                                              : null,
-                                          tooltip: '次の動画',
-                                          icon: SkipNextIcon(
-                                            size: previousNextIconSize,
-                                            color: transportIconColor,
-                                          ),
-                                          onPressed: () {
-                                            _onPointerHover();
-                                            ctl.playNext();
-                                          },
-                                        ),
-                                        SizedBox(
-                                          width: isUltraCompact
-                                              ? 6
-                                              : (isCompact ? 10 : 12),
-                                        ),
-
-                                        // Repeat
-                                        IconButton(
-                                          padding: EdgeInsets.all(
-                                            isUltraCompact
-                                                ? 4
-                                                : (isCompact ? 8 : 10),
-                                          ),
-                                          constraints: isUltraCompact
-                                              ? const BoxConstraints()
-                                              : null,
-                                          tooltip: q.repeat == 'one'
-                                              ? '1曲リピート'
-                                              : (q.repeat == 'off'
-                                                    ? 'リピートなし'
-                                                    : '全曲リピート'),
-                                          icon: RepeatIcon(
-                                            size: isUltraCompact
-                                                ? 18
-                                                : (isCompact ? 20 : 22),
-                                            color: q.repeat == 'off'
-                                                ? (isDark
-                                                      ? Colors.white54
-                                                      : Colors.black45)
-                                                : textPrimary,
-                                            repeatMode: q.repeat,
-                                          ),
-                                          onPressed: () {
-                                            _onPointerHover();
-                                            ref
-                                                .read(queueProvider.notifier)
-                                                .cycleRepeat();
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -1198,23 +1649,6 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
                       ),
                     ),
                   ),
-                ),
-              ),
-            // Bottom slide-up Queue Sheet that never covers the video entirely (on compact / narrow view)
-            if (ref.watch(queueVisibleProvider) && isCompact && !isCinema)
-              Positioned(
-                left: 8,
-                right: 8,
-                bottom: 8,
-                height: (MediaQuery.sizeOf(context).height * 0.36)
-                    .clamp(220.0, 360.0)
-                    .toDouble(),
-                child: QueuePanel(
-                  width: double.infinity,
-                  margin: EdgeInsets.zero,
-                  onClose: () {
-                    ref.read(queueVisibleProvider.notifier).state = false;
-                  },
                 ),
               ),
           ],
@@ -1232,6 +1666,8 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     required PlaybackEngine engine,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final queue = ref.watch(queueProvider);
+    final controller = ref.read(playbackControllerProvider);
     return Scaffold(
       key: key,
       backgroundColor: Colors.black,
@@ -1267,20 +1703,105 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
             Positioned(
               top: MediaQuery.paddingOf(context).top + 8,
               right: 12,
-              child: AnimatedOpacity(
-                opacity: _compactCinemaControlsVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 180),
-                child: Material(
-                  color: isDark ? Colors.white : const Color(0xFF202127),
-                  shape: const CircleBorder(),
-                  elevation: 4,
-                  child: IconButton(
-                    tooltip: '通常表示に戻る',
-                    icon: const Icon(Icons.fullscreen_exit_rounded),
-                    color: isDark ? const Color(0xFF17171B) : Colors.white,
-                    onPressed: () {
-                      ref.read(cinemaModeProvider.notifier).state = false;
-                    },
+              child: IgnorePointer(
+                ignoring: !_compactCinemaControlsVisible,
+                child: ExcludeSemantics(
+                  excluding: !_compactCinemaControlsVisible,
+                  child: AnimatedOpacity(
+                    opacity: _compactCinemaControlsVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: Material(
+                      color: isDark ? Colors.white : const Color(0xFF232323),
+                      shape: const CircleBorder(),
+                      elevation: 4,
+                      child: IconButton(
+                        tooltip: ref.tr('restore_window'),
+                        icon: const Icon(Icons.fullscreen_exit_rounded),
+                        color: isDark ? const Color(0xFF181818) : Colors.white,
+                        onPressed: () {
+                          ref.read(cinemaModeProvider.notifier).state = false;
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: MediaQuery.paddingOf(context).bottom + 24,
+              child: IgnorePointer(
+                ignoring: !_compactCinemaControlsVisible,
+                child: ExcludeSemantics(
+                  excluding: !_compactCinemaControlsVisible,
+                  child: AnimatedOpacity(
+                    opacity: _compactCinemaControlsVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.48),
+                          borderRadius: BorderRadius.circular(32),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.12),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            PlaybackShuffleButton(
+                              activeColor: Colors.white,
+                              inactiveColor: Colors.white60,
+                            ),
+                            IconButton(
+                              tooltip: ref.tr('prev_video'),
+                              icon: TransportIcon.previous(
+                                size: 26,
+                                color: Colors.white,
+                              ),
+                              onPressed: queue.hasCurrent
+                                  ? controller.playPrev
+                                  : null,
+                            ),
+                            StreamBuilder<bool>(
+                              stream: engine.playingStream,
+                              initialData: engine.snapshot.isPlaying,
+                              builder: (context, state) => IconButton(
+                                tooltip: ref.tr(
+                                  state.data == true ? 'pause' : 'play',
+                                ),
+                                iconSize: 42,
+                                color: Colors.white,
+                                onPressed: queue.hasCurrent
+                                    ? controller.toggle
+                                    : null,
+                                icon: Icon(
+                                  state.data == true
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: ref.tr('next_video'),
+                              icon: SkipNextIcon(size: 26, color: Colors.white),
+                              onPressed: queue.hasCurrent
+                                  ? controller.playNext
+                                  : null,
+                            ),
+                            PlaybackRepeatButton(
+                              activeColor: Colors.white,
+                              inactiveColor: Colors.white60,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -1303,6 +1824,11 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     required PlaybackEngine engine,
   }) {
     final showQueue = ref.watch(queueVisibleProvider);
+    final isNarrowWindow = MediaQuery.sizeOf(context).width < 1000;
+    final showQueueSheet = showQueue && isNarrowWindow;
+    final useVideoOverlay = mode == PlayerViewMode.media;
+    final ambientLightEnabled = ref.watch(ambientLightProvider);
+    final fullPlayerView = ref.watch(viewingPlayerProvider);
     final title = displayTitle(media.title);
     final artist = formatCreatorNames(media.artist);
 
@@ -1310,525 +1836,747 @@ class _PlayerCardState extends ConsumerState<PlayerCard>
     final textPrimary = themeTextPrimary(context);
     final textSub = themeTextSub(context);
     final transportArrowColor = isDark
-        ? const Color(0xFFA8A8AC)
-        : const Color(0xFF5C5C60);
+        ? const Color(0xFFA9A9A9)
+        : const Color(0xFF5D5D5D);
     final playIconColor = isDark
-        ? const Color(0xFF9E9EA2)
-        : const Color(0xFF525256);
+        ? const Color(0xFF9F9F9F)
+        : const Color(0xFF535353);
     final compactPlayPauseSize = (MediaQuery.sizeOf(context).width * 0.14)
         .clamp(48.0, 56.0)
         .toDouble();
     final compactSkipSize = compactPlayPauseSize * 34 / 60;
 
-    return Scaffold(
-      key: key,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: Stack(
-        children: [
-          SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  physics: const ClampingScrollPhysics(),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight,
-                    ),
-                    child: IntrinsicHeight(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // 1. Top Bar: Down arrow (collapse) and Options
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.keyboard_arrow_down_rounded,
-                                    size: 30,
-                                  ),
-                                  color: textPrimary,
-                                  tooltip: 'ライブラリに戻る',
-                                  onPressed: () {
-                                    ref
-                                            .read(
-                                              viewingPlayerProvider.notifier,
-                                            )
-                                            .state =
-                                        false;
-                                    ref
-                                            .read(queueVisibleProvider.notifier)
-                                            .state =
-                                        false;
-                                  },
-                                ),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // Mode switcher (media / image)
-                                    IconButton(
-                                      icon: Icon(
-                                        mode == PlayerViewMode.media
-                                            ? Icons.image_rounded
-                                            : Icons.smart_display_rounded,
-                                        size: 22,
-                                        color: textPrimary,
-                                      ),
-                                      tooltip: mode == PlayerViewMode.media
-                                          ? '画像モードに切替'
-                                          : '動画モードに切替',
-                                      onPressed: () {
-                                        _onSwitchMode(
-                                          mode == PlayerViewMode.media
-                                              ? PlayerViewMode.image
-                                              : PlayerViewMode.media,
-                                        );
-                                      },
-                                    ),
-                                    // Fullscreen / Cinema mode button
-                                    IconButton(
-                                      icon: const Icon(
-                                        Icons.fullscreen_rounded,
-                                        size: 24,
-                                      ),
-                                      color: textPrimary,
-                                      tooltip: '大画面表示 (F / Cinema)',
-                                      onPressed: () {
-                                        ref
-                                                .read(
-                                                  cinemaModeProvider.notifier,
-                                                )
-                                                .state =
-                                            true;
-                                      },
-                                    ),
-                                    // Speed / More menu
-                                    PopupMenuButton<String>(
-                                      icon: Icon(
-                                        Icons.more_vert_rounded,
-                                        size: 24,
-                                        color: textPrimary,
-                                      ),
-                                      color: themePanelSolid(context),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(14),
-                                        side: BorderSide(
-                                          color: themeBorder(context),
-                                        ),
-                                      ),
-                                      onSelected: (val) {
-                                        if (val == 'add_to_playlist') {
-                                          _showAddToPlaylist(context, media);
-                                        }
-                                      },
-                                      itemBuilder: (ctx) => [
-                                        PopupMenuItem(
-                                          value: 'add_to_playlist',
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                Icons.playlist_add_rounded,
-                                                color: textPrimary,
-                                                size: 18,
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Text(
-                                                'プレイリストに追加',
-                                                style: TextStyle(
-                                                  color: textPrimary,
-                                                  fontSize: 13,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        const PopupMenuDivider(),
-                                        PopupMenuItem(
-                                          enabled: false,
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                Icons.speed_rounded,
-                                                color: textSub,
-                                                size: 18,
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Text(
-                                                '速度: ${q.speed}x',
-                                                style: TextStyle(
-                                                  color: textSub,
-                                                  fontSize: 13,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        for (final s in const [
-                                          0.5,
-                                          0.75,
-                                          1.0,
-                                          1.25,
-                                          1.5,
-                                          2.0,
-                                        ].reversed)
-                                          PopupMenuItem(
-                                            onTap: () => ctl.setSpeed(s),
-                                            height: 34,
-                                            child: Padding(
-                                              padding: const EdgeInsets.only(
-                                                left: 28,
-                                              ),
-                                              child: Text(
-                                                '${s == s.toInt() ? s.toInt() : s}x',
-                                                style: TextStyle(
-                                                  color: q.speed == s
-                                                      ? kAccentLight
-                                                      : textPrimary,
-                                                  fontWeight: q.speed == s
-                                                      ? FontWeight.bold
-                                                      : FontWeight.normal,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          const Spacer(flex: 1),
-
-                          // 2. Main Visual Area (16:9 Video or 1:1 Artwork)
-                          if (!_queueSheetExpanded)
+    return MouseRegion(
+      key: _playerHoverBoundsKey,
+      cursor: useVideoOverlay && !_controlsVisible
+          ? SystemMouseCursors.none
+          : SystemMouseCursors.basic,
+      onHover: (event) {
+        if (useVideoOverlay && mounted) {
+          _showControlsForPointer(event.position);
+        }
+      },
+      onExit: (_) {
+        if (!useVideoOverlay || !mounted) return;
+        _hideTimer?.cancel();
+        _pointerOverPlayer = false;
+        _lastPointerActivityPosition = null;
+        if (!_isLinearDragging) setState(() => _controlsVisible = false);
+      },
+      child: Scaffold(
+        key: key,
+        backgroundColor: ambientLightEnabled
+            ? Colors.transparent
+            : Theme.of(context).scaffoldBackgroundColor,
+        body: Stack(
+          children: [
+            // Keep the tap-away layer behind playback controls. The queue sheet
+            // itself remains above them, while controls outside it stay usable.
+            if (showQueueSheet)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    ref.read(queueVisibleProvider.notifier).state = false;
+                    setState(() => _queueSheetExpanded = false);
+                  },
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            SafeArea(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    physics: const ClampingScrollPhysics(),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight,
+                      ),
+                      child: IntrinsicHeight(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // 1. Top Bar: Down arrow (collapse) and Options
                             Padding(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
+                                horizontal: 8,
+                                vertical: 4,
                               ),
-                              child: Center(
+                              child: SizedBox(
+                                height: 48,
                                 child: LayoutBuilder(
-                                  builder: (context, visualConstraints) {
-                                    final isArtwork =
-                                        mode == PlayerViewMode.image;
-                                    final aspectRatio =
-                                        engine.videoAspectRatio ?? (16 / 9);
-                                    final maxVisualHeight =
-                                        MediaQuery.sizeOf(context).height *
-                                        (isArtwork ? 0.4 : 0.48);
-                                    final maxVisualWidth = isArtwork
-                                        ? visualConstraints.maxWidth * 0.82
-                                        : visualConstraints.maxWidth;
-                                    // Fit the actual media ratio inside both
-                                    // viewport bounds. This avoids adding a
-                                    // second set of bars around unusual MVs.
-                                    final visualWidth = math.min(
-                                      maxVisualWidth,
-                                      maxVisualHeight * aspectRatio,
-                                    );
-                                    final visualHeight =
-                                        visualWidth / aspectRatio;
-                                    return SizedBox(
-                                      width: visualWidth,
-                                      height: visualHeight,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: Colors.black,
-                                          borderRadius: BorderRadius.circular(
-                                            16,
+                                  builder: (context, toolbarConstraints) {
+                                    final narrowToolbar =
+                                        toolbarConstraints.maxWidth < 360;
+                                    return Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(
+                                            Icons.keyboard_arrow_down_rounded,
+                                            size: 30,
                                           ),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: Colors.black.withValues(
-                                                alpha: isDark ? 0.6 : 0.15,
+                                          color: textPrimary,
+                                          tooltip: ref.tr('library'),
+                                          onPressed: () {
+                                            ref
+                                                    .read(
+                                                      viewingPlayerProvider
+                                                          .notifier,
+                                                    )
+                                                    .state =
+                                                false;
+                                            ref
+                                                    .read(
+                                                      queueVisibleProvider
+                                                          .notifier,
+                                                    )
+                                                    .state =
+                                                false;
+                                          },
+                                        ),
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            // Mode switcher (media / image)
+                                            IconButton(
+                                              icon: Icon(
+                                                mode == PlayerViewMode.media
+                                                    ? Icons.image_rounded
+                                                    : Icons
+                                                          .smart_display_rounded,
+                                                size: 22,
+                                                color: textPrimary,
                                               ),
-                                              blurRadius: 24,
-                                              offset: const Offset(0, 8),
+                                              tooltip:
+                                                  mode == PlayerViewMode.media
+                                                  ? ref.tr('image_mode')
+                                                  : ref.tr('video_mode'),
+                                              onPressed: () {
+                                                _onSwitchMode(
+                                                  mode == PlayerViewMode.media
+                                                      ? PlayerViewMode.image
+                                                      : PlayerViewMode.media,
+                                                );
+                                              },
+                                            ),
+                                            if (isNarrowWindow)
+                                              IconButton(
+                                                tooltip: showQueueSheet
+                                                    ? ref.tr('hide_queue')
+                                                    : ref.tr('next_contents'),
+                                                icon: Icon(
+                                                  Icons.queue_music_rounded,
+                                                  size: 22,
+                                                  color: showQueueSheet
+                                                      ? kAccent
+                                                      : textPrimary,
+                                                ),
+                                                onPressed: () {
+                                                  final open = !showQueueSheet;
+                                                  if (open) {
+                                                    ref
+                                                            .read(
+                                                              lyricsPanelProvider
+                                                                  .notifier,
+                                                            )
+                                                            .state =
+                                                        false;
+                                                  }
+                                                  ref
+                                                          .read(
+                                                            queueVisibleProvider
+                                                                .notifier,
+                                                          )
+                                                          .state =
+                                                      open;
+                                                },
+                                              ),
+                                            if (!narrowToolbar)
+                                              IconButton(
+                                                tooltip: ref.tr('immersive'),
+                                                icon: const AppSvgIcon(
+                                                  'immersive',
+                                                ),
+                                                onPressed: () =>
+                                                    ref
+                                                            .read(
+                                                              immersiveModeProvider
+                                                                  .notifier,
+                                                            )
+                                                            .state =
+                                                        true,
+                                              ),
+                                            // Fullscreen / Cinema mode button
+                                            if (!narrowToolbar)
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.fullscreen_rounded,
+                                                  size: 24,
+                                                ),
+                                                color: textPrimary,
+                                                tooltip:
+                                                    '${ref.tr('fullscreen')} (F)',
+                                                onPressed: () {
+                                                  ref
+                                                          .read(
+                                                            cinemaModeProvider
+                                                                .notifier,
+                                                          )
+                                                          .state =
+                                                      true;
+                                                },
+                                              ),
+                                            // Speed / More menu
+                                            PopupMenuButton<String>(
+                                              icon: Icon(
+                                                Icons.more_vert_rounded,
+                                                size: 24,
+                                                color: textPrimary,
+                                              ),
+                                              color: themePanelSolid(context),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(14),
+                                                side: BorderSide(
+                                                  color: themeBorder(context),
+                                                ),
+                                              ),
+                                              onSelected: (val) {
+                                                if (val == 'add_to_playlist') {
+                                                  _showAddToPlaylist(
+                                                    context,
+                                                    media,
+                                                  );
+                                                } else if (val ==
+                                                    'save_to_library') {
+                                                  unawaited(
+                                                    _saveTemporaryToLibrary(
+                                                      context,
+                                                      media,
+                                                    ),
+                                                  );
+                                                } else if (val == 'immersive') {
+                                                  ref
+                                                          .read(
+                                                            immersiveModeProvider
+                                                                .notifier,
+                                                          )
+                                                          .state =
+                                                      true;
+                                                } else if (val ==
+                                                    'fullscreen') {
+                                                  ref
+                                                          .read(
+                                                            cinemaModeProvider
+                                                                .notifier,
+                                                          )
+                                                          .state =
+                                                      true;
+                                                }
+                                              },
+                                              itemBuilder: (ctx) => [
+                                                if (narrowToolbar) ...[
+                                                  PopupMenuItem(
+                                                    value: 'immersive',
+                                                    child: Row(
+                                                      children: [
+                                                        const AppSvgIcon(
+                                                          'immersive',
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 10,
+                                                        ),
+                                                        Text(
+                                                          ref.tr('immersive'),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  PopupMenuItem(
+                                                    value: 'fullscreen',
+                                                    child: Row(
+                                                      children: [
+                                                        const Icon(
+                                                          Icons
+                                                              .fullscreen_rounded,
+                                                          size: 18,
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 10,
+                                                        ),
+                                                        Text(
+                                                          ref.tr('fullscreen'),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  const PopupMenuDivider(),
+                                                ],
+                                                if (media.isTemporary)
+                                                  PopupMenuItem(
+                                                    value: 'save_to_library',
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons
+                                                              .library_add_rounded,
+                                                          size: 18,
+                                                        ),
+                                                        SizedBox(width: 10),
+                                                        Text(
+                                                          ref.tr(
+                                                            'save_library',
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                PopupMenuItem(
+                                                  value: 'add_to_playlist',
+                                                  child: Row(
+                                                    children: [
+                                                      Icon(
+                                                        Icons
+                                                            .playlist_add_rounded,
+                                                        color: textPrimary,
+                                                        size: 18,
+                                                      ),
+                                                      const SizedBox(width: 10),
+                                                      Text(
+                                                        ref.tr('add_playlist'),
+                                                        style: TextStyle(
+                                                          color: textPrimary,
+                                                          fontSize: 13,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                const PopupMenuDivider(),
+                                                PopupMenuItem(
+                                                  enabled: false,
+                                                  child: Row(
+                                                    children: [
+                                                      Icon(
+                                                        Icons.speed_rounded,
+                                                        color: textSub,
+                                                        size: 18,
+                                                      ),
+                                                      const SizedBox(width: 10),
+                                                      Text(
+                                                        '${ref.tr('playback_speed')}: ${q.speed}x',
+                                                        style: TextStyle(
+                                                          color: textSub,
+                                                          fontSize: 13,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                for (final s in const [
+                                                  0.5,
+                                                  0.75,
+                                                  1.0,
+                                                  1.25,
+                                                  1.5,
+                                                  2.0,
+                                                ].reversed)
+                                                  PopupMenuItem(
+                                                    onTap: () =>
+                                                        ctl.setSpeed(s),
+                                                    height: 34,
+                                                    child: Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                            left: 28,
+                                                          ),
+                                                      child: Text(
+                                                        '${s == s.toInt() ? s.toInt() : s}x',
+                                                        style: TextStyle(
+                                                          color: q.speed == s
+                                                              ? kAccentLight
+                                                              : textPrimary,
+                                                          fontWeight:
+                                                              q.speed == s
+                                                              ? FontWeight.bold
+                                                              : FontWeight
+                                                                    .normal,
+                                                          fontSize: 12,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
                                             ),
                                           ],
                                         ),
-                                        clipBehavior: Clip.antiAlias,
-                                        child: GestureDetector(
-                                          behavior: HitTestBehavior.opaque,
-                                          onTap: () => ctl.toggle(),
-                                          child: mode == PlayerViewMode.media
-                                              ? (snap.initialized
-                                                    ? Stack(
-                                                        fit: StackFit.expand,
-                                                        children: [
-                                                          ThumbImage(
-                                                            seed: media.id,
-                                                            mediaId: media.id,
-                                                            localPath:
-                                                                media.localPath,
-                                                            expand: true,
-                                                          ),
-                                                          engine
-                                                              .buildVideoView(),
-                                                        ],
-                                                      )
-                                                    : ThumbImage(
-                                                        seed: media.id,
-                                                        mediaId: media.id,
-                                                        localPath:
-                                                            media.localPath,
-                                                        expand: true,
-                                                      ))
-                                              : ThumbImage(
-                                                  seed: media.id,
-                                                  mediaId: media.id,
-                                                  localPath: media.localPath,
-                                                  expand: true,
-                                                  highRes: true,
-                                                ),
-                                        ),
-                                      ),
+                                      ],
                                     );
                                   },
                                 ),
                               ),
                             ),
 
-                          const Spacer(flex: 1),
+                            const Spacer(flex: 1),
 
-                          // 3. Track Info (Title & Artist)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 24),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  title,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w800,
-                                    color: textPrimary,
-                                    letterSpacing: -0.5,
-                                    height: 1.2,
+                            // 2. Main Visual Area (16:9 Video or 1:1 Artwork)
+                            if (!_queueSheetExpanded)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
+                                child: Center(
+                                  child: Builder(
+                                    builder: (context) {
+                                      final isArtwork =
+                                          mode == PlayerViewMode.image;
+                                      final safePadding = MediaQuery.paddingOf(
+                                        context,
+                                      );
+                                      final aspectRatio = isArtwork
+                                          ? 1.0
+                                          : (engine.videoAspectRatio ??
+                                                (16 / 9));
+                                      final maxVisualHeight =
+                                          MediaQuery.sizeOf(context).height *
+                                          (isArtwork ? 0.4 : 0.48);
+                                      final maxVisualWidth = isArtwork
+                                          ? (MediaQuery.sizeOf(context).width -
+                                                    safePadding.horizontal -
+                                                    32) *
+                                                0.82
+                                          : MediaQuery.sizeOf(context).width -
+                                                safePadding.horizontal -
+                                                32;
+                                      // Fit the square sleeve or source video
+                                      // frame inside the viewport without overflow.
+                                      final visualWidth = math.min(
+                                        maxVisualWidth,
+                                        maxVisualHeight * aspectRatio,
+                                      );
+                                      final visualHeight =
+                                          visualWidth / aspectRatio;
+                                      return SizedBox(
+                                        width: visualWidth,
+                                        height: visualHeight,
+                                        child: Stack(
+                                          clipBehavior: Clip.none,
+                                          children: [
+                                            Positioned.fill(
+                                              child: Container(
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black,
+                                                  borderRadius:
+                                                      BorderRadius.circular(16),
+                                                  boxShadow: ambientLightEnabled
+                                                      ? null
+                                                      : [
+                                                          BoxShadow(
+                                                            color: Colors.black
+                                                                .withValues(
+                                                                  alpha: isDark
+                                                                      ? 0.6
+                                                                      : 0.15,
+                                                                ),
+                                                            blurRadius: 24,
+                                                            offset:
+                                                                const Offset(
+                                                                  0,
+                                                                  8,
+                                                                ),
+                                                          ),
+                                                        ],
+                                                ),
+                                                clipBehavior: Clip.antiAlias,
+                                                child: GestureDetector(
+                                                  behavior:
+                                                      HitTestBehavior.opaque,
+                                                  onTap: () => ctl.toggle(),
+                                                  child:
+                                                      mode ==
+                                                          PlayerViewMode.media
+                                                      ? (snap.initialized
+                                                            ? Stack(
+                                                                fit: StackFit
+                                                                    .expand,
+                                                                children: [
+                                                                  ThumbImage(
+                                                                    seed: media
+                                                                        .id,
+                                                                    mediaId:
+                                                                        media
+                                                                            .id,
+                                                                    localPath: media
+                                                                        .localPath,
+                                                                    expand:
+                                                                        true,
+                                                                  ),
+                                                                  if (engine
+                                                                          .videoAspectRatio !=
+                                                                      null)
+                                                                    _videoSurface(
+                                                                      engine,
+                                                                    ),
+                                                                ],
+                                                              )
+                                                            : ThumbImage(
+                                                                seed: media.id,
+                                                                mediaId:
+                                                                    media.id,
+                                                                localPath: media
+                                                                    .localPath,
+                                                                expand: true,
+                                                              ))
+                                                      : ThumbImage(
+                                                          seed: media.id,
+                                                          mediaId: media.id,
+                                                          localPath:
+                                                              media.localPath,
+                                                          expand: true,
+                                                          highRes: true,
+                                                        ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
                                   ),
                                 ),
-                                if (artist.isNotEmpty) ...[
-                                  const SizedBox(height: 6),
-                                  InkWell(
-                                    onTap: () =>
-                                        ref
-                                                .read(
-                                                  creatorVideosRequestProvider
-                                                      .notifier,
-                                                )
-                                                .state =
-                                            artist,
-                                    borderRadius: BorderRadius.circular(6),
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 2,
+                              ),
+
+                            const Spacer(flex: 1),
+
+                            // 3. Track Info (Title & Artist)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          title,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w800,
+                                            color: textPrimary,
+                                            letterSpacing: -0.5,
+                                            height: 1.2,
+                                          ),
+                                        ),
                                       ),
-                                      child: Text(
-                                        artist,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.w500,
-                                          color: textSub,
+                                      const SleepTimerButton(),
+                                      FavoriteButton(mediaId: media.id),
+                                    ],
+                                  ),
+                                  if (artist.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    InkWell(
+                                      onTap: () =>
+                                          ref
+                                                  .read(
+                                                    creatorVideosRequestProvider
+                                                        .notifier,
+                                                  )
+                                                  .state =
+                                              artist,
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 2,
+                                        ),
+                                        child: Text(
+                                          artist,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w500,
+                                            color: textSub,
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
-                          ),
 
-                          const SizedBox(height: 18),
+                            const SizedBox(height: 18),
 
-                          // 4. Seekbar + Time indicators underneath
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            child: _MobileTimeline(engine: engine, ctl: ctl),
-                          ),
-
-                          const SizedBox(height: 12),
-
-                          // 5. Transport Bar (Shuffle, Prev, Play/Pause Circle, Repeat)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                // Shuffle
-                                IconButton(
-                                  tooltip: 'シャッフル',
-                                  icon: TransportIcon.shuffle(
-                                    size: 26,
-                                    color: q.shuffle ? textPrimary : textSub,
-                                  ),
-                                  onPressed: () {
-                                    ref
-                                        .read(queueProvider.notifier)
-                                        .toggleShuffle();
-                                  },
-                                ),
-
-                                // Skip Previous
-                                IconButton(
-                                  tooltip: '前の動画',
-                                  icon: TransportIcon.previous(
-                                    size: compactSkipSize,
-                                    color: transportArrowColor,
-                                  ),
-                                  onPressed: () => ctl.playPrev(),
-                                ),
-
-                                // Play / Pause Button
-                                Material(
-                                  color: Colors.transparent,
-                                  shape: const CircleBorder(),
-                                  elevation: 0,
-                                  child: InkWell(
-                                    customBorder: const CircleBorder(),
-                                    onTap: () => ctl.toggle(),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(16),
-                                      child: AnimatedIcon(
-                                        icon: AnimatedIcons.play_pause,
-                                        progress: _playPauseAnim,
-                                        color: playIconColor,
-                                        size: compactPlayPauseSize,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-
-                                // Skip Next
-                                IconButton(
-                                  tooltip: '次の動画',
-                                  icon: SkipNextIcon(
-                                    size: compactSkipSize,
-                                    color: transportArrowColor,
-                                  ),
-                                  onPressed: () => ctl.playNext(),
-                                ),
-
-                                // Repeat
-                                IconButton(
-                                  tooltip: q.repeat == 'one'
-                                      ? '1曲リピート'
-                                      : (q.repeat == 'off'
-                                            ? 'リピートなし'
-                                            : '全曲リピート'),
-                                  icon: RepeatIcon(
-                                    size: 26,
-                                    color: q.repeat == 'off'
-                                        ? textSub
-                                        : textPrimary,
-                                    repeatMode: q.repeat,
-                                  ),
-                                  onPressed: () {
-                                    ref
-                                        .read(queueProvider.notifier)
-                                        .cycleRepeat();
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          const SizedBox(height: 18),
-
-                          // Give the upcoming queue a clear, labeled entry point
-                          // on phones instead of relying on the small toolbar icon.
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 24),
-                            child: OutlinedButton.icon(
-                              onPressed: () {
-                                ref.read(queueVisibleProvider.notifier).state =
-                                    true;
-                              },
-                              icon: const Icon(Icons.queue_music_rounded),
-                              label: const Text('次のコンテンツ'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: textPrimary,
-                                side: BorderSide(
-                                  color: isDark
-                                      ? Colors.white24
-                                      : Colors.black26,
-                                ),
+                            // 4. Seekbar + Time indicators underneath
+                            if (!fullPlayerView)
+                              Padding(
                                 padding: const EdgeInsets.symmetric(
-                                  vertical: 13,
+                                  horizontal: 14,
                                 ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
+                                child: _MobileTimeline(
+                                  engine: engine,
+                                  ctl: ctl,
+                                ),
+                              ),
+
+                            const SizedBox(height: 12),
+
+                            // 5. Transport Bar (Shuffle, Prev, Play/Pause Circle, Repeat)
+                            AnimatedOpacity(
+                              key: useVideoOverlay
+                                  ? const ValueKey('compact-player-transport')
+                                  : null,
+                              opacity: useVideoOverlay
+                                  ? (_controlsVisible ? 1 : 0)
+                                  : 1,
+                              duration: const Duration(milliseconds: 240),
+                              curve: Curves.easeInOut,
+                              child: IgnorePointer(
+                                ignoring: useVideoOverlay && !_controlsVisible,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceEvenly,
+                                    children: [
+                                      // Shuffle
+                                      IconButton(
+                                        tooltip: ref.tr('shuffle'),
+                                        icon: TransportIcon.shuffle(
+                                          size: 26,
+                                          color: q.shuffle
+                                              ? textPrimary
+                                              : textSub,
+                                        ),
+                                        onPressed: () {
+                                          ref
+                                              .read(queueProvider.notifier)
+                                              .toggleShuffle();
+                                        },
+                                      ),
+
+                                      // Skip Previous
+                                      IconButton(
+                                        tooltip: ref.tr('prev_video'),
+                                        icon: TransportIcon.previous(
+                                          size: compactSkipSize,
+                                          color: transportArrowColor,
+                                        ),
+                                        onPressed: () => ctl.playPrev(),
+                                      ),
+
+                                      // Play / Pause Button
+                                      Material(
+                                        color: Colors.transparent,
+                                        shape: const CircleBorder(),
+                                        elevation: 0,
+                                        child: InkWell(
+                                          customBorder: const CircleBorder(),
+                                          onTap: () => ctl.toggle(),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(16),
+                                            child: _playPauseGlyph(
+                                              snap.isPlaying,
+                                              compactPlayPauseSize,
+                                              playIconColor,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+
+                                      // Skip Next
+                                      IconButton(
+                                        tooltip: ref.tr('next_video'),
+                                        icon: SkipNextIcon(
+                                          size: compactSkipSize,
+                                          color: transportArrowColor,
+                                        ),
+                                        onPressed: () => ctl.playNext(),
+                                      ),
+
+                                      // Repeat
+                                      IconButton(
+                                        tooltip: q.repeat == 'one'
+                                            ? ref.tr('repeat_one')
+                                            : (q.repeat == 'off'
+                                                  ? ref.tr('repeat_off')
+                                                  : ref.tr('repeat_all')),
+                                        icon: RepeatIcon(
+                                          size: 26,
+                                          color: q.repeat == 'off'
+                                              ? textSub
+                                              : textPrimary,
+                                          repeatMode: q.repeat,
+                                        ),
+                                        onPressed: () {
+                                          ref
+                                              .read(queueProvider.notifier)
+                                              .cycleRepeat();
+                                        },
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
 
-                          const Spacer(flex: 1),
-                        ],
+                            const SizedBox(height: 18),
+
+                            const Spacer(flex: 1),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
-          ),
 
-          // Slide-up queue sheet for mobile
-          if (showQueue)
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  ref.read(queueVisibleProvider.notifier).state = false;
-                  setState(() => _queueSheetExpanded = false);
-                },
-                child: const SizedBox.expand(),
-              ),
-            ),
-          if (showQueue)
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 320),
-              curve: Curves.easeOutCubic,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height:
-                  MediaQuery.of(context).size.height *
-                  (_queueSheetExpanded ? 0.88 : 0.52),
-              child: QueuePanel(
-                width: double.infinity,
-                margin: EdgeInsets.zero,
-                showCompactPreview: _queueSheetExpanded,
-                compactPreview: SizedBox(
-                  width: 112,
-                  height: 63,
-                  child: ThumbImage(
-                    seed: media.id,
-                    mediaId: media.id,
-                    localPath: media.localPath,
-                    expand: true,
+            // Slide-up queue sheet for mobile
+            if (showQueueSheet)
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 320),
+                curve: Curves.easeOutCubic,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height:
+                    MediaQuery.of(context).size.height *
+                    (_queueSheetExpanded ? 0.88 : 0.52),
+                child: QueuePanel(
+                  width: double.infinity,
+                  ambient: ambientLightEnabled,
+                  margin: EdgeInsets.zero,
+                  showCompactPreview: _queueSheetExpanded,
+                  compactPreview: SizedBox(
+                    width: 112,
+                    height: 63,
+                    child: ThumbImage(
+                      seed: media.id,
+                      mediaId: media.id,
+                      localPath: media.localPath,
+                      expand: true,
+                    ),
                   ),
+                  onToggleExpanded: () {
+                    setState(() => _queueSheetExpanded = !_queueSheetExpanded);
+                  },
+                  onClose: () {
+                    ref.read(queueVisibleProvider.notifier).state = false;
+                    setState(() => _queueSheetExpanded = false);
+                  },
                 ),
-                onToggleExpanded: () {
-                  setState(() => _queueSheetExpanded = !_queueSheetExpanded);
-                },
-                onClose: () {
-                  ref.read(queueVisibleProvider.notifier).state = false;
-                  setState(() => _queueSheetExpanded = false);
-                },
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1850,6 +2598,10 @@ class _FloatingTimeline extends ConsumerStatefulWidget {
 class _FloatingTimelineState extends ConsumerState<_FloatingTimeline> {
   bool _isDragging = false;
   double _draggedMs = 0.0;
+  double? _pendingSeekMs;
+  bool _seekCommandReturned = false;
+  int _seekGeneration = 0;
+  Timer? _seekSettleTimer;
   bool _hover = false;
   double _hoverFraction = 0.0;
   double _hoverPixelX = 0.0;
@@ -1860,13 +2612,24 @@ class _FloatingTimelineState extends ConsumerState<_FloatingTimeline> {
     super.initState();
     final engine = ref.read(engineProvider);
     _sub = engine.snapshots.listen((_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      final target = _pendingSeekMs;
+      if (_seekCommandReturned &&
+          target != null &&
+          (engine.snapshot.position.inMilliseconds - target).abs() <= 250) {
+        _seekSettleTimer?.cancel();
+        _pendingSeekMs = null;
+        _seekCommandReturned = false;
+        _isDragging = false;
+      }
+      setState(() {});
     }, onError: (_) {});
   }
 
   @override
   void dispose() {
     _sub?.cancel();
+    _seekSettleTimer?.cancel();
     super.dispose();
   }
 
@@ -1877,10 +2640,10 @@ class _FloatingTimelineState extends ConsumerState<_FloatingTimeline> {
     final snap = engine.snapshot;
     final primaryControlColor = themeTextPrimary(context);
     final activeSeekColor = widget.desktop
-        ? const Color(0xFFA0A0A3)
+        ? const Color(0xFFA1A1A1)
         : primaryControlColor;
     final inactiveSeekColor = widget.desktop
-        ? const Color(0xFF66666A)
+        ? const Color(0xFF676767)
         : Colors.white24;
     final seekThumbColor = widget.desktop
         ? const Color(0xFFD0D0D2)
@@ -1896,176 +2659,230 @@ class _FloatingTimelineState extends ConsumerState<_FloatingTimeline> {
     final hoverTargetMs = (dur.inMilliseconds * _hoverFraction).toInt();
     final hoverTargetDuration = Duration(milliseconds: hoverTargetMs);
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Hover / Drag Time Bubble preview positioned directly above the cursor
-        SizedBox(
-          height: 22,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              if (isInteracting && dur.inMilliseconds > 0)
-                Positioned(
-                  left: (_hoverPixelX - 28).clamp(
-                    timeLabelWidth,
-                    MediaQuery.of(context).size.width - timeLabelWidth - 56,
-                  ),
-                  bottom: 2,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 7,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.8),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.25),
-                        width: 1,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.3),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Text(
-                      fmtDuration(
-                        _isDragging ? displayPos : hoverTargetDuration,
-                      ),
-                      style: const TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        fontFeatures: [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-
-        Row(
+    return LayoutBuilder(
+      builder: (context, timelineConstraints) {
+        final timelineWidth = timelineConstraints.maxWidth;
+        final bubbleWidth = timeLabelWidth + 16;
+        final maxBubbleLeft = math.max(
+          0.0,
+          timelineWidth - timeLabelWidth - bubbleWidth,
+        );
+        final minBubbleLeft = math.min(timeLabelWidth, maxBubbleLeft);
+        final bubbleLeft = (_hoverPixelX - bubbleWidth / 2)
+            .clamp(minBubbleLeft, maxBubbleLeft)
+            .toDouble();
+        return Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
+            // Hover / Drag Time Bubble preview positioned directly above the cursor
             SizedBox(
-              width: timeLabelWidth,
-              child: Text(
-                fmtDuration(displayPos),
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
-            ),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  return MouseRegion(
-                    onEnter: (e) {
-                      widget.onHoverActivity();
-                      setState(() {
-                        _hover = true;
-                        _hoverPixelX = e.localPosition.dx + timeLabelWidth;
-                        _hoverFraction =
-                            (e.localPosition.dx / constraints.maxWidth).clamp(
-                              0.0,
-                              1.0,
-                            );
-                      });
-                    },
-                    onHover: (e) {
-                      widget.onHoverActivity();
-                      setState(() {
-                        _hover = true;
-                        _hoverPixelX = e.localPosition.dx + timeLabelWidth;
-                        _hoverFraction =
-                            (e.localPosition.dx / constraints.maxWidth).clamp(
-                              0.0,
-                              1.0,
-                            );
-                      });
-                    },
-                    onExit: (_) => setState(() => _hover = false),
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: isInteracting ? 5 : 3.5,
-                        thumbShape: RoundSliderThumbShape(
-                          enabledThumbRadius: isInteracting ? 7 : 4.5,
-                          elevation: 2,
+              height: 22,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  if (isInteracting && dur.inMilliseconds > 0)
+                    Positioned(
+                      left: bubbleLeft,
+                      bottom: 2,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
                         ),
-                        activeTrackColor: activeSeekColor,
-                        inactiveTrackColor: inactiveSeekColor,
-                        thumbColor: seekThumbColor,
-                        overlayColor: activeSeekColor.withValues(alpha: 0.15),
-                        overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 10,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.8),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.25),
+                            width: 1,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
-                      ),
-                      child: Slider(
-                        value: dur.inMilliseconds == 0
-                            ? 0
-                            : displayPos.inMilliseconds
-                                  .clamp(0, dur.inMilliseconds)
-                                  .toDouble(),
-                        max: (dur.inMilliseconds <= 0 ? 1 : dur.inMilliseconds)
-                            .toDouble(),
-                        onChangeStart: (v) {
-                          widget.onHoverActivity();
-                          setState(() {
-                            _isDragging = true;
-                            _draggedMs = v;
-                          });
-                        },
-                        onChanged: (v) {
-                          widget.onHoverActivity();
-                          setState(() {
-                            _draggedMs = v;
-                            if (dur.inMilliseconds > 0) {
-                              _hoverPixelX =
-                                  (v / dur.inMilliseconds) *
-                                      constraints.maxWidth +
-                                  timeLabelWidth;
-                            }
-                          });
-                        },
-                        onChangeEnd: (v) async {
-                          widget.onHoverActivity();
-                          _draggedMs = v;
-                          await ctl.seekTo(Duration(milliseconds: v.toInt()));
-                          if (mounted) {
-                            setState(() {
-                              _isDragging = false;
-                            });
-                          }
-                        },
+                        child: Text(
+                          fmtDuration(
+                            _isDragging ? displayPos : hoverTargetDuration,
+                          ),
+                          style: const TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
                       ),
                     ),
-                  );
-                },
+                ],
               ),
             ),
-            SizedBox(
-              width: timeLabelWidth,
-              child: Text(
-                fmtDuration(dur),
-                textAlign: TextAlign.right,
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: [FontFeature.tabularFigures()],
+
+            Row(
+              children: [
+                SizedBox(
+                  width: timeLabelWidth,
+                  child: Text(
+                    fmtDuration(displayPos),
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
                 ),
-              ),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return MouseRegion(
+                        onEnter: (e) {
+                          widget.onHoverActivity();
+                          setState(() {
+                            _hover = true;
+                            _hoverPixelX = e.localPosition.dx + timeLabelWidth;
+                            _hoverFraction =
+                                (e.localPosition.dx / constraints.maxWidth)
+                                    .clamp(0.0, 1.0);
+                          });
+                        },
+                        onHover: (e) {
+                          widget.onHoverActivity();
+                          setState(() {
+                            _hover = true;
+                            _hoverPixelX = e.localPosition.dx + timeLabelWidth;
+                            _hoverFraction =
+                                (e.localPosition.dx / constraints.maxWidth)
+                                    .clamp(0.0, 1.0);
+                          });
+                        },
+                        onExit: (_) => setState(() => _hover = false),
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: isInteracting ? 5 : 3.5,
+                            thumbShape: RoundSliderThumbShape(
+                              enabledThumbRadius: isInteracting ? 7 : 4.5,
+                              elevation: 2,
+                            ),
+                            activeTrackColor: activeSeekColor,
+                            inactiveTrackColor: inactiveSeekColor,
+                            thumbColor: seekThumbColor,
+                            overlayColor: activeSeekColor.withValues(
+                              alpha: 0.15,
+                            ),
+                            overlayShape: const RoundSliderOverlayShape(
+                              overlayRadius: 10,
+                            ),
+                          ),
+                          child: Slider(
+                            value: dur.inMilliseconds == 0
+                                ? 0
+                                : displayPos.inMilliseconds
+                                      .clamp(0, dur.inMilliseconds)
+                                      .toDouble(),
+                            max:
+                                (dur.inMilliseconds <= 0
+                                        ? 1
+                                        : dur.inMilliseconds)
+                                    .toDouble(),
+                            onChangeStart: (v) {
+                              widget.onHoverActivity();
+                              _seekSettleTimer?.cancel();
+                              _seekGeneration++;
+                              _pendingSeekMs = null;
+                              _seekCommandReturned = false;
+                              setState(() {
+                                _isDragging = true;
+                                _draggedMs = v;
+                              });
+                            },
+                            onChanged: (v) {
+                              widget.onHoverActivity();
+                              setState(() {
+                                _draggedMs = v;
+                                if (dur.inMilliseconds > 0) {
+                                  _hoverPixelX =
+                                      (v / dur.inMilliseconds) *
+                                          constraints.maxWidth +
+                                      timeLabelWidth;
+                                }
+                              });
+                            },
+                            onChangeEnd: (v) async {
+                              widget.onHoverActivity();
+                              final generation = ++_seekGeneration;
+                              final targetMs = v.toDouble();
+                              setState(() {
+                                _draggedMs = targetMs;
+                                _pendingSeekMs = targetMs;
+                                _seekCommandReturned = false;
+                                _isDragging = true;
+                              });
+                              try {
+                                await ctl.seekTo(
+                                  Duration(milliseconds: targetMs.toInt()),
+                                );
+                              } catch (_) {
+                                // Keep the requested thumb position visible briefly
+                                // even when the engine reports a seek failure.
+                              }
+                              if (!mounted || generation != _seekGeneration) {
+                                return;
+                              }
+                              _seekCommandReturned = true;
+                              if ((engine.snapshot.position.inMilliseconds -
+                                          targetMs)
+                                      .abs() <=
+                                  250) {
+                                _seekSettleTimer?.cancel();
+                                _pendingSeekMs = null;
+                                _seekCommandReturned = false;
+                                setState(() => _isDragging = false);
+                                return;
+                              }
+                              _seekSettleTimer?.cancel();
+                              _seekSettleTimer = Timer(
+                                const Duration(milliseconds: 900),
+                                () {
+                                  if (!mounted ||
+                                      generation != _seekGeneration) {
+                                    return;
+                                  }
+                                  setState(() {
+                                    _pendingSeekMs = null;
+                                    _seekCommandReturned = false;
+                                    _isDragging = false;
+                                  });
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: timeLabelWidth,
+                  child: Text(
+                    fmtDuration(dur),
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 }
@@ -2081,7 +2898,6 @@ class _ExpandableVolume extends ConsumerStatefulWidget {
 
 class _ExpandableVolumeState extends ConsumerState<_ExpandableVolume> {
   bool _isHovered = false;
-  double _beforeMute = 1.0;
 
   @override
   Widget build(BuildContext context) {
@@ -2112,7 +2928,7 @@ class _ExpandableVolumeState extends ConsumerState<_ExpandableVolume> {
               iconSize: 20,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              tooltip: volume == 0 ? 'ミュート解除' : 'ミュート',
+              tooltip: ref.tr(volume == 0 ? 'unmute' : 'mute'),
               icon: Icon(
                 volume == 0
                     ? Icons.volume_off_rounded
@@ -2121,13 +2937,7 @@ class _ExpandableVolumeState extends ConsumerState<_ExpandableVolume> {
               ),
               onPressed: () async {
                 widget.onHoverActivity();
-                if (volume == 0) {
-                  final restore = _beforeMute > 0 ? _beforeMute : 1.0;
-                  await playback.setVolume(restore);
-                } else {
-                  _beforeMute = volume;
-                  await playback.setVolume(0);
-                }
+                await playback.toggleMute();
               },
             ),
             AnimatedSize(
@@ -2193,7 +3003,7 @@ class _ModeButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
           color: selected
-              ? (isDark ? Colors.white : const Color(0xFF1E293B))
+              ? (isDark ? Colors.white : const Color(0xFF2B2B2B))
               : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
         ),
@@ -2228,8 +3038,13 @@ class _ModeButton extends StatelessWidget {
 /// Compact Apple-style Speed Button for PlayerCard OSC
 class _PlayerSpeedButton extends StatelessWidget {
   final double speed;
+  final String tooltip;
   final ValueChanged<double> onSelected;
-  const _PlayerSpeedButton({required this.speed, required this.onSelected});
+  const _PlayerSpeedButton({
+    required this.speed,
+    required this.tooltip,
+    required this.onSelected,
+  });
 
   static const _speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -2240,7 +3055,7 @@ class _PlayerSpeedButton extends StatelessWidget {
     final textSub = themeTextSub(context);
 
     return PopupMenuButton<double>(
-      tooltip: '再生速度',
+      tooltip: tooltip,
       initialValue: speed,
       onSelected: onSelected,
       color: themePanelSolid(context),

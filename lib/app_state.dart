@@ -1,298 +1,40 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'domain/models.dart';
+import 'library/library_notifier.dart';
+import 'ambient/ambient_settings.dart';
+import 'ambient/ambient_frame_notifier.dart';
 import 'data/store.dart';
 import 'data/importer.dart';
 import 'playback/playback_engine.dart';
+import 'playback/audio_settings.dart';
 import 'playback/media_kit_engine.dart';
+import 'playback/ios_playback_engine.dart';
+
+// Preserve existing imports while features can depend on their own modules.
+export 'library/library_notifier.dart';
+export 'ambient/ambient_settings.dart';
+export 'ambient/ambient_frame_notifier.dart';
 
 final repositoryProvider = Provider<LibraryRepository>(
   (_) => PrefsLibraryRepository(),
 );
 final importerProvider = Provider((_) => VideoImporter());
 final engineProvider = Provider<PlaybackEngine>(
-  (_) => MediaKitPlaybackEngine(),
+  (_) => Platform.isIOS ? IosPlaybackEngine() : MediaKitPlaybackEngine(),
 );
+final audioSettingsProvider =
+    StateNotifierProvider<AudioSettingsNotifier, AsyncValue<bool>>(
+      (ref) => AudioSettingsNotifier(ref.watch(engineProvider)),
+    );
+
 final volumeProvider = StateProvider<double>(
   (ref) => ref.read(engineProvider).volume,
 );
-
-class LibraryState {
-  final List<MediaItem> media;
-  final List<Playlist> playlists;
-  final bool loaded;
-  const LibraryState({
-    this.media = const [],
-    this.playlists = const [],
-    this.loaded = false,
-  });
-  MediaItem? byId(String id) {
-    for (final m in media) {
-      if (m.id == id) return m;
-    }
-    return null;
-  }
-
-  Playlist? playlistById(String id) {
-    for (final p in playlists) {
-      if (p.id == id) return p;
-    }
-    return null;
-  }
-}
-
-class LibraryNotifier extends StateNotifier<LibraryState> {
-  final LibraryRepository repo;
-  LibraryNotifier(this.repo) : super(const LibraryState());
-  Future<void> load() async {
-    final m = await repo.loadMedia();
-    final p = await repo.loadPlaylists();
-    state = LibraryState(media: m, playlists: p, loaded: true);
-  }
-
-  Future<void> addMedia(List<MediaItem> items) async {
-    // Skip files already imported from the same source (folder re-selection).
-    final existing = state.media
-        .map((m) => m.sourcePath)
-        .whereType<String>()
-        .toSet();
-    final existingIds = state.media.map((m) => m.id).toSet();
-    final fresh = [
-      for (final m in items)
-        if (!existingIds.contains(m.id) &&
-            (m.sourcePath == null || !existing.contains(m.sourcePath)))
-          m,
-    ];
-    if (fresh.isEmpty) return;
-    final m = [...state.media, ...fresh];
-    state = LibraryState(media: m, playlists: state.playlists, loaded: true);
-    await repo.saveMedia(m);
-  }
-
-  Future<void> updateMediaMetadata(
-    String id, {
-    required String title,
-    required String? artist,
-  }) async {
-    final current = state.byId(id);
-    if (current == null) return;
-    final m = state.media
-        .map(
-          (e) => e.id != id
-              ? e
-              : MediaItem(
-                  id: e.id,
-                  title: title,
-                  artist: artist,
-                  localPath: e.localPath,
-                  durationMs: e.durationMs,
-                  createdAt: e.createdAt,
-                  origin: e.origin,
-                  sourceFolderId: e.sourceFolderId,
-                  sourcePath: e.sourcePath,
-                ),
-        )
-        .toList();
-    state = LibraryState(media: m, playlists: state.playlists, loaded: true);
-    await repo.saveMedia(m);
-  }
-
-  Future<void> updateMediaArtists(List<String> ids, String? artist) async {
-    final selectedIds = ids.toSet();
-    if (selectedIds.isEmpty) return;
-    final m = state.media
-        .map(
-          (item) => !selectedIds.contains(item.id)
-              ? item
-              : MediaItem(
-                  id: item.id,
-                  title: item.title,
-                  artist: artist,
-                  localPath: item.localPath,
-                  durationMs: item.durationMs,
-                  createdAt: item.createdAt,
-                  origin: item.origin,
-                  sourceFolderId: item.sourceFolderId,
-                  sourcePath: item.sourcePath,
-                ),
-        )
-        .toList();
-    state = LibraryState(media: m, playlists: state.playlists, loaded: true);
-    await repo.saveMedia(m);
-  }
-
-  Future<void> removeMedia(String id) async {
-    final removed = state.media.where((e) => e.id == id).toList();
-    final m = state.media.where((e) => e.id != id).toList();
-    final p = state.playlists
-        .map(
-          (pl) => Playlist(
-            id: pl.id,
-            name: pl.name,
-            mediaIds: pl.mediaIds.where((x) => x != id).toList(),
-            createdAt: pl.createdAt,
-          ),
-        )
-        .toList();
-    state = LibraryState(media: m, playlists: p, loaded: true);
-    await repo.saveMedia(m);
-    await repo.savePlaylists(p);
-    // Best-effort: delete app-managed copies so disk doesn't leak.
-    // Referenced (non-copied) files are never touched.
-    for (final r in removed) {
-      if (r.origin != 'imported') continue;
-      if (!r.localPath.contains('yureru_media')) continue;
-      try {
-        await File(r.localPath).delete();
-      } catch (_) {}
-    }
-  }
-
-  Future<Playlist> createPlaylist(String name) async {
-    final pl = Playlist(
-      name: name.trim().isEmpty ? 'New Playlist' : name.trim(),
-    );
-    final p = [...state.playlists, pl];
-    state = LibraryState(media: state.media, playlists: p, loaded: true);
-    await repo.savePlaylists(p);
-    return pl;
-  }
-
-  Future<void> renamePlaylist(String id, String name) async {
-    final clean = name.trim().isEmpty ? 'New Playlist' : name.trim();
-    final p = state.playlists
-        .map(
-          (pl) => pl.id == id
-              ? Playlist(
-                  id: pl.id,
-                  name: clean,
-                  mediaIds: pl.mediaIds,
-                  createdAt: pl.createdAt,
-                )
-              : pl,
-        )
-        .toList();
-    state = LibraryState(media: state.media, playlists: p, loaded: true);
-    await repo.savePlaylists(p);
-  }
-
-  /// Persist a probed duration so lists show it instantly next launch.
-  /// No-op when unknown or unchanged (avoids prefs churn).
-  Future<void> setDurationMs(String id, int ms) async {
-    if (ms <= 0) return;
-    final cur = state.byId(id);
-    if (cur == null || cur.durationMs == ms) return;
-    final m = state.media
-        .map(
-          (e) => e.id != id
-              ? e
-              : MediaItem(
-                  id: e.id,
-                  title: e.title,
-                  artist: e.artist,
-                  localPath: e.localPath,
-                  durationMs: ms,
-                  createdAt: e.createdAt,
-                  origin: e.origin,
-                  sourceFolderId: e.sourceFolderId,
-                  sourcePath: e.sourcePath,
-                ),
-        )
-        .toList();
-    state = LibraryState(media: m, playlists: state.playlists, loaded: true);
-    await repo.saveMedia(m);
-  }
-
-  Future<void> deletePlaylist(String id) async {
-    final p = state.playlists.where((e) => e.id != id).toList();
-    state = LibraryState(media: state.media, playlists: p, loaded: true);
-    await repo.savePlaylists(p);
-  }
-
-  Future<void> addToPlaylist(String playlistId, String mediaId) async {
-    await addMediaToPlaylist(playlistId, [mediaId]);
-  }
-
-  Future<void> addMediaToPlaylist(
-    String playlistId,
-    List<String> mediaIds,
-  ) async {
-    final toAdd = mediaIds.toSet();
-    final p = state.playlists.map((pl) {
-      if (pl.id != playlistId) return pl;
-      final additions = toAdd.where((id) => !pl.mediaIds.contains(id));
-      return Playlist(
-        id: pl.id,
-        name: pl.name,
-        mediaIds: [...pl.mediaIds, ...additions],
-        createdAt: pl.createdAt,
-      );
-    }).toList();
-    state = LibraryState(media: state.media, playlists: p, loaded: true);
-    await repo.savePlaylists(p);
-  }
-
-  Future<void> removeFromPlaylist(String playlistId, String mediaId) async {
-    final p = state.playlists
-        .map(
-          (pl) => pl.id != playlistId
-              ? pl
-              : Playlist(
-                  id: pl.id,
-                  name: pl.name,
-                  mediaIds: pl.mediaIds.where((x) => x != mediaId).toList(),
-                  createdAt: pl.createdAt,
-                ),
-        )
-        .toList();
-    state = LibraryState(media: state.media, playlists: p, loaded: true);
-    await repo.savePlaylists(p);
-  }
-
-  Future<void> reorderPlaylist(String playlistId, int from, int to) async {
-    final playlist = state.playlistById(playlistId);
-    if (playlist == null || from < 0 || from >= playlist.mediaIds.length) {
-      return;
-    }
-    final ids = [...playlist.mediaIds];
-    if (to < 0 || to >= ids.length || from == to) return;
-    ids.insert(to, ids.removeAt(from));
-    final playlists = state.playlists
-        .map(
-          (item) => item.id == playlistId
-              ? Playlist(
-                  id: item.id,
-                  name: item.name,
-                  mediaIds: ids,
-                  createdAt: item.createdAt,
-                )
-              : item,
-        )
-        .toList();
-    state = LibraryState(
-      media: state.media,
-      playlists: playlists,
-      loaded: true,
-    );
-    await repo.savePlaylists(playlists);
-  }
-
-  Future<void> reorderMedia(int from, int to) async {
-    if (from < 0 || from >= state.media.length) return;
-    final media = [...state.media];
-    if (to < 0 || to >= media.length || from == to) return;
-    media.insert(to, media.removeAt(from));
-    state = LibraryState(
-      media: media,
-      playlists: state.playlists,
-      loaded: true,
-    );
-    await repo.saveMedia(media);
-  }
-}
 
 final libraryProvider = StateNotifierProvider<LibraryNotifier, LibraryState>((
   ref,
@@ -589,11 +331,14 @@ final playerViewModeProvider = StateProvider<PlayerViewMode>(
 );
 
 /// Videos list order.
-enum VideosSort { newestFirst, oldestFirst, name, manual }
+enum VideosSort { newestFirst, oldestFirst, name, manual, recentlyPlayed }
 
 final videosSortProvider = StateProvider<VideosSort>(
   (_) => VideosSort.newestFirst,
 );
+
+/// Session-only view filter; favorite marks themselves are persisted on media.
+final favoritesOnlyProvider = StateProvider<bool>((_) => false);
 
 /// Optional exact creator filter for the all-videos view.
 final videoCreatorFilterProvider = StateProvider<String?>((_) => null);
@@ -612,12 +357,16 @@ final viewingPlayerProvider = StateProvider<bool>((_) => false);
 /// Immersive cinema mode (video occupies whole window, hiding sidebars and bars)
 final cinemaModeProvider = StateProvider<bool>((_) => false);
 
+/// Music-focused view with artwork/video and synchronized lyrics.
+final immersiveModeProvider = StateProvider<bool>((_) => false);
+
 /// macOS floating picture-in-picture window state.
 final pictureInPictureProvider = StateProvider<bool>((_) => false);
 
 /// Queue panel visibility. Hidden by default; auto-shown on the player
 /// screen, auto-hidden when browsing. Manual toggle respected in between.
 final queueVisibleProvider = StateProvider<bool>((_) => false);
+final lyricsPanelProvider = StateProvider<bool>((_) => false);
 
 /// Sidebar collapsed to an icon rail.
 final sidebarCollapsedProvider = StateProvider<bool>((_) => false);
@@ -661,6 +410,49 @@ final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((
 ) {
   return ThemeModeNotifier();
 });
+
+/// Video bounds in normalized window coordinates for aligning ambient color
+/// continuation with the actual rendered player size and position.
+final ambientVideoApertureProvider = StateProvider<Rect?>((_) => null);
+
+final ambientFrameProvider =
+    StateNotifierProvider<AmbientFrameNotifier, ui.Image?>((ref) {
+      final notifier = AmbientFrameNotifier(
+        ref.read(engineProvider),
+        enabled: ref.read(ambientLightProvider),
+        cinema: ref.read(cinemaModeProvider),
+        framesPerSecond: ref.read(ambientFrameRateProvider),
+        aperture: ref.read(ambientVideoApertureProvider),
+        spread: ref.read(ambientGeometryProvider).spread,
+        depth: ref.read(ambientGeometryProvider).depth,
+        softness: ref.read(ambientGeometryProvider).softness,
+      );
+      ref.listen<bool>(
+        ambientLightProvider,
+        (_, enabled) => notifier.setEnabled(enabled),
+      );
+      ref.listen<bool>(
+        cinemaModeProvider,
+        (_, cinema) => notifier.setCinema(cinema),
+      );
+      ref.listen<int>(
+        ambientFrameRateProvider,
+        (_, fps) => notifier.setFramesPerSecond(fps),
+      );
+      ref.listen<Rect?>(
+        ambientVideoApertureProvider,
+        (_, aperture) => notifier.setAperture(aperture),
+      );
+      ref.listen<AmbientGeometrySettings>(
+        ambientGeometryProvider,
+        (_, settings) => notifier.setGeometry(
+          spread: settings.spread,
+          depth: settings.depth,
+          softness: settings.softness,
+        ),
+      );
+      return notifier;
+    });
 
 /// Switch the center pane to the full-size player (explicit user action).
 /// Queue visibility is controlled by the shell for the current layout.

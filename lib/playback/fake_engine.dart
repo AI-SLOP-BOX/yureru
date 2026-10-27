@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'playback_engine.dart';
 
@@ -86,17 +88,46 @@ class FakePlaybackEngine implements PlaybackEngine {
   @override
   Future<void> setPlaybackRate(double r) => setSpeed(r);
   @override
+  Future<ui.Image?> captureAmbientFrame({
+    Rect? aperture,
+    double spread = 1,
+    double depth = 1,
+    double softness = 1,
+  }) async => null;
+
+  @override
+  ValueListenable<ui.Image?>? get ambientMatteFrameListenable => null;
+  @override
+  Future<String?> readEmbeddedLyrics() async => null;
+  @override
   Future<void> setVolume(double v) async {
     vol = v.clamp(0.0, 1.0);
   }
 
   @override
   double get volume => vol;
+  bool normalizationEnabled = false;
+  @override
+  bool get supportsVolumeNormalization => true;
+  @override
+  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
+    normalizationEnabled = enabled;
+  }
+
   bool videoTrackEnabled = true;
   @override
   Future<void> setVideoTrackEnabled(bool enabled) async {
     videoTrackEnabled = enabled;
   }
+
+  @override
+  Future<void> setVideoOutputSize({int? width, int? height}) async {}
+
+  @override
+  bool get supportsPictureInPicture => false;
+
+  @override
+  Future<bool> enterPictureInPicture() async => false;
 
   @override
   Stream<Duration> get positionStream => Stream.value(snap.position);

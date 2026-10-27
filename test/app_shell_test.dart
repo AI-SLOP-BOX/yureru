@@ -1,7 +1,12 @@
+import 'dart:async';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:yureru/presentation/i18n.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,11 +14,13 @@ import 'package:yureru/app_state.dart';
 import 'package:yureru/data/store.dart';
 import 'package:yureru/domain/models.dart';
 import 'package:yureru/playback/fake_engine.dart';
+import 'package:yureru/playback/playback_engine.dart';
 import 'package:yureru/presentation/screens/home_screen.dart';
 import 'package:yureru/presentation/screens/videos_screen.dart';
 import 'package:yureru/presentation/shell.dart';
 import 'package:yureru/presentation/theme.dart';
 import 'package:yureru/presentation/widgets/player_card.dart';
+import 'package:yureru/presentation/widgets/app_svg_icon.dart';
 import 'package:yureru/presentation/widgets/mini_player.dart';
 import 'package:yureru/presentation/widgets/preview_player.dart';
 import 'package:yureru/presentation/widgets/queue_panel.dart';
@@ -23,15 +30,73 @@ import 'package:yureru/presentation/widgets/thumb_image.dart';
 import 'package:yureru/presentation/widgets/top_bar.dart';
 import 'package:yureru/presentation/widgets/transport_bar.dart';
 
+class _LaggingSeekEngine extends FakePlaybackEngine {
+  final StreamController<PlaybackSnapshot> _updates =
+      StreamController<PlaybackSnapshot>.broadcast();
+
+  _LaggingSeekEngine() {
+    snap = const PlaybackSnapshot(
+      position: Duration(seconds: 30),
+      duration: Duration(seconds: 100),
+      isPlaying: true,
+      initialized: true,
+    );
+  }
+
+  @override
+  Stream<PlaybackSnapshot> get snapshots => _updates.stream;
+
+  @override
+  Future<void> seekTo(Duration position) async {
+    seeks.add(position);
+    // Simulate an engine that accepts the command before publishing its new
+    // playback position, which is the interval where the thumb used to snap
+    // back to the stale snapshot.
+    Timer(const Duration(milliseconds: 300), () {
+      if (_updates.isClosed) return;
+      snap = PlaybackSnapshot(
+        position: position,
+        duration: snap.duration,
+        isPlaying: snap.isPlaying,
+        initialized: true,
+      );
+      _updates.add(snap);
+    });
+  }
+
+  @override
+  Future<void> dispose() async {
+    await _updates.close();
+    await super.dispose();
+  }
+}
+
 void main() {
-  Future<void> pumpShell(WidgetTester tester) async {
-    tester.view.physicalSize = const Size(1440, 900);
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    PackageInfo.setMockInitialValues(
+      appName: 'Yureru',
+      packageName: 'dev.yureru.yureru',
+      version: '1.0.6',
+      buildNumber: '7',
+      buildSignature: '',
+    );
+    binding.platformDispatcher.localeTestValue = const Locale('ja', 'JP');
+  });
+  tearDown(() => binding.platformDispatcher.clearLocaleTestValue());
+  Future<void> pumpShell(
+    WidgetTester tester, {
+    Size size = const Size(1440, 900),
+  }) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     final fake = FakePlaybackEngine();
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
           repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
           engineProvider.overrideWithValue(fake),
         ],
@@ -47,18 +112,13 @@ void main() {
   }
 
   testWidgets(
-    'wide shell renders sidebar, queue panel and transport bar without FABs',
+    'wide video player hides the bottom bar and shows it in image mode',
     (tester) async {
       await pumpShell(tester);
-      // Sidebar navigation (target design)
-      expect(find.text('ライブラリ'), findsWidgets);
-      expect(find.text('プレイリスト'), findsWidgets);
-      expect(find.text('すべての動画'), findsOneWidget);
-      expect(find.text('設定'), findsOneWidget);
       // Idle: no transport bar, no queue panel (defaults per spec).
       expect(find.text('1.0x'), findsNothing);
-      expect(find.text('再生キュー'), findsNothing);
-      // With playback: player screen auto-shows with queue + transport.
+      expect(find.text('次のコンテンツ'), findsNothing);
+      // Video mode owns its hover transport inside the player surface.
       final c = ProviderScope.containerOf(
         tester.element(find.byType(AppShell)),
       );
@@ -68,10 +128,69 @@ void main() {
       );
       await c.read(libraryProvider.notifier).load();
       c.read(queueProvider.notifier).start([m.id], shuffle: false);
+      await (c.read(engineProvider) as FakePlaybackEngine).play();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
-      expect(find.text('再生キュー'), findsOneWidget);
-      // Speed pill appears in TransportBar AND PlayerCard info bar, so findsWidgets.
+      expect(find.text('次のコンテンツ'), findsOneWidget);
+      expect(find.byType(TransportBar), findsNothing);
+      final hoverTransport = find.byKey(
+        const ValueKey('player-hover-transport'),
+      );
+      expect(hoverTransport, findsOneWidget);
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      final cardRect = tester.getRect(find.byType(PlayerCard));
+      final playerMargin = cardRect.topLeft + const Offset(8, 8);
+      await mouse.moveTo(cardRect.center);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
+      await mouse.moveTo(tester.getRect(hoverTransport).center);
+      await tester.pump(const Duration(milliseconds: 100));
+      await mouse.moveTo(const Offset(2, 2));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
+
+      await mouse.moveTo(cardRect.center);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
+      await mouse.moveTo(playerMargin);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
+      await tester.pump(const Duration(milliseconds: 2400));
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
+
+      // Repeated tiny pointer deltas (as from trackpad jitter) are not real
+      // activity and must not keep pushing the idle timeout back forever.
+      await mouse.moveTo(cardRect.center);
+      await tester.pump(const Duration(milliseconds: 100));
+      for (var i = 0; i < 27; i++) {
+        await mouse.moveTo(cardRect.center + Offset(i.isEven ? 1 : -1, 0));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
+
+      final fake = c.read(engineProvider) as FakePlaybackEngine;
+      final playCallsBeforeDoubleTap = fake.playCalls;
+      final pauseCallsBeforeDoubleTap = fake.pauseCalls;
+      await tester.tapAt(cardRect.center);
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tapAt(cardRect.center);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(fake.playCalls, playCallsBeforeDoubleTap);
+      expect(fake.pauseCalls, pauseCallsBeforeDoubleTap);
+
+      await mouse.moveTo(cardRect.center);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
+      await mouse.moveTo(playerMargin);
+      await mouse.moveTo(const Offset(2, 2));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
+      await mouse.removePointer();
+      c.read(playerViewModeProvider.notifier).state = PlayerViewMode.image;
+      await tester.pump();
+      expect(find.byType(TransportBar), findsOneWidget);
       expect(find.text('1.0x'), findsWidgets);
       // No floating/overlay + buttons anywhere (import/add stays in settings)
       expect(find.byType(FloatingActionButton), findsNothing);
@@ -79,16 +198,250 @@ void main() {
     },
   );
 
+  testWidgets('arrow keys never seek from the browse transport timeline', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final media = MediaItem(title: '矢印キー確認', localPath: '/tmp/arrows.mp4');
+    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
+      media,
+    ]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    c.read(viewingPlayerProvider.notifier).state = false;
+    final engine = c.read(engineProvider) as FakePlaybackEngine;
+    await engine.play();
+    await tester.pumpAndSettle();
+
+    final timeline = find
+        .descendant(
+          of: find.byType(TransportBar),
+          matching: find.byType(Slider),
+        )
+        .first;
+    Focus.of(tester.element(timeline)).requestFocus();
+    await tester.pump();
+
+    for (final key in [
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowUp,
+      LogicalKeyboardKey.arrowLeft,
+      LogicalKeyboardKey.arrowRight,
+    ]) {
+      await tester.sendKeyEvent(key);
+    }
+    expect(engine.seeks, isEmpty);
+  });
+
+  testWidgets('paused video controls appear on hover and auto-hide', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final media = MediaItem(title: '一時停止中', localPath: '/tmp/paused.mp4');
+    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
+      media,
+    ]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final hoverTransport = find.byKey(const ValueKey('player-hover-transport'));
+    expect(hoverTransport, findsOneWidget);
+    expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
+    final transport = tester.getRect(hoverTransport);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: transport.center);
+    await tester.pump();
+    // Merely having the window/widget appear beneath a stationary cursor must
+    // not reveal the controls; actual pointer movement does.
+    expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
+    await mouse.moveTo(transport.center + const Offset(4, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
+    await tester.pump(const Duration(seconds: 3));
+    expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
+    await mouse.removePointer();
+  });
+
+  testWidgets('compact video transport is hidden until the pointer moves', (
+    tester,
+  ) async {
+    await pumpShell(tester, size: const Size(700, 900));
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final media = MediaItem(title: '狭い画面の動画', localPath: '/tmp/compact.mp4');
+    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
+      media,
+    ]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final transport = find.byKey(const ValueKey('compact-player-transport'));
+    expect(transport, findsOneWidget);
+    expect(tester.widget<AnimatedOpacity>(transport).opacity, 0);
+
+    final bounds = tester.getRect(transport);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: bounds.center);
+    await tester.pump();
+    expect(tester.widget<AnimatedOpacity>(transport).opacity, 0);
+    await mouse.moveTo(bounds.center + const Offset(4, 0));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tester.widget<AnimatedOpacity>(transport).opacity, 1);
+    await tester.pump(const Duration(milliseconds: 2400));
+    expect(tester.widget<AnimatedOpacity>(transport).opacity, 0);
+    await mouse.removePointer();
+  });
+
+  testWidgets('seek thumb waits for the engine position after release', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final delayedEngine = _LaggingSeekEngine();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
+          repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
+          engineProvider.overrideWithValue(delayedEngine),
+        ],
+        child: MaterialApp(
+          theme: yureruTheme(),
+          darkTheme: yureruTheme(),
+          themeMode: ThemeMode.dark,
+          home: const AppShell(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AppShell)),
+    );
+    final media = MediaItem(title: 'シーク確認', localPath: '/tmp/seek.mp4');
+    await (container.read(repositoryProvider) as InMemoryLibraryRepository)
+        .saveMedia([media]);
+    await container.read(libraryProvider.notifier).load();
+    container.read(queueProvider.notifier).start([media.id], shuffle: false);
+    delayedEngine.snap = const PlaybackSnapshot(
+      position: Duration(seconds: 30),
+      duration: Duration(seconds: 100),
+      isPlaying: true,
+      initialized: true,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final sliderFinder = find.byType(Slider).first;
+    final slider = tester.widget<Slider>(sliderFinder);
+    slider.onChangeStart!(30000);
+    slider.onChanged!(75000);
+    slider.onChangeEnd!(75000);
+    await tester.pump();
+    expect(tester.widget<Slider>(sliderFinder).value, 75000);
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(tester.widget<Slider>(sliderFinder).value, 75000);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(tester.widget<Slider>(sliderFinder).value, 75000);
+  });
+
+  testWidgets('seek preview stays inside a narrow player timeline', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final fake = FakePlaybackEngine();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
+          repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
+          engineProvider.overrideWithValue(fake),
+        ],
+        child: MaterialApp(
+          theme: yureruTheme(),
+          darkTheme: yureruTheme(),
+          themeMode: ThemeMode.dark,
+          home: const AppShell(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(AppShell)),
+    );
+    final media = MediaItem(title: 'プレビュー位置', localPath: '/tmp/preview.mp4');
+    await (container.read(repositoryProvider) as InMemoryLibraryRepository)
+        .saveMedia([media]);
+    await container.read(libraryProvider.notifier).load();
+    container.read(queueProvider.notifier).start([media.id], shuffle: false);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final slider = find.byType(Slider).first;
+    final sliderRect = tester.getRect(slider);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: sliderRect.center);
+    await mouse.moveTo(sliderRect.topRight - const Offset(2, 0));
+    await tester.pump();
+
+    final preview = find.text('1:40').first;
+    expect(preview, findsOneWidget);
+    final previewBubble = find
+        .ancestor(of: preview, matching: find.byType(Container))
+        .first;
+    final previewStack = find
+        .ancestor(of: preview, matching: find.byType(Stack))
+        .first;
+    final bubbleRect = tester.getRect(previewBubble);
+    final stackRect = tester.getRect(previewStack);
+    expect(bubbleRect.left, greaterThanOrEqualTo(stackRect.left));
+    expect(bubbleRect.right, lessThanOrEqualTo(stackRect.right));
+    await mouse.removePointer();
+  });
+
   testWidgets('settings page is reachable and shows general settings', (
     tester,
   ) async {
     await pumpShell(tester);
     await tester.tap(find.text('設定'));
     await tester.pumpAndSettle();
-    // Library management and network sync removed
-    expect(find.text('ライブラリ管理'), findsNothing);
-    expect(find.text('再生と操作'), findsOneWidget);
-    expect(find.text('yureru について'), findsOneWidget);
+    await tester.tap(find.widgetWithText(ChoiceChip, 'ライブラリ'));
+    await tester.pumpAndSettle();
+    expect(find.text('ライブラリ管理'), findsOneWidget);
+    await tester.tap(find.widgetWithText(ChoiceChip, '表示'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ChoiceChip, '表示'), findsOneWidget);
+    expect(find.text('テーマ'), findsOneWidget);
+    expect(find.text('アンビエントライト'), findsOneWidget);
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.widgetWithText(SwitchListTile, 'アンビエントライト'),
+          )
+          .value,
+      isTrue,
+    );
+    await tester.tap(find.widgetWithText(SwitchListTile, 'アンビエントライト'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.widgetWithText(SwitchListTile, 'アンビエントライト'),
+          )
+          .value,
+      isFalse,
+    );
+    await tester.tap(find.widgetWithText(ChoiceChip, 'アプリ'));
+    await tester.pumpAndSettle();
+    expect(find.text('言語'), findsOneWidget);
+    expect(find.text('Yureru について'), findsOneWidget);
   });
 
   testWidgets('playlist can be created from the sidebar + button', (
@@ -117,6 +470,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            activeLanguageCodeProvider.overrideWithValue('ja'),
             repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
             engineProvider.overrideWithValue(fake),
           ],
@@ -160,6 +514,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            activeLanguageCodeProvider.overrideWithValue('ja'),
             repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
             engineProvider.overrideWithValue(FakePlaybackEngine()),
           ],
@@ -318,6 +673,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
           repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
           engineProvider.overrideWithValue(FakePlaybackEngine()),
         ],
@@ -403,7 +759,30 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(c.read(videoCreatorFilterProvider), isNull);
-    expect(find.text('作者: 作者A'), findsNothing);
+    expect(find.text('投稿者: 作者A'), findsNothing);
+  });
+
+  testWidgets('desktop player creator name opens the filtered video list', (
+    tester,
+  ) async {
+    final media = MediaItem(
+      title: '作者テスト',
+      artist: '作者A',
+      localPath: '/tmp/creator.mp4',
+    );
+    final c = await pumpHomeWithMedia(tester, media);
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    await tester.pumpAndSettle();
+
+    final creator = find.descendant(
+      of: find.byType(PlayerCard),
+      matching: find.text('作者A'),
+    );
+    await tester.tap(creator);
+    await tester.pumpAndSettle();
+
+    expect(c.read(videoCreatorFilterProvider), '作者A');
+    expect(find.text('投稿者: 作者A'), findsOneWidget);
   });
 
   testWidgets('home shows static preview; its play enters full player', (
@@ -414,7 +793,7 @@ void main() {
       MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
     );
     // Missing file in tests -> static preview, no live engine.
-    expect(find.text('プレビュー'), findsOneWidget);
+    expect(find.text('ここから再生'), findsOneWidget);
     expect(find.byType(HomeScreen), findsOneWidget);
     await tester.tap(find.text('再生'));
     await tester.pump();
@@ -459,6 +838,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
           repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
           engineProvider.overrideWithValue(FakePlaybackEngine()),
         ],
@@ -532,11 +912,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.byType(PlayerCard), findsOneWidget);
-    expect(find.text('再生キュー'), findsOneWidget);
+    expect(find.text('次のコンテンツ'), findsOneWidget);
     // Browsing away to videos automatically hides queue
     await tester.tap(find.text('すべての動画'));
     await tester.pumpAndSettle();
-    expect(find.text('再生キュー'), findsNothing);
+    expect(find.text('次のコンテンツ'), findsNothing);
     await tester.tap(
       find.descendant(
         of: find.byType(TransportBar),
@@ -575,7 +955,9 @@ void main() {
       MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
     );
     final previewTop = tester.getTopLeft(find.byType(PreviewBar)).dy;
-    final msgTop = tester.getTopLeft(find.text('プレイリストはサイドバーの＋から作成できます')).dy;
+    final msgTop = tester
+        .getTopLeft(find.text('プレイリストはサイドバーの＋から作成できます').first)
+        .dy;
     expect(previewTop, greaterThan(msgTop));
     expect(tester.takeException(), isNull);
   });
@@ -587,6 +969,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
           repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
           engineProvider.overrideWithValue(FakePlaybackEngine()),
         ],
@@ -634,6 +1017,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
           repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
           engineProvider.overrideWithValue(FakePlaybackEngine()),
         ],
@@ -663,7 +1047,9 @@ void main() {
     expect(dy('B動画'), lessThan(dy('A動画')));
     await tester.tap(find.byTooltip('並び替え'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('名前順'));
+    await tester.tap(
+      find.widgetWithText(CheckedPopupMenuItem<VideosSort>, '名前順'),
+    );
     await tester.pumpAndSettle();
     expect(dy('A動画'), lessThan(dy('B動画')));
     expect(tester.takeException(), isNull);
@@ -687,14 +1073,16 @@ void main() {
     expect(
       find.descendant(
         of: find.byType(VideosScreen),
-        matching: find.byIcon(Icons.equalizer),
+        matching: find.byWidgetPredicate(
+          (w) => w is AppSvgIcon && w.name == 'equalizer',
+        ),
       ),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('logo tap returns to library', (tester) async {
+  testWidgets('top bar does not show a duplicate home logo', (tester) async {
     await pumpHomeWithMedia(
       tester,
       MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
@@ -702,18 +1090,61 @@ void main() {
     await tester.tap(find.text('すべての動画'));
     await tester.pumpAndSettle();
     expect(find.byType(VideosScreen), findsOneWidget);
-    // Top-bar logo (always visible) goes home.
-    await tester.tap(
+    expect(
       find.descendant(
         of: find.byType(TopBar),
         matching: find.byTooltip('ライブラリに戻る'),
       ),
+      findsNothing,
     );
-    await tester.pumpAndSettle();
-    expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.byType(VideosScreen), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'desktop PiP action stays visible at phone-sized widths',
+    (tester) async {
+      tester.view.physicalSize = const Size(600, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [activeLanguageCodeProvider.overrideWithValue('ja')],
+          child: MaterialApp(
+            theme: yureruTheme(),
+            home: Scaffold(
+              body: TopBar(onOpenSearch: () {}, onSubmitSearch: (_) {}),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byType(TopBar),
+          matching: find.byTooltip('ピクチャ・イン・ピクチャ'),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+    variant: const TargetPlatformVariant({TargetPlatform.macOS}),
+  );
+
+  testWidgets(
+    'compact player keeps a desktop PiP action',
+    (tester) async {
+      final media = MediaItem(title: '小画面テスト', localPath: '/tmp/compact.mp4');
+      final c = await pumpHomeWithMedia(tester, media);
+      tester.view.physicalSize = const Size(600, 900);
+      c.read(queueProvider.notifier).start([media.id], shuffle: false);
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('ピクチャ・イン・ピクチャ'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+    variant: const TargetPlatformVariant({TargetPlatform.macOS}),
+  );
 
   testWidgets('preview shows info panel with next-up while playing', (
     tester,
@@ -724,6 +1155,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
           repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
           engineProvider.overrideWithValue(FakePlaybackEngine()),
         ],
@@ -768,13 +1200,20 @@ void main() {
     await tester.tap(find.text('ライブラリ'));
     await tester.pumpAndSettle();
     expect(
-      find.descendant(of: find.byType(PreviewBar), matching: find.text('再生中')),
+      find.descendant(of: find.byType(PreviewBar), matching: find.text('現在の曲')),
       findsOneWidget,
     );
     expect(
       find.descendant(
         of: find.byType(PreviewBar),
-        matching: find.text('次: B動画'),
+        matching: find.text('次の動画: B動画'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(PreviewBar),
+        matching: find.text('プレイヤーを開く'),
       ),
       findsOneWidget,
     );
@@ -782,7 +1221,7 @@ void main() {
     await tester.tap(
       find.descendant(
         of: find.byType(PreviewBar),
-        matching: find.text('次: B動画'),
+        matching: find.text('次の動画: B動画'),
       ),
     );
     await tester.pump();
@@ -810,7 +1249,10 @@ void main() {
       moreOrLessEquals(76, epsilon: 1.0),
     );
     // Labels hidden, navigation still works via tooltips.
-    expect(find.text('プレイリスト'), findsNothing);
+    expect(
+      find.descendant(of: find.byType(Sidebar), matching: find.text('プレイリスト')),
+      findsNothing,
+    );
     await tester.tap(find.byTooltip('すべての動画'));
     await tester.pumpAndSettle();
     expect(find.byType(VideosScreen), findsOneWidget);
@@ -875,6 +1317,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
           repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
           engineProvider.overrideWithValue(FakePlaybackEngine()),
         ],
@@ -906,7 +1349,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(HomeScreen), findsOneWidget);
     expect(find.byType(PreviewBar), findsOneWidget);
-    expect(find.text('次: B動画'), findsOneWidget);
+    expect(find.text('次の動画: B動画'), findsOneWidget);
     final ex = tester.takeException();
     expect(ex, isNull, reason: 'short home overflowed: $ex');
   });
@@ -969,6 +1412,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
           repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
           engineProvider.overrideWithValue(FakePlaybackEngine()),
         ],

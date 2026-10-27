@@ -31,16 +31,16 @@ jobs:
       - name: Create DMG
         run: |
           mkdir -p build/dmg_tmp
-          cp -R build/macos/Build/Products/Release/yureru.app build/dmg_tmp/
+          cp -R build/macos/Build/Products/Release/Yureru.app build/dmg_tmp/
           ln -s /Applications build/dmg_tmp/Applications
-          hdiutil create -volname "yureru" -srcfolder build/dmg_tmp -ov -format UDZO build/yureru-macos.dmg
+          hdiutil create -volname "Yureru" -srcfolder build/dmg_tmp -ov -format UDZO build/Yureru-macos.dmg
           rm -rf build/dmg_tmp
 
       - name: Upload macOS Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: build/yureru-macos.dmg
+          files: build/Yureru-macos.dmg
 
   build-windows:
     runs-on: windows-latest
@@ -66,13 +66,13 @@ jobs:
       - name: Archive Windows Release
         shell: pwsh
         run: |
-          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath build\yureru-windows-x64.zip
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath build\Yureru-windows-x64.zip
 
       - name: Upload Windows Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: build/yureru-windows-x64.zip
+          files: build/Yureru-windows-x64.zip
 
   build-linux:
     runs-on: ubuntu-latest
@@ -102,13 +102,13 @@ jobs:
 
       - name: Archive Linux Release
         run: |
-          tar -czvf build/yureru-linux-x64.tar.gz -C build/linux/x64/release/bundle .
+          tar -czvf build/Yureru-linux-x64.tar.gz -C build/linux/x64/release/bundle .
 
       - name: Upload Linux Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: build/yureru-linux-x64.tar.gz
+          files: build/Yureru-linux-x64.tar.gz
 
   build-android:
     runs-on: ubuntu-latest
@@ -129,13 +129,13 @@ jobs:
         run: flutter build apk --release
 
       - name: Rename Android APK
-        run: cp build/app/outputs/flutter-apk/app-release.apk build/yureru-android.apk
+        run: cp build/app/outputs/flutter-apk/app-release.apk build/Yureru-android.apk
 
       - name: Upload Android Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: build/yureru-android.apk
+          files: build/Yureru-android.apk
 
   build-ios:
     runs-on: macos-latest
@@ -159,21 +159,21 @@ jobs:
         run: |
           mkdir -p build/ios/Payload
           cp -R build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app build/ios/Payload/Runner.app
-          (cd build/ios && /usr/bin/zip -qry -y yureru-ios-unsigned.ipa Payload)
+          (cd build/ios && /usr/bin/zip -qry -y Yureru-ios-unsigned.ipa Payload)
 
       - name: Build iOS Simulator app
         run: xcodebuild -quiet -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/ios/SimulatorDerived ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build
 
       - name: Archive iOS builds
         run: |
-          ditto -c -k --sequesterRsrc --keepParent build/ios/archive/Runner.xcarchive build/yureru-ios-unsigned.xcarchive.zip
-          ditto -c -k --sequesterRsrc --keepParent build/ios/SimulatorDerived/Build/Products/Debug-iphonesimulator/Runner.app build/yureru-ios-simulator-arm64.zip
+          ditto -c -k --sequesterRsrc --keepParent build/ios/archive/Runner.xcarchive build/Yureru-ios-unsigned.xcarchive.zip
+          ditto -c -k --sequesterRsrc --keepParent build/ios/SimulatorDerived/Build/Products/Debug-iphonesimulator/Runner.app build/Yureru-ios-simulator-arm64.zip
 
       - name: Upload iOS Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            build/ios/yureru-ios-unsigned.ipa
-            build/yureru-ios-unsigned.xcarchive.zip
-            build/yureru-ios-simulator-arm64.zip
+            build/ios/Yureru-ios-unsigned.ipa
+            build/Yureru-ios-unsigned.xcarchive.zip
+            build/Yureru-ios-simulator-arm64.zip

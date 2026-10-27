@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:media_kit/media_kit.dart' as mk;
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
+import 'ambient_colors.dart';
 import 'playback_engine.dart';
 
 /// media_kit-backed engine. The ONLY place importing media_kit(_video).
@@ -18,6 +22,10 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   final List<StreamSubscription> _subs = [];
   double _rate = 1.0;
   double _volume = 1.0;
+  bool _normalizationEnabled = false;
+  final ValueNotifier<ui.Image?> _ambientMatteFrame = ValueNotifier(null);
+  AmbientEdgeColors? _previousAmbientEdges;
+  (Rect?, double, double, double)? _ambientGeometry;
 
   mk.Player _ensurePlayer() {
     final existing = _player;
@@ -87,6 +95,9 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   @override
   Future<void> load(PlaybackSource source, {bool autoplay = true}) async {
     _completedFired = false;
+    _previousAmbientEdges = null;
+    _ambientGeometry = null;
+    _replaceAmbientMatteFrame(null);
     final p = _ensurePlayer();
     await _enableHardwareDecoding(p);
     await _ensureVideoController(p);
@@ -131,6 +142,74 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   }
 
   @override
+  bool get supportsVolumeNormalization => true;
+
+  @override
+  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
+    if (_normalizationEnabled == enabled) return;
+    final platform = _ensurePlayer().platform;
+    if (platform is! mk.NativePlayer) {
+      throw UnsupportedError('Native audio filtering is unavailable');
+    }
+    // A label replaces only our own filter and preserves future EQ/effects.
+    await platform.command(
+      enabled
+          ? [
+              'af',
+              'add',
+              '@yureru_normalize:lavfi=[dynaudnorm=f=150:g=15:p=0.9:m=4:r=0.15]',
+            ]
+          : ['af', 'remove', '@yureru_normalize'],
+    );
+    // media_kit logs command failures rather than throwing; verify the result.
+    final filters = await platform.getProperty('af');
+    if (filters.contains('yureru_normalize') != enabled) {
+      throw StateError('Volume normalization could not be applied');
+    }
+    _normalizationEnabled = enabled;
+  }
+
+  @override
+  Future<String?> readEmbeddedLyrics() async {
+    final player = _player;
+    if (player == null) return null;
+    final platform = player.platform;
+    if (platform is! mk.NativePlayer) return null;
+    try {
+      final count =
+          int.tryParse(await platform.getProperty('metadata/list/count')) ?? 0;
+      final tags = <String, String>{};
+      for (var i = 0; i < count; i++) {
+        final key = await platform.getProperty('metadata/list/$i/key');
+        if (key.toLowerCase().contains('lyric')) {
+          final normalizedKey = key.toLowerCase().replaceAll(
+            RegExp(r'[^a-z]'),
+            '',
+          );
+          tags[normalizedKey] = await platform.getProperty(
+            'metadata/list/$i/value',
+          );
+        }
+      }
+      for (final preferred in const [
+        'syncedlyrics',
+        'synchronizedlyrics',
+        'lyrics',
+        'unsyncedlyrics',
+      ]) {
+        final value = tags[preferred];
+        if (value?.trim().isNotEmpty == true) return value;
+      }
+      for (final value in tags.values) {
+        if (value.trim().isNotEmpty) return value;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
   Future<void> open(String mediaId, String pathOrUrl) =>
       load(PlaybackSource(mediaId: mediaId, uri: pathOrUrl), autoplay: true);
 
@@ -171,6 +250,86 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   }
 
   @override
+  Future<ui.Image?> captureAmbientFrame({
+    Rect? aperture,
+    double spread = 1,
+    double depth = 1,
+    double softness = 1,
+  }) async {
+    final player = _player;
+    if (player == null) return null;
+    ui.Codec? codec;
+    ui.Image? image;
+    try {
+      // mpv's screenshot-raw path can abort the native process while converting
+      // frames (m_config_cache_from_shadow assertion on macOS). Use its encoded
+      // screenshot path instead; decoding at a bounded width keeps the ambient
+      // sampler inexpensive and avoids exposing a native abort to Dart catches.
+      final jpeg = await player.screenshot(format: 'image/jpeg');
+      if (jpeg == null || jpeg.isEmpty) return null;
+      codec = await ui.instantiateImageCodec(jpeg, targetWidth: 480);
+      image = (await codec.getNextFrame()).image;
+      final pixels = await image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
+      if (pixels == null) return null;
+      final sampled = sampleAmbientEdges(
+        pixels.buffer.asUint8List(pixels.offsetInBytes, pixels.lengthInBytes),
+        image.width,
+        image.height,
+      );
+      final previous = _previousAmbientEdges;
+      final smoothed = previous == null
+          ? sampled
+          : updateAmbientEdges(previous, sampled);
+      final geometry = (aperture, spread, depth, softness);
+      if (identical(previous, smoothed) && _ambientGeometry == geometry) {
+        return null;
+      }
+      final frame = await renderAmbientGlow(
+        smoothed,
+        aperture: aperture,
+        spread: spread,
+        depth: depth,
+        softness: softness,
+      );
+      _previousAmbientEdges = smoothed;
+      _ambientGeometry = geometry;
+      // The video surface is never covered with a sampled matte image. This
+      // keeps decoded video pixels crisp and lets ambient spill stay behind
+      // the player as a separate glow layer.
+      _replaceAmbientMatteFrame(null);
+      return frame;
+    } catch (_) {
+      return null;
+    } finally {
+      image?.dispose();
+      codec?.dispose();
+    }
+  }
+
+  @override
+  Future<void> setVideoOutputSize({int? width, int? height}) async {
+    // media_kit_video does not support changing output dimensions on Android.
+    // The system owns the output size for native mobile PiP as well.
+    if (Platform.isAndroid || Platform.isIOS) return;
+    final controller = _vc;
+    if (controller == null) return;
+    try {
+      await controller.platform.future;
+      await controller.setSize(width: width, height: height);
+    } catch (_) {
+      // Keep PiP usable if a renderer does not support output resizing.
+    }
+  }
+
+  @override
+  bool get supportsPictureInPicture => false;
+
+  @override
+  Future<bool> enterPictureInPicture() async => false;
+
+  @override
   Stream<Duration> get positionStream =>
       _player?.stream.position ?? const Stream.empty();
   @override
@@ -194,6 +353,19 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
       return null;
     }
     return width / height;
+  }
+
+  @override
+  ValueListenable<ui.Image?> get ambientMatteFrameListenable =>
+      _ambientMatteFrame;
+
+  void _replaceAmbientMatteFrame(ui.Image? image) {
+    final previous = _ambientMatteFrame.value;
+    if (identical(previous, image)) return;
+    _ambientMatteFrame.value = image;
+    if (previous != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => previous.dispose());
+    }
   }
 
   @override
@@ -226,6 +398,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     await _player?.dispose();
     _player = null;
     _vc = null;
+    _replaceAmbientMatteFrame(null);
     // NOTE: snapshot/completed controllers stay open — the engine lives as a
     // singleton via provider for the whole app lifetime. Closing them here
     // would break any later load() with "add after close".

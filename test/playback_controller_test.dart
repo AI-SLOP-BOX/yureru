@@ -19,6 +19,30 @@ ProviderContainer makeContainer(FakePlaybackEngine fake) {
 }
 
 void main() {
+  test(
+    'mute restores the last audible volume after slider zero and clamping',
+    () async {
+      final fake = FakePlaybackEngine()..vol = 0.4;
+      final container = makeContainer(fake);
+      addTearDown(container.dispose);
+      final controller = container.read(playbackControllerProvider);
+      await controller.toggleMute();
+      expect(fake.volume, 0);
+      await controller.toggleMute();
+      expect(fake.volume, 0.4);
+      await controller.setVolume(0.65);
+      await controller.setVolume(0);
+      await controller.toggleMute();
+      expect(fake.volume, 0.65);
+      expect(container.read(volumeProvider), 0.65);
+      await controller.setVolume(2);
+      expect(fake.volume, 1);
+      await controller.setVolume(-1);
+      await controller.toggleMute();
+      expect(fake.volume, 1);
+    },
+  );
+
   test('play/pause/seek delegate to engine', () async {
     final fake = FakePlaybackEngine();
     final c = makeContainer(fake);

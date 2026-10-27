@@ -1,6 +1,9 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
+import '../i18n.dart';
 import '../nav.dart';
 import '../theme.dart';
 import 'thumb_image.dart';
@@ -13,6 +16,7 @@ class Sidebar extends ConsumerWidget {
   final Nav nav;
   final String? detailPlaylistId;
   final bool viewingPlayer;
+  final bool ambient;
   final ValueChanged<Nav> onNav;
   final ValueChanged<String> onPlaylist;
   final VoidCallback? onLogoHome;
@@ -22,6 +26,7 @@ class Sidebar extends ConsumerWidget {
     required this.nav,
     required this.detailPlaylistId,
     this.viewingPlayer = false,
+    this.ambient = false,
     required this.onNav,
     required this.onPlaylist,
     this.onLogoHome,
@@ -32,10 +37,15 @@ class Sidebar extends ConsumerWidget {
     final lib = ref.watch(libraryProvider);
     final collapsed = ref.watch(sidebarCollapsedProvider);
     final playlists = lib.playlists;
-    if (collapsed) return _rail(context, ref);
-    return Container(
+    final panelColor = themePanel(context);
+    if (collapsed) {
+      return _rail(context, ref, panelColor: panelColor, ambient: ambient);
+    }
+    final panel = Container(
       width: width,
-      color: themePanel(context),
+      // Keep labels readable over changing artwork while the heavy blur makes
+      // the pane boundary dissolve into the ambient background.
+      color: ambient ? panelColor.withValues(alpha: 0.56) : panelColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -51,7 +61,7 @@ class Sidebar extends ConsumerWidget {
           const SizedBox(height: 24),
           _NavItem(
             icon: Icons.home_rounded,
-            label: 'ライブラリ',
+            label: ref.tr('library'),
             selected:
                 nav == Nav.library &&
                 detailPlaylistId == null &&
@@ -60,7 +70,7 @@ class Sidebar extends ConsumerWidget {
           ),
           _NavItem(
             icon: Icons.playlist_play_rounded,
-            label: 'プレイリスト',
+            label: ref.tr('playlists'),
             selected:
                 nav == Nav.playlists &&
                 detailPlaylistId == null &&
@@ -69,29 +79,32 @@ class Sidebar extends ConsumerWidget {
           ),
           _NavItem(
             icon: Icons.video_library_rounded,
-            label: 'すべての動画',
+            label: ref.tr('all_videos'),
             selected: nav == Nav.videos && !viewingPlayer,
             onTap: () => onNav(Nav.videos),
           ),
           _NavItem(
             icon: Icons.settings_rounded,
-            label: '設定',
+            label: ref.tr('settings'),
             selected: nav == Nav.settings && !viewingPlayer,
             onTap: () => onNav(Nav.settings),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Divider(
+              height: 1,
+              color: ambient ? Colors.transparent : null,
+            ),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'プレイリスト',
+                    ref.tr('playlists'),
                     style: TextStyle(
-                      color: kTextSub,
+                      color: themeTextSub(context),
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                     ),
@@ -99,7 +112,7 @@ class Sidebar extends ConsumerWidget {
                 ),
                 IconButton(
                   icon: const Icon(Icons.add, size: 20),
-                  tooltip: '新規プレイリスト',
+                  tooltip: ref.tr('new_playlist'),
                   visualDensity: VisualDensity.compact,
                   onPressed: () => _newPlaylist(context, ref),
                 ),
@@ -108,11 +121,14 @@ class Sidebar extends ConsumerWidget {
           ),
           Expanded(
             child: playlists.isEmpty
-                ? const Padding(
+                ? Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16),
                     child: Text(
-                      '＋から新規作成できます',
-                      style: TextStyle(color: kTextSub, fontSize: 12),
+                      ref.tr('empty_playlist'),
+                      style: TextStyle(
+                        color: themeTextSub(context),
+                        fontSize: 12,
+                      ),
                     ),
                   )
                 : ListView.builder(
@@ -129,6 +145,7 @@ class Sidebar extends ConsumerWidget {
                       return _PlaylistItem(
                         title: pl.name,
                         count: pl.mediaIds.length,
+                        countLabel: ref.tracksCount(pl.mediaIds.length),
                         seed: pl.id,
                         thumbMediaId: first?.id,
                         thumbPath: first?.localPath,
@@ -142,53 +159,74 @@ class Sidebar extends ConsumerWidget {
         ],
       ),
     );
+    return ambient
+        ? ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+              child: panel,
+            ),
+          )
+        : panel;
   }
 
   /// Collapsed icon rail (labels + playlist list hidden).
-  Widget _rail(BuildContext context, WidgetRef ref) {
+  Widget _rail(
+    BuildContext context,
+    WidgetRef ref, {
+    required Color panelColor,
+    required bool ambient,
+  }) {
     bool sel(bool v) => v && !viewingPlayer;
-    return Container(
+    final panel = Container(
       width: 76,
-      color: themePanel(context),
+      color: ambient ? panelColor.withValues(alpha: 0.56) : panelColor,
       child: Column(
         children: [
           const SizedBox(height: 16),
-          _LogoButton(onTap: onLogoHome),
+          _LogoButton(onTap: onLogoHome, tooltip: ref.tr('library')),
           const SizedBox(height: 20),
           _RailButton(
             icon: Icons.home_rounded,
-            tooltip: 'ライブラリ',
+            tooltip: ref.tr('library'),
             selected: sel(nav == Nav.library && detailPlaylistId == null),
             onTap: () => onNav(Nav.library),
           ),
           _RailButton(
             icon: Icons.playlist_play_rounded,
-            tooltip: 'プレイリスト',
+            tooltip: ref.tr('playlists'),
             selected: sel(nav == Nav.playlists && detailPlaylistId == null),
             onTap: () => onNav(Nav.playlists),
           ),
           _RailButton(
             icon: Icons.video_library_rounded,
-            tooltip: 'すべての動画',
+            tooltip: ref.tr('all_videos'),
             selected: sel(nav == Nav.videos),
             onTap: () => onNav(Nav.videos),
           ),
           _RailButton(
             icon: Icons.settings_rounded,
-            tooltip: '設定',
+            tooltip: ref.tr('settings'),
             selected: sel(nav == Nav.settings),
             onTap: () => onNav(Nav.settings),
           ),
           const SizedBox(height: 8),
           IconButton(
             icon: const Icon(Icons.add, size: 20),
-            tooltip: '新規プレイリスト',
+            tooltip: ref.tr('new_playlist'),
             visualDensity: VisualDensity.compact,
             onPressed: () => _newPlaylist(ref.context, ref),
           ),
         ],
       ),
     );
+    return ambient
+        ? ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+              child: panel,
+            ),
+          )
+        : panel;
   }
 
   Future<void> _newPlaylist(BuildContext context, WidgetRef ref) async {
@@ -196,20 +234,20 @@ class Sidebar extends ConsumerWidget {
     final name = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('新規プレイリスト'),
+        title: Text(ref.tr('create_playlist')),
         content: TextField(
           controller: ctrl,
-          decoration: const InputDecoration(hintText: 'プレイリスト名'),
+          decoration: InputDecoration(hintText: ref.tr('playlist_name')),
           autofocus: true,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('キャンセル'),
+            child: Text(ref.tr('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, ctrl.text),
-            child: const Text('作成'),
+            child: Text(ref.tr('create')),
           ),
         ],
       ),
@@ -222,38 +260,20 @@ class Sidebar extends ConsumerWidget {
 
 class _LogoButton extends StatelessWidget {
   final VoidCallback? onTap;
-  const _LogoButton({this.onTap});
+  final String tooltip;
+  const _LogoButton({this.onTap, required this.tooltip});
 
   @override
   Widget build(BuildContext context) {
-    final logo = Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Image.asset(
-        'assets/yureru_logo.png',
-        width: 40,
-        height: 40,
-        fit: BoxFit.contain,
-        errorBuilder: (_, _, _) => Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: Colors.black,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: const Icon(Icons.graphic_eq, color: Colors.white, size: 26),
-        ),
-      ),
-    );
+    // Use the theme-neutral vector mark in the app chrome. The raster app icon
+    // has a baked-in black square, which looks like a stray dark tile in light
+    // mode and an overly heavy block in the compact rail.
+    const logo = YureruWaveLogo(size: 40);
     if (onTap == null) return logo;
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: onTap,
-      child: Tooltip(message: 'ライブラリに戻る', child: logo),
+      child: Tooltip(message: tooltip, child: logo),
     );
   }
 }
@@ -276,7 +296,9 @@ class _RailButton extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Material(
-        color: selected ? kAccent.withValues(alpha: 0.22) : Colors.transparent,
+        color: selected
+            ? (isDark ? kCardHover : const Color(0xFFE1E2E6))
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           onTap: onTap,
@@ -323,9 +345,7 @@ class _NavItem extends StatelessWidget {
         duration: const Duration(milliseconds: 160),
         decoration: BoxDecoration(
           color: selected
-              ? (isDark
-                    ? Colors.white.withValues(alpha: 0.12)
-                    : Colors.black.withValues(alpha: 0.08))
+              ? (isDark ? kCardHover : const Color(0xFFE1E2E6))
               : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
@@ -347,7 +367,7 @@ class _NavItem extends StatelessWidget {
                     width: 3.5,
                     height: selected ? 18 : 0,
                     decoration: BoxDecoration(
-                      color: isDark ? kAccent : Colors.black87,
+                      color: theme.colorScheme.primary,
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -356,8 +376,8 @@ class _NavItem extends StatelessWidget {
                     icon,
                     size: 22,
                     color: selected
-                        ? (isDark ? Colors.white : Colors.black)
-                        : (isDark ? kTextSub : Colors.black54),
+                        ? theme.colorScheme.onSurface
+                        : theme.colorScheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -369,8 +389,8 @@ class _NavItem extends StatelessWidget {
                             ? FontWeight.w700
                             : FontWeight.w500,
                         color: selected
-                            ? (isDark ? Colors.white : Colors.black)
-                            : (isDark ? kTextSub : Colors.black87),
+                            ? theme.colorScheme.onSurface
+                            : theme.colorScheme.onSurfaceVariant,
                         letterSpacing: -0.2,
                       ),
                     ),
@@ -388,6 +408,7 @@ class _NavItem extends StatelessWidget {
 class _PlaylistItem extends StatelessWidget {
   final String title;
   final int count;
+  final String countLabel;
   final String seed;
   final String? thumbMediaId;
   final String? thumbPath;
@@ -396,6 +417,7 @@ class _PlaylistItem extends StatelessWidget {
   const _PlaylistItem({
     required this.title,
     required this.count,
+    required this.countLabel,
     required this.seed,
     this.thumbMediaId,
     this.thumbPath,
@@ -472,7 +494,7 @@ class _PlaylistItem extends StatelessWidget {
                         ),
                         const SizedBox(height: 1),
                         Text(
-                          '$count本の動画',
+                          countLabel,
                           style: TextStyle(
                             fontSize: 11.5,
                             color: isDark ? kTextMuted : Colors.black45,

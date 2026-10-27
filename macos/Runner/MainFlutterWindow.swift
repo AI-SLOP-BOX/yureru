@@ -6,6 +6,24 @@ import AVFoundation
 class MainFlutterWindow: NSWindow {
   private var mediaPickerChannel: FlutterMethodChannel?
   private var appExitChannel: FlutterMethodChannel?
+  private var systemMediaControls: SystemMediaControls?
+  private var normalWindowFrameBeforeCompactPlayer: NSRect?
+  private var normalWindowMinSizeBeforeCompactPlayer: NSSize?
+  private var normalWindowAspectRatioBeforeCompactPlayer: NSSize?
+  private var normalWindowLevelBeforeCompactPlayer: NSWindow.Level?
+  private var normalWindowStyleMaskBeforeCompactPlayer: NSWindow.StyleMask?
+  private var normalWindowMovableByBackgroundBeforeCompactPlayer: Bool?
+  private var normalWindowPreservesContentDuringLiveResizeBeforeCompactPlayer: Bool?
+  private var windowFrameBeforeAppFullscreen: NSRect?
+  private var windowStyleMaskBeforeAppFullscreen: NSWindow.StyleMask?
+  private var windowMinSizeBeforeAppFullscreen: NSSize?
+  private var windowAspectRatioBeforeAppFullscreen: NSSize?
+  private var windowShadowBeforeAppFullscreen: Bool?
+  private var windowMovableByBackgroundBeforeAppFullscreen: Bool?
+  private var windowLevelBeforeAppFullscreen: NSWindow.Level?
+
+  // Borderless cinema mode still needs to receive keyboard shortcuts.
+  override var canBecomeKey: Bool { true }
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -17,7 +35,9 @@ class MainFlutterWindow: NSWindow {
       width: min(1280, visible.width - 40),
       height: min(820, visible.height - 60))
     self.contentViewController = flutterViewController
-    self.minSize = NSSize(width: 380, height: 600)
+    // Let the desktop window shrink to a phone-sized viewport so the narrow
+    // Flutter layout can be tested and used without a desktop-width minimum.
+    self.minSize = NSSize(width: 360, height: 600)
     self.setFrame(windowFrame, display: true)
     self.center()
 
@@ -25,13 +45,14 @@ class MainFlutterWindow: NSWindow {
 
     registerMediaPicker(flutterViewController)
     registerAppExit(flutterViewController)
+    systemMediaControls = SystemMediaControls(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
 
-    // Flutter engine startup can shrink the window back to 800x600 once;
+    // Flutter engine startup can shrink the window once during initialization;
     // re-assert the desktop-layout size after that settles.
     DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-      guard let self = self, self.frame.size.width < 1000 else { return }
+      guard let self = self, self.level != .floating, self.frame.size.width < 1000 else { return }
       self.setFrame(windowFrame, display: true)
       self.center()
     }
@@ -48,7 +69,8 @@ class MainFlutterWindow: NSWindow {
       completion()
       return
     }
-    appExitChannel.invokeMethod("prepareForTermination", arguments: nil) { _ in
+    appExitChannel.invokeMethod("prepareForTermination", arguments: nil) { [weak self] _ in
+      self?.systemMediaControls?.clear()
       completion()
     }
   }
@@ -69,7 +91,34 @@ class MainFlutterWindow: NSWindow {
         self?.pickFolder(result: result)
       case "toggleFullscreen":
         DispatchQueue.main.async {
-          NSApp.mainWindow?.toggleFullScreen(nil)
+          (NSApp.keyWindow as? MainFlutterWindow ?? self)?.toggleFullScreen(nil)
+          result(nil)
+        }
+      case "setCompactPlayerWindow":
+        let applyCompactFrame = { [weak self] in
+          // Flutter can have a key window that differs from the window that
+          // registered this channel (for example after a PiP surface swap).
+          // Always resize the visible app window, while keeping the receiver
+          // as a fallback for startup and headless states.
+          let target = (NSApp.keyWindow as? MainFlutterWindow) ?? self
+          guard let target else {
+            result(FlutterError(
+              code: "window_unavailable",
+              message: "Yureru window is unavailable",
+              details: nil))
+            return
+          }
+          target.setCompactPlayerWindow()
+          result(["width": target.frame.width, "height": target.frame.height])
+        }
+        if Thread.isMainThread {
+          applyCompactFrame()
+        } else {
+          DispatchQueue.main.async(execute: applyCompactFrame)
+        }
+      case "restoreCompactPlayerWindow":
+        DispatchQueue.main.async { [weak self] in
+          self?.restoreCompactPlayerWindow()
           result(nil)
         }
       case "makeThumbnail":
@@ -83,6 +132,112 @@ class MainFlutterWindow: NSWindow {
     mediaPickerChannel = channel
   }
 
+  /// Use a borderless window-sized cinema mode instead of AppKit's native
+  /// full-screen Space transition. Recent macOS crash reports show an
+  /// uncaught exception in NSWindow._reallySetFrame while AppKit restores the
+  /// window after leaving its native full-screen transition.
+  @objc override func toggleFullScreen(_ sender: Any?) {
+    // PiP uses its own saved window state and cannot be nested with cinema mode.
+    guard normalWindowFrameBeforeCompactPlayer == nil else { return }
+
+    if let originalFrame = windowFrameBeforeAppFullscreen {
+      restoreAppFullscreen(frame: originalFrame)
+    } else {
+      enterAppFullscreen()
+    }
+  }
+
+  private func enterAppFullscreen() {
+    guard let screen = screen ?? NSScreen.main else { return }
+
+    windowFrameBeforeAppFullscreen = frame
+    windowStyleMaskBeforeAppFullscreen = styleMask
+    windowMinSizeBeforeAppFullscreen = minSize
+    windowAspectRatioBeforeAppFullscreen = contentAspectRatio
+    windowShadowBeforeAppFullscreen = hasShadow
+    windowMovableByBackgroundBeforeAppFullscreen = isMovableByWindowBackground
+    windowLevelBeforeAppFullscreen = level
+
+    // A borderless window avoids AppKit's crashing full-screen exit path while
+    // still letting the Flutter player occupy the complete usable display area.
+    styleMask = [.borderless]
+    minSize = .zero
+    contentAspectRatio = .zero
+    hasShadow = false
+    isMovableByWindowBackground = false
+    level = .normal
+    setFrame(screen.visibleFrame, display: true, animate: false)
+  }
+
+  private func restoreAppFullscreen(frame originalFrame: NSRect) {
+    styleMask = windowStyleMaskBeforeAppFullscreen ?? [.titled, .closable, .miniaturizable, .resizable]
+    minSize = windowMinSizeBeforeAppFullscreen ?? NSSize(width: 360, height: 600)
+    contentAspectRatio = windowAspectRatioBeforeAppFullscreen ?? .zero
+    hasShadow = windowShadowBeforeAppFullscreen ?? true
+    isMovableByWindowBackground = windowMovableByBackgroundBeforeAppFullscreen ?? false
+    level = windowLevelBeforeAppFullscreen ?? .normal
+    setFrame(originalFrame, display: true, animate: false)
+
+    windowFrameBeforeAppFullscreen = nil
+    windowStyleMaskBeforeAppFullscreen = nil
+    windowMinSizeBeforeAppFullscreen = nil
+    windowAspectRatioBeforeAppFullscreen = nil
+    windowShadowBeforeAppFullscreen = nil
+    windowMovableByBackgroundBeforeAppFullscreen = nil
+    windowLevelBeforeAppFullscreen = nil
+  }
+
+  private func setCompactPlayerWindow() {
+    guard normalWindowFrameBeforeCompactPlayer == nil else { return }
+    normalWindowFrameBeforeCompactPlayer = frame
+    normalWindowMinSizeBeforeCompactPlayer = minSize
+    normalWindowAspectRatioBeforeCompactPlayer = contentAspectRatio
+    normalWindowLevelBeforeCompactPlayer = level
+    normalWindowStyleMaskBeforeCompactPlayer = styleMask
+    normalWindowMovableByBackgroundBeforeCompactPlayer = isMovableByWindowBackground
+    normalWindowPreservesContentDuringLiveResizeBeforeCompactPlayer = preservesContentDuringLiveResize
+
+    styleMask = [.borderless, .resizable]
+    isMovableByWindowBackground = true
+    minSize = NSSize(width: 220, height: 124)
+    contentAspectRatio = NSSize(width: 16, height: 9)
+    level = .floating
+    // Flutter redraws and recomposites its full surface for every live-resize
+    // event. Reuse the current frame while dragging and let it redraw once the
+    // resize ends, which keeps interactive PiP resizing responsive.
+    preservesContentDuringLiveResize = true
+
+    // Keep the regular app's minimum size intact, while the compact player
+    // uses a real 16:9 content area small enough for PiP.
+    let contentRect = NSRect(x: 0, y: 0, width: 240, height: 135)
+    let compactFrameSize = frameRect(forContentRect: contentRect).size
+    var compactFrame = frame
+    compactFrame.origin.y += compactFrame.height - compactFrameSize.height
+    compactFrame.size = compactFrameSize
+    setFrame(compactFrame, display: true, animate: false)
+  }
+
+  private func restoreCompactPlayerWindow() {
+    guard let originalFrame = normalWindowFrameBeforeCompactPlayer else { return }
+    styleMask = normalWindowStyleMaskBeforeCompactPlayer ?? [.titled, .closable, .miniaturizable, .resizable]
+    isMovableByWindowBackground = normalWindowMovableByBackgroundBeforeCompactPlayer ?? false
+    preservesContentDuringLiveResize = normalWindowPreservesContentDuringLiveResizeBeforeCompactPlayer ?? false
+    level = normalWindowLevelBeforeCompactPlayer ?? .normal
+    minSize = normalWindowMinSizeBeforeCompactPlayer ?? NSSize(width: 360, height: 600)
+    contentAspectRatio = normalWindowAspectRatioBeforeCompactPlayer ?? .zero
+    // The Dart window-manager path also restores bounds after this channel
+    // call. Avoid AppKit's asynchronous frame animation here: overlapping
+    // NSWindow frame animations can throw from _reallySetFrame on macOS.
+    setFrame(originalFrame, display: true, animate: false)
+    normalWindowFrameBeforeCompactPlayer = nil
+    normalWindowMinSizeBeforeCompactPlayer = nil
+    normalWindowAspectRatioBeforeCompactPlayer = nil
+    normalWindowLevelBeforeCompactPlayer = nil
+    normalWindowStyleMaskBeforeCompactPlayer = nil
+    normalWindowMovableByBackgroundBeforeCompactPlayer = nil
+    normalWindowPreservesContentDuringLiveResizeBeforeCompactPlayer = nil
+  }
+
   private func pickVideos(result: @escaping FlutterResult) {
     let present = {
       let panel = NSOpenPanel()
@@ -91,17 +246,18 @@ class MainFlutterWindow: NSWindow {
       panel.canChooseFiles = true
       panel.showsHiddenFiles = false
       panel.treatsFilePackagesAsDirectories = false
-      panel.message = "インポートする動画ファイルを選択してください"
+      panel.message = "インポートする音声・動画ファイルを選択してください"
       panel.prompt = "インポート"
       var types: [UTType] = [.movie, .video, .mpeg4Movie, .quickTimeMovie, .mpeg2Video]
+      types.append(.audio)
       if #available(macOS 11.0, *) {
-        for ext in ["mkv", "webm", "flv", "wmv", "ts", "m2ts", "3gp", "m4v"] {
+        for ext in ["mkv", "webm", "flv", "wmv", "ts", "m2ts", "3gp", "m4v", "mp3", "opus", "ogg", "oga", "m4a", "aac", "wav", "flac", "aiff", "aif", "alac", "caf"] {
           if let t = UTType(filenameExtension: ext) { types.append(t) }
         }
         panel.allowedContentTypes = types
       } else {
         panel.allowedFileTypes = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "ts",
-          "m2ts", "mpg", "mpeg", "flv", "wmv", "3gp"]
+          "m2ts", "mpg", "mpeg", "flv", "wmv", "3gp", "mp3", "opus", "ogg", "m4a", "aac", "wav", "flac", "aiff"]
       }
       let finish: (NSApplication.ModalResponse) -> Void = { response in
         if response == .OK, !panel.urls.isEmpty {

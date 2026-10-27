@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
+import '../i18n.dart';
 import '../theme.dart';
 import 'duration_text.dart';
 import 'thumb_image.dart';
+import 'frosted_panel.dart';
 
 /// Global search palette (Cmd/Ctrl+K or the search icon): unified results
 /// across videos and playlists. Supports keyboard navigation (Up/Down/Enter),
@@ -28,7 +30,6 @@ class SearchOverlay extends ConsumerStatefulWidget {
       barrierDismissible: true,
       barrierColor: Colors.black.withValues(alpha: 0.65),
       builder: (dlgContext) {
-        final isDark = Theme.of(dlgContext).brightness == Brightness.dark;
         return Dialog(
           insetPadding: const EdgeInsets.symmetric(
             horizontal: 40,
@@ -38,27 +39,8 @@ class SearchOverlay extends ConsumerStatefulWidget {
           elevation: 0,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 580),
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xF214141E)
-                    : Colors.white.withValues(alpha: 0.98),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.12)
-                      : Colors.black.withValues(alpha: 0.1),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: isDark ? 0.6 : 0.2),
-                    blurRadius: 32,
-                    spreadRadius: 4,
-                    offset: const Offset(0, 12),
-                  ),
-                ],
-              ),
-              clipBehavior: Clip.antiAlias,
+            child: FrostedPanel(
+              borderRadius: BorderRadius.circular(18),
               child: SearchOverlay(onOpenPlaylist: onOpenPlaylist),
             ),
           ),
@@ -100,7 +82,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
 
     final lib = ref.read(libraryProvider);
     final q = _q.trim().toLowerCase();
-    final videos = lib.media.where((m) {
+    final videos = lib.savedMedia.where((m) {
       if (q.isEmpty) return true;
       final titleMatch = m.title.toLowerCase().contains(q);
       final artistMatch = m.artist?.toLowerCase().contains(q) ?? false;
@@ -159,7 +141,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
     final q = _q.trim().toLowerCase();
 
     // Support both title and artist search
-    final videos = lib.media.where((m) {
+    final videos = lib.savedMedia.where((m) {
       if (q.isEmpty) return true;
       final titleMatch = m.title.toLowerCase().contains(q);
       final artistMatch = m.artist?.toLowerCase().contains(q) ?? false;
@@ -191,7 +173,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
             }),
             style: const TextStyle(fontSize: 15),
             decoration: InputDecoration(
-              hintText: '曲名、アーティスト、プレイリストを検索...',
+              hintText: ref.tr('search_hint'),
               prefixIcon: const Icon(
                 Icons.search_rounded,
                 size: 20,
@@ -199,7 +181,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
               ),
               suffixIcon: _ctrl.text.isNotEmpty
                   ? IconButton(
-                      tooltip: 'クリア',
+                      tooltip: ref.tr('clear'),
                       splashRadius: 16,
                       icon: const Icon(
                         Icons.clear_rounded,
@@ -221,10 +203,10 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
             children: [
               if (playlists.isNotEmpty) ...[
-                const Padding(
+                Padding(
                   padding: EdgeInsets.fromLTRB(12, 6, 12, 4),
                   child: Text(
-                    'プレイリスト',
+                    ref.tr('playlists'),
                     style: TextStyle(
                       fontSize: 12,
                       color: kTextSub,
@@ -269,7 +251,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text(
-                          '${pl.mediaIds.length}本の動画',
+                          ref.tracksCount(pl.mediaIds.length),
                           style: const TextStyle(fontSize: 12, color: kTextSub),
                         ),
                         trailing: isSelected
@@ -289,10 +271,10 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                 ],
               ],
               if (videos.isNotEmpty) ...[
-                const Padding(
+                Padding(
                   padding: EdgeInsets.fromLTRB(12, 8, 12, 4),
                   child: Text(
-                    '動画・楽曲',
+                    ref.tr('all_videos'),
                     style: TextStyle(
                       fontSize: 12,
                       color: kTextSub,
@@ -382,11 +364,11 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                 ],
               ],
               if (videos.isEmpty && playlists.isEmpty)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.all(28),
                   child: Center(
                     child: Text(
-                      '見つかりませんでした',
+                      ref.tr('not_found'),
                       style: TextStyle(color: kTextSub, fontSize: 13),
                     ),
                   ),

@@ -1,12 +1,16 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
+import '../i18n.dart';
 import '../layout_metrics.dart';
 import '../theme.dart';
 import '../widgets/duration_text.dart';
+import '../widgets/frosted_panel.dart';
 import '../widgets/thumb_image.dart';
 
 /// Playlist detail (center-pane body; the shell owns nav/transport chrome).
@@ -25,6 +29,7 @@ class PlaylistDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
+  static const double _desktopContentMaxWidth = 1440;
   bool _showSearch = false;
   bool _sortByCreator = false;
   final TextEditingController _searchCtrl = TextEditingController();
@@ -36,14 +41,24 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     super.dispose();
   }
 
+  Widget _contentFrame({required Widget child}) => Center(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: _desktopContentMaxWidth),
+      child: child,
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final lib = ref.watch(libraryProvider);
     final currentId = ref.watch(queueProvider.select((q) => q.currentId));
     final pl = lib.playlistById(widget.playlistId);
     if (pl == null) {
-      return const Center(
-        child: Text('プレイリストが見つかりません', style: TextStyle(color: kTextSub)),
+      return Center(
+        child: Text(
+          ref.tr('playlist_not_found'),
+          style: TextStyle(color: kTextSub),
+        ),
       );
     }
     final first = pl.mediaIds.isEmpty ? null : lib.byId(pl.mediaIds.first);
@@ -51,8 +66,15 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     final isDark = theme.brightness == Brightness.dark;
     final screenWidth = MediaQuery.sizeOf(context).width;
     final horizontalInset = LayoutMetrics.horizontalInset(context);
-    final artworkSize = (screenWidth * 0.36).clamp(108.0, 180.0).toDouble();
-    final artworkGap = screenWidth < 600 ? 14.0 : 24.0;
+    // Keep short playlist names from making the header feel artwork-heavy on
+    // desktop, while preserving a generous cover size on compact screens.
+    final artworkSize = (screenWidth * (screenWidth < 600 ? 0.34 : 0.16))
+        .clamp(
+          screenWidth < 600 ? 108.0 : 184.0,
+          screenWidth < 600 ? 152.0 : 220.0,
+        )
+        .toDouble();
+    final artworkGap = screenWidth < 600 ? 14.0 : 20.0;
 
     // Filter media items when search query is active
     final query = _searchQuery.trim().toLowerCase();
@@ -92,202 +114,363 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Grand Hero Header aesthetic
         Stack(
           children: [
-            // Ambient Glow behind the playlist header
-            Positioned(
-              left: 20,
-              top: -20,
-              child: IgnorePointer(
-                child: Container(
-                  width: artworkSize * 1.7,
-                  height: artworkSize * 1.7,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [
-                        kAccent.withValues(alpha: isDark ? 0.22 : 0.12),
-                        Colors.transparent,
-                      ],
-                    ),
+            if (first?.localPath != null)
+              Positioned.fill(
+                child: ClipRect(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ImageFiltered(
+                        imageFilter: ImageFilter.blur(sigmaX: 36, sigmaY: 36),
+                        child: ThumbImage(
+                          seed: pl.id,
+                          mediaId: first!.id,
+                          localPath: first.localPath,
+                          size: artworkSize,
+                          expand: true,
+                        ),
+                      ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              theme.scaffoldBackgroundColor.withValues(
+                                alpha: isDark ? 0.42 : 0.5,
+                              ),
+                              theme.scaffoldBackgroundColor.withValues(
+                                alpha: isDark ? 0.68 : 0.76,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                horizontalInset,
-                16,
-                horizontalInset,
-                16,
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  // Back button if applicable
-                  if (widget.onBack != null) ...[
-                    IconButton(
-                      tooltip: '戻る',
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: widget.onBack,
+            _contentFrame(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  horizontalInset,
+                  16,
+                  horizontalInset,
+                  16,
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    // Back button if applicable
+                    if (widget.onBack != null) ...[
+                      IconButton(
+                        tooltip: ref.tr('back'),
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: widget.onBack,
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    // Large Playlist Artwork
+                    Container(
+                      width: artworkSize,
+                      height: artworkSize,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            blurRadius: 20,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: first?.localPath == null
+                          ? Container(
+                              decoration: BoxDecoration(
+                                gradient: thumbGradient(pl.id),
+                              ),
+                              child: const Icon(
+                                Icons.playlist_play_rounded,
+                                size: 64,
+                                color: Colors.white70,
+                              ),
+                            )
+                          : ThumbImage(
+                              seed: pl.id,
+                              mediaId: first?.id,
+                              localPath: first?.localPath,
+                              size: artworkSize,
+                              radius: 16,
+                              expand: true,
+                            ),
                     ),
-                    const SizedBox(width: 12),
-                  ],
-                  // Large Playlist Artwork
-                  Container(
-                    width: artworkSize,
-                    height: artworkSize,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.45),
-                          blurRadius: 20,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: first?.localPath == null
-                        ? Container(
-                            decoration: BoxDecoration(
-                              gradient: thumbGradient(pl.id),
-                            ),
-                            child: const Icon(
-                              Icons.playlist_play_rounded,
-                              size: 64,
-                              color: Colors.white70,
-                            ),
-                          )
-                        : ThumbImage(
-                            seed: pl.id,
-                            mediaId: first?.id,
-                            localPath: first?.localPath,
-                            size: artworkSize,
-                            radius: 16,
-                            expand: true,
-                          ),
-                  ),
-                  SizedBox(width: artworkGap),
-                  // Title, meta info & action buttons layout
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isDark ? Colors.white10 : Colors.black12,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            'プレイリスト',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.5,
-                              color: isDark ? kTextSub : Colors.black54,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          displayTitle(pl.name),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.5,
-                            color: isDark ? Colors.white : Colors.black,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '${pl.mediaIds.length}本の動画',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: isDark ? kTextSub : Colors.black54,
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        // Circular action trio: [Edit] [Play] [More]
-                        LayoutBuilder(
-                          builder: (context, constraints) {
-                            final tight = constraints.maxWidth < 210;
-                            return Wrap(
-                              spacing: tight ? 4 : 14,
-                              runSpacing: 8,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                // 1. Edit playlist button (dark circular icon button)
-                                _actionCircle(
-                                  tooltip: 'プレイリストを編集',
-                                  icon: Icons.edit_rounded,
-                                  iconSize: 20,
-                                  buttonSize: tight ? 40 : 44,
-                                  isDark: isDark,
-                                  onTap: () => _showRenameDialog(context, pl),
+                    SizedBox(width: artworkGap),
+                    // Title, meta info & action buttons layout
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 560),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isDark ? Colors.white10 : Colors.black12,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                ref.tr('playlists'),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.5,
+                                  color: isDark ? kTextSub : Colors.black54,
                                 ),
-                                // 2. Center Large White Play Button
-                                Material(
-                                  color: pl.mediaIds.isEmpty
-                                      ? (isDark
-                                            ? Colors.white24
-                                            : Colors.black12)
-                                      : Colors.white,
-                                  shape: const CircleBorder(),
-                                  elevation: pl.mediaIds.isEmpty ? 0 : 3,
-                                  clipBehavior: Clip.antiAlias,
-                                  child: InkWell(
-                                    onTap: pl.mediaIds.isEmpty
-                                        ? null
-                                        : () {
-                                            showPlayerView(ref);
-                                            ref
-                                                .read(
-                                                  playbackControllerProvider,
-                                                )
-                                                .startPlaylist(
-                                                  pl.id,
-                                                  shuffle: false,
-                                                );
-                                          },
-                                    child: Container(
-                                      width: tight ? 44 : 52,
-                                      height: tight ? 44 : 52,
-                                      alignment: Alignment.center,
-                                      child: Icon(
-                                        Icons.play_arrow_rounded,
-                                        size: tight ? 30 : 34,
-                                        color: pl.mediaIds.isEmpty
-                                            ? Colors.white38
-                                            : Colors.black,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              displayTitle(pl.name),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.5,
+                                color: isDark ? Colors.white : Colors.black,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              ref.tracksCount(pl.mediaIds.length),
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: isDark ? kTextSub : Colors.black54,
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            // Circular action trio: [Edit] [Play] [More]
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final tight = constraints.maxWidth < 210;
+                                return Wrap(
+                                  spacing: tight ? 4 : 14,
+                                  runSpacing: 8,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    // 1. Edit playlist button (dark circular icon button)
+                                    _actionCircle(
+                                      tooltip: ref.tr('edit_playlist'),
+                                      icon: Icons.edit_rounded,
+                                      iconSize: 20,
+                                      buttonSize: tight ? 40 : 44,
+                                      isDark: isDark,
+                                      onTap: () =>
+                                          _showRenameDialog(context, pl),
+                                    ),
+                                    // 2. Center Large White Play Button
+                                    Material(
+                                      color: pl.mediaIds.isEmpty
+                                          ? (isDark
+                                                ? Colors.white24
+                                                : Colors.black12)
+                                          : Colors.white,
+                                      shape: const CircleBorder(),
+                                      elevation: pl.mediaIds.isEmpty ? 0 : 3,
+                                      clipBehavior: Clip.antiAlias,
+                                      child: InkWell(
+                                        onTap: pl.mediaIds.isEmpty
+                                            ? null
+                                            : () {
+                                                showPlayerView(ref);
+                                                ref
+                                                    .read(
+                                                      playbackControllerProvider,
+                                                    )
+                                                    .startPlaylist(
+                                                      pl.id,
+                                                      shuffle: false,
+                                                    );
+                                              },
+                                        child: Container(
+                                          width: tight ? 44 : 52,
+                                          height: tight ? 44 : 52,
+                                          alignment: Alignment.center,
+                                          child: Icon(
+                                            Icons.play_arrow_rounded,
+                                            size: tight ? 30 : 34,
+                                            color: pl.mediaIds.isEmpty
+                                                ? Colors.white38
+                                                : Colors.black,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    // 3. More options (PopupMenuButton formatted as dark circular button)
+                                    _moreMenuButton(
+                                      context,
+                                      pl,
+                                      isDark,
+                                      buttonSize: tight ? 40 : 44,
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (screenWidth >= 1200) ...[
+                      const SizedBox(width: 28),
+                      SizedBox(
+                        width: 270,
+                        child: FrostedPanel(
+                          borderRadius: BorderRadius.circular(16),
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (!_sortByCreator && query.isEmpty) ...[
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.drag_indicator_rounded,
+                                      size: 17,
+                                      color: themeTextSub(context),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        ref.tr('drag_to_reorder'),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: themeTextSub(context),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                Divider(height: 1, color: themeBorder(context)),
+                                const SizedBox(height: 6),
+                              ],
+                              Row(
+                                children: [
+                                  IconButton(
+                                    tooltip: ref.tr(
+                                      _showSearch ? 'close' : 'search_playlist',
+                                    ),
+                                    visualDensity: VisualDensity.compact,
+                                    icon: Icon(
+                                      _showSearch
+                                          ? Icons.close_rounded
+                                          : Icons.search_rounded,
+                                    ),
+                                    onPressed: () {
+                                      setState(() {
+                                        _showSearch = !_showSearch;
+                                        if (!_showSearch) {
+                                          _searchCtrl.clear();
+                                          _searchQuery = '';
+                                        }
+                                      });
+                                    },
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: PopupMenuButton<bool>(
+                                      tooltip: ref.tr('sort'),
+                                      initialValue: _sortByCreator,
+                                      onSelected: (value) => setState(
+                                        () => _sortByCreator = value,
+                                      ),
+                                      itemBuilder: (_) => [
+                                        PopupMenuItem(
+                                          value: false,
+                                          child: Text(ref.tr('playlist_order')),
+                                        ),
+                                        PopupMenuItem(
+                                          value: true,
+                                          child: Text(ref.tr('creator_order')),
+                                        ),
+                                      ],
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          color: _sortByCreator
+                                              ? themeTextSub(
+                                                  context,
+                                                ).withValues(alpha: 0.12)
+                                              : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: _sortByCreator
+                                                ? themeTextSub(
+                                                    context,
+                                                  ).withValues(alpha: 0.3)
+                                                : Colors.transparent,
+                                          ),
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 8,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                _sortByCreator
+                                                    ? Icons
+                                                          .sort_by_alpha_rounded
+                                                    : Icons.sort_rounded,
+                                                size: 18,
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Expanded(
+                                                child: Text(
+                                                  ref.tr(
+                                                    _sortByCreator
+                                                        ? 'creator_order'
+                                                        : 'playlist_order',
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                              const Icon(
+                                                Icons.expand_more_rounded,
+                                                size: 18,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                // 3. More options (PopupMenuButton formatted as dark circular button)
-                                _moreMenuButton(
-                                  context,
-                                  pl,
-                                  isDark,
-                                  buttonSize: tight ? 40 : 44,
-                                ),
-                              ],
-                            );
-                          },
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
-                      ],
-                    ),
-                  ),
-                ],
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -295,122 +478,194 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
         // Search bar if opened via "プレイリストで検索"
         if (_showSearch)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(28, 0, 28, 12),
-            child: Container(
-              height: 40,
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xFF262626)
-                    : const Color(0xFFEAEAEA),
+          _contentFrame(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                horizontalInset,
+                0,
+                horizontalInset,
+                12,
+              ),
+              child: FrostedPanel(
                 borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(width: 14),
-                  Icon(
-                    Icons.search_rounded,
-                    size: 20,
-                    color: isDark ? kTextSub : Colors.black54,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: TextField(
-                      controller: _searchCtrl,
-                      autofocus: true,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: isDark ? Colors.white : Colors.black87,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: 'プレイリスト内を検索...',
-                        hintStyle: TextStyle(
-                          fontSize: 13,
-                          color: isDark ? kTextSub : Colors.black45,
-                        ),
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                      onChanged: (val) {
-                        setState(() {
-                          _searchQuery = val;
-                        });
-                      },
-                    ),
-                  ),
-                  if (_searchQuery.isNotEmpty)
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded, size: 18),
-                      onPressed: () {
-                        _searchCtrl.clear();
-                        setState(() {
-                          _searchQuery = '';
-                        });
-                      },
-                    ),
-                  IconButton(
-                    tooltip: '閉じる',
-                    icon: const Icon(Icons.arrow_upward_rounded, size: 18),
-                    onPressed: () {
-                      _searchCtrl.clear();
-                      setState(() {
-                        _showSearch = false;
-                        _searchQuery = '';
-                      });
-                    },
-                  ),
-                  const SizedBox(width: 6),
-                ],
-              ),
-            ),
-          ),
-
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 2, 20, 2),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              if (!_sortByCreator && query.isEmpty) ...[
-                const Text(
-                  '≡をドラッグして順番変更',
-                  style: TextStyle(fontSize: 12, color: kTextSub),
-                ),
-                const SizedBox(width: 8),
-              ],
-              PopupMenuButton<bool>(
-                tooltip: '並び替え',
-                initialValue: _sortByCreator,
-                onSelected: (value) => setState(() => _sortByCreator = value),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: false, child: Text('プレイリスト順')),
-                  PopupMenuItem(value: true, child: Text('作成者順（未設定は下）')),
-                ],
-                child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: SizedBox(
+                  height: 40,
                   child: Row(
-                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.sort, size: 18),
-                      SizedBox(width: 6),
-                      Text(_sortByCreator ? '作成者順' : 'プレイリスト順'),
+                      const SizedBox(width: 14),
+                      Icon(
+                        Icons.search_rounded,
+                        size: 20,
+                        color: isDark ? kTextSub : Colors.black54,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          controller: _searchCtrl,
+                          autofocus: true,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDark ? Colors.white : Colors.black87,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: ref.tr('search_playlist'),
+                            hintStyle: TextStyle(
+                              fontSize: 13,
+                              color: isDark ? kTextSub : Colors.black45,
+                            ),
+                            border: InputBorder.none,
+                            isDense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                          onChanged: (val) {
+                            setState(() {
+                              _searchQuery = val;
+                            });
+                          },
+                        ),
+                      ),
+                      if (_searchQuery.isNotEmpty)
+                        IconButton(
+                          tooltip: ref.tr('browse_clear_search'),
+                          icon: const Icon(Icons.close_rounded, size: 18),
+                          onPressed: () {
+                            _searchCtrl.clear();
+                            setState(() {
+                              _searchQuery = '';
+                            });
+                          },
+                        ),
+                      const SizedBox(width: 6),
                     ],
                   ),
                 ),
               ),
-            ],
+            ),
           ),
-        ),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 28),
-          child: Divider(height: 1, color: Color(0x1FFFFFFF)),
+
+        if (screenWidth < 1200)
+          _contentFrame(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                horizontalInset,
+                2,
+                horizontalInset,
+                2,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: !_sortByCreator && query.isEmpty
+                        ? Text(
+                            ref.tr('drag_to_reorder'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: themeTextSub(context),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: ref.tr(
+                          _showSearch ? 'close' : 'search_playlist',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(
+                          _showSearch
+                              ? Icons.close_rounded
+                              : Icons.search_rounded,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _showSearch = !_showSearch;
+                            if (!_showSearch) {
+                              _searchCtrl.clear();
+                              _searchQuery = '';
+                            }
+                          });
+                        },
+                      ),
+                      PopupMenuButton<bool>(
+                        tooltip: ref.tr('sort'),
+                        initialValue: _sortByCreator,
+                        onSelected: (value) =>
+                            setState(() => _sortByCreator = value),
+                        itemBuilder: (_) => [
+                          PopupMenuItem(
+                            value: false,
+                            child: Text(ref.tr('playlist_order')),
+                          ),
+                          PopupMenuItem(
+                            value: true,
+                            child: Text(ref.tr('creator_order')),
+                          ),
+                        ],
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: _sortByCreator
+                                ? themeTextSub(context).withValues(alpha: 0.12)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _sortByCreator
+                                  ? themeTextSub(context).withValues(alpha: 0.3)
+                                  : Colors.transparent,
+                            ),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 6,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _sortByCreator
+                                      ? Icons.sort_by_alpha_rounded
+                                      : Icons.sort_rounded,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  ref.tr(
+                                    _sortByCreator
+                                        ? 'creator_order'
+                                        : 'playlist_order',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        _contentFrame(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: horizontalInset),
+            child: Divider(
+              height: 1,
+              color: theme.dividerColor.withValues(alpha: 0.55),
+            ),
+          ),
         ),
 
         Expanded(
           child: pl.mediaIds.isEmpty
-              ? const Center(
+              ? Center(
                   child: Text(
-                    'このプレイリストは空です\nメニューの「動画を追加」からライブラリの動画を選べます',
+                    ref.tr('playlist_empty_detail'),
                     textAlign: TextAlign.center,
                     style: TextStyle(color: kTextSub, height: 1.6),
                   ),
@@ -418,7 +673,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               : filteredMediaIds.isEmpty
               ? Center(
                   child: Text(
-                    '「$_searchQuery」に一致する動画がありません',
+                    ref
+                        .tr('no_playlist_matches')
+                        .replaceAll('{query}', _searchQuery),
                     style: const TextStyle(color: kTextSub),
                   ),
                 )
@@ -471,17 +728,45 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           child: Container(
                             decoration: BoxDecoration(
                               color: m.id == currentId
-                                  ? (isDark ? kCard : const Color(0xFFEEECF8))
+                                  ? (isDark ? kCard : const Color(0xFFF1F1F1))
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(10),
                             ),
                             clipBehavior: Clip.antiAlias,
                             child: ListTile(
-                              leading: ThumbImage(
-                                seed: m.id,
-                                mediaId: m.id,
-                                localPath: m.localPath,
-                                size: 48,
+                              minLeadingWidth: 0,
+                              horizontalTitleGap: 10,
+                              leading: SizedBox(
+                                width: 78,
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 22,
+                                      child: Center(
+                                        child: m.id == currentId
+                                            ? Icon(
+                                                Icons.equalizer_rounded,
+                                                size: 16,
+                                                color: themeTextSub(context),
+                                              )
+                                            : Text(
+                                                '${i + 1}'.padLeft(2, '0'),
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: themeTextSub(context),
+                                                ),
+                                              ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    ThumbImage(
+                                      seed: m.id,
+                                      mediaId: m.id,
+                                      localPath: m.localPath,
+                                      size: 48,
+                                    ),
+                                  ],
+                                ),
                               ),
                               title: Text(
                                 displayTitle(m.title),
@@ -491,9 +776,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                               subtitle: m.artist?.trim().isNotEmpty == true
                                   ? Text(
                                       formatCreatorNames(m.artist),
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 12,
-                                        color: kTextSub,
+                                        color: themeTextSub(context),
                                       ),
                                     )
                                   : DurationText(
@@ -505,22 +790,15 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   m.id == currentId
-                                      ? const SizedBox(
-                                          width: 48,
-                                          child: Icon(
-                                            Icons.equalizer,
-                                            size: 20,
-                                            color: kAccentLight,
-                                          ),
-                                        )
+                                      ? const SizedBox(width: 48)
                                       : IconButton(
-                                          tooltip: '再生',
+                                          tooltip: ref.tr('play'),
                                           icon: const Icon(Icons.play_arrow),
                                           onPressed: playFromHere,
                                         ),
                                   if (!_sortByCreator && query.isEmpty)
                                     Tooltip(
-                                      message: 'ドラッグして順番を変更',
+                                      message: ref.tr('drag_to_reorder'),
                                       child: SizedBox(
                                         width: 52,
                                         height: 52,
@@ -540,108 +818,153 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                             ),
                           ),
                         );
+                        final centeredRow = Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxWidth: _desktopContentMaxWidth,
+                            ),
+                            child: row,
+                          ),
+                        );
                         if (!_sortByCreator && query.isEmpty) {
                           return ReorderableDelayedDragStartListener(
                             key: ValueKey('playlist-row-${m.id}'),
                             index: i,
-                            child: row,
+                            child: centeredRow,
                           );
                         }
-                        return row;
+                        return KeyedSubtree(
+                          key: ValueKey('playlist-row-${m.id}'),
+                          child: centeredRow,
+                        );
                       }(),
                     ],
                     // When playlist has few items, offer quick additions from remaining library
-                    if (lib.media.length > pl.mediaIds.length) ...[
+                    if (lib.savedMedia.length > pl.mediaIds.length) ...[
                       const SizedBox(
                         key: ValueKey('playlist-add-gap'),
                         height: 24,
                       ),
-                      Padding(
+                      KeyedSubtree(
                         key: const ValueKey('playlist-add-heading'),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.add_circle_outline_rounded,
-                              size: 18,
-                              color: isDark ? kAccentLight : kAccent,
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxWidth: _desktopContentMaxWidth,
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'ライブラリから曲を追加',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: isDark ? Colors.white : Colors.black87,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.add_circle_outline_rounded,
+                                    size: 18,
+                                    color: themeTextSub(context),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    ref.tr('add_from_library'),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: isDark
+                                          ? Colors.white
+                                          : Colors.black87,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
+                          ),
                         ),
                       ),
                       for (final cand
-                          in lib.media
+                          in lib.savedMedia
                               .where((item) => !pl.mediaIds.contains(item.id))
                               .take(5))
-                        Container(
+                        KeyedSubtree(
                           key: ValueKey('playlist-add-${cand.id}'),
-                          margin: const EdgeInsets.symmetric(vertical: 2),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(10),
-                            color: isDark
-                                ? Colors.white.withValues(alpha: 0.03)
-                                : Colors.black.withValues(alpha: 0.02),
-                          ),
-                          child: ListTile(
-                            dense: true,
-                            leading: ThumbImage(
-                              seed: cand.id,
-                              mediaId: cand.id,
-                              localPath: cand.localPath,
-                              size: 40,
-                            ),
-                            title: Text(
-                              displayTitle(cand.title),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                maxWidth: _desktopContentMaxWidth,
                               ),
-                            ),
-                            subtitle: Text(
-                              formatCreatorNames(cand.artist).isEmpty
-                                  ? '動画'
-                                  : formatCreatorNames(cand.artist),
-                              style: const TextStyle(
-                                fontSize: 11.5,
-                                color: kTextSub,
-                              ),
-                            ),
-                            trailing: IconButton(
-                              tooltip: 'プレイリストに追加',
-                              icon: const Icon(
-                                Icons.add_rounded,
-                                size: 20,
-                                color: kAccent,
-                              ),
-                              onPressed: () async {
-                                await ref
-                                    .read(libraryProvider.notifier)
-                                    .addToPlaylist(pl.id, cand.id);
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        '「${displayTitle(cand.title)}」を追加しました',
-                                      ),
-                                      duration: const Duration(seconds: 2),
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(vertical: 2),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(10),
+                                  color: isDark
+                                      ? Colors.white.withValues(alpha: 0.03)
+                                      : Colors.black.withValues(alpha: 0.02),
+                                ),
+                                child: ListTile(
+                                  dense: true,
+                                  leading: ThumbImage(
+                                    seed: cand.id,
+                                    mediaId: cand.id,
+                                    localPath: cand.localPath,
+                                    size: 40,
+                                  ),
+                                  title: Text(
+                                    displayTitle(cand.title),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
                                     ),
-                                  );
-                                }
-                              },
+                                  ),
+                                  subtitle:
+                                      formatCreatorNames(cand.artist).isEmpty
+                                      ? DurationText(
+                                          mediaId: cand.id,
+                                          localPath: cand.localPath,
+                                          durationMs: cand.durationMs,
+                                        )
+                                      : Text(
+                                          formatCreatorNames(cand.artist),
+                                          style: TextStyle(
+                                            fontSize: 11.5,
+                                            color: themeTextSub(context),
+                                          ),
+                                        ),
+                                  trailing: IconButton(
+                                    tooltip: ref.tr('add_playlist'),
+                                    icon: Icon(
+                                      Icons.add_rounded,
+                                      size: 20,
+                                      color: themeTextSub(context),
+                                    ),
+                                    onPressed: () async {
+                                      await ref
+                                          .read(libraryProvider.notifier)
+                                          .addToPlaylist(pl.id, cand.id);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              ref
+                                                  .tr('added_media_title')
+                                                  .replaceAll(
+                                                    '{title}',
+                                                    displayTitle(cand.title),
+                                                  ),
+                                            ),
+                                            duration: const Duration(
+                                              seconds: 2,
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -701,7 +1024,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         ),
       ),
       child: PopupMenuButton<String>(
-        tooltip: 'メニュー',
+        tooltip: ref.tr('menu'),
         offset: const Offset(0, 50),
         child: Material(
           color: isDark ? const Color(0xFF242424) : const Color(0xFFE4E4E4),
@@ -720,25 +1043,34 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         ),
         onSelected: (val) => _handleMenuAction(context, pl, val),
         itemBuilder: (ctx) => [
-          _menuItem('shuffle', 'assets/icons/shuffle.svg', 'シャッフル再生', isDark),
-          _menuItem('search', 'assets/icons/search.svg', 'プレイリストで検索', isDark),
-          _menuItem('play_next', 'assets/icons/play_next.svg', '次に再生', isDark),
+          _menuItem(
+            'shuffle',
+            'assets/icons/shuffle.svg',
+            ref.tr('shuffle'),
+            isDark,
+          ),
+          _menuItem(
+            'play_next',
+            'assets/icons/play_next.svg',
+            ref.tr('add_next'),
+            isDark,
+          ),
           _menuItem(
             'add_to_queue',
             'assets/icons/queue_add.svg',
-            'キューに追加',
+            ref.tr('add_queue'),
             isDark,
           ),
           _menuItem(
             'add_videos',
             'assets/icons/video_add.svg',
-            '動画を追加',
+            ref.tr('add_videos'),
             isDark,
           ),
           _menuItem(
             'delete',
             'assets/icons/delete.svg',
-            '再生リストを削除',
+            ref.tr('delete_playlist'),
             isDark,
             isDestructive: true,
           ),
@@ -798,12 +1130,6 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         }
         break;
 
-      case 'search':
-        setState(() {
-          _showSearch = true;
-        });
-        break;
-
       case 'play_next':
         if (pl.mediaIds.isNotEmpty) {
           for (final id in (pl.mediaIds as List<String>).reversed) {
@@ -811,8 +1137,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
           }
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('プレイリストを次に再生へ追加しました'),
+              SnackBar(
+                content: Text(ref.tr('playlist_added_next')),
                 duration: Duration(seconds: 2),
               ),
             );
@@ -827,8 +1153,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
           }
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('プレイリストをキューに追加しました'),
+              SnackBar(
+                content: Text(ref.tr('playlist_added_queue')),
                 duration: Duration(seconds: 2),
               ),
             );
@@ -844,19 +1170,21 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('プレイリストを削除'),
-            content: Text('「${pl.name}」を削除してもよろしいですか？\n動画ファイル自体はライブラリに残ります。'),
+            title: Text(ref.tr('delete_playlist')),
+            content: Text(
+              ref.tr('delete_playlist_confirm').replaceAll('{name}', pl.name),
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('キャンセル'),
+                child: Text(ref.tr('cancel')),
               ),
               FilledButton(
                 style: FilledButton.styleFrom(
                   backgroundColor: Colors.redAccent,
                 ),
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('削除'),
+                child: Text(ref.tr('delete')),
               ),
             ],
           ),
@@ -876,16 +1204,16 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('名前を変更'),
+        title: Text(ref.tr('rename')),
         content: TextField(controller: c, autofocus: true),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('キャンセル'),
+            child: Text(ref.tr('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, c.text),
-            child: const Text('保存'),
+            child: Text(ref.tr('save')),
           ),
         ],
       ),
@@ -902,7 +1230,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     try {
       final items = await ref
           .read(importerProvider)
-          .pickForPlaylist(existingMedia: library.media);
+          .pickForPlaylist(existingMedia: library.savedMedia);
       if (items.isEmpty) return;
       final notifier = ref.read(libraryProvider.notifier);
       await notifier.addMedia(items);
@@ -912,14 +1240,24 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
       );
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${items.length}本を動画一覧とプレイリストに追加しました')),
+          SnackBar(
+            content: Text(
+              ref
+                  .tr('added_media_count')
+                  .replaceAll('{count}', '${items.length}'),
+            ),
+          ),
         );
       }
     } catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('動画の追加に失敗しました: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ref.tr('add_media_failed').replaceAll('{error}', '$error'),
+            ),
+          ),
+        );
       }
     }
   }
@@ -938,15 +1276,15 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.video_library_outlined),
-                title: const Text('端末から動画を追加'),
-                subtitle: const Text('動画一覧にも自動で追加されます'),
+                title: Text(ref.tr('add_from_device')),
+                subtitle: Text(ref.tr('add_from_device_desc')),
                 onTap: () {
                   Navigator.pop(sheetContext);
                   _importAndAddVideos(context, ref);
                 },
               ),
               const Divider(height: 1),
-              for (final m in lib.media)
+              for (final m in lib.savedMedia)
                 CheckboxListTile(
                   value: ids.contains(m.id),
                   title: Text(

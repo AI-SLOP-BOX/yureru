@@ -2,13 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
+import '../../library/media_order.dart';
 import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
+import '../i18n.dart';
+import '../../library/media_collections.dart';
+import 'collection_browser.dart';
+import '../widgets/app_svg_icon.dart';
 import '../theme.dart';
 import '../layout_metrics.dart';
 import '../widgets/duration_text.dart';
 import '../widgets/thumb_image.dart';
 import '../widgets/preview_player.dart';
+import '../widgets/media_shelf.dart';
 
 /// Shared page header (search sits in the top bar; pages show a small title).
 class PageHeader extends StatelessWidget {
@@ -26,40 +32,53 @@ class PageHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final inset = LayoutMetrics.horizontalInset(context);
+    final heading = Text(
+      title,
+      style: TextStyle(
+        fontSize: 24,
+        fontWeight: FontWeight.w800,
+        color: isDark ? kTextPrimary : const Color(0xFF242424),
+        letterSpacing: -0.5,
+      ),
+    );
+    final badge = trailing == null
+        ? null
+        : Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: themeCard(context),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: themeBorder(context)),
+            ),
+            child: Text(
+              trailing!,
+              style: TextStyle(
+                fontSize: 12,
+                color: themeTextSub(context),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          );
     return Padding(
       padding: EdgeInsets.fromLTRB(inset, 10, inset, 14),
-      child: Row(
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              color: isDark ? kTextPrimary : const Color(0xFF1E1B4B),
-              letterSpacing: -0.5,
-            ),
-          ),
-          if (trailing != null) ...[
-            const SizedBox(width: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: themeCard(context),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: themeBorder(context)),
-              ),
-              child: Text(
-                trailing!,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: themeTextSub(context),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ],
-          if (actions != null) ...[const Spacer(), actions!],
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 600) {
+            return Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [heading, ?badge, ?actions],
+            );
+          }
+          return Row(
+            children: [
+              heading,
+              if (badge != null) ...[const SizedBox(width: 12), badge],
+              if (actions != null) ...[const Spacer(), actions!],
+            ],
+          );
+        },
       ),
     );
   }
@@ -76,6 +95,34 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
+  int _section = 0;
+
+  Widget _sections() => Padding(
+    padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+    child: LayoutBuilder(
+      builder: (context, constraints) => Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final entry in [
+            (0, 'library_overview', 'collection_home'),
+            (1, 'albums', 'collection_album'),
+            (2, 'artists', 'collection_artist'),
+          ])
+            ChoiceChip(
+              label: Text(ref.tr(entry.$2)),
+              avatar: constraints.maxWidth >= 480
+                  ? AppSvgIcon(entry.$3, size: 18)
+                  : null,
+              selected: _section == entry.$1,
+              showCheckmark: false,
+              onSelected: (_) => setState(() => _section = entry.$1),
+            ),
+        ],
+      ),
+    ),
+  );
+
   final ScrollController _libraryScrollController = ScrollController();
 
   @override
@@ -84,57 +131,105 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     super.dispose();
   }
 
+  void _playCollection(List<MediaItem> items, MediaItem selected) {
+    final order = items.map((item) => item.id).toList();
+    final index = order.indexOf(selected.id);
+    if (index < 0) return;
+    showPlayerView(ref);
+    ref.read(queueProvider.notifier).start(order, shuffle: false);
+    ref.read(queueProvider.notifier).jumpTo(index);
+    ref.read(playbackControllerProvider).openCurrent();
+  }
+
+  void _openCollection({required bool favorites, required VideosSort sort}) {
+    ref.read(favoritesOnlyProvider.notifier).state = favorites;
+    ref.read(videosSortProvider.notifier).state = sort;
+    ref.read(searchQueryProvider.notifier).state = '';
+    ref.read(videoCreatorFilterProvider.notifier).state = null;
+    widget.onOpenVideos?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     final ref = this.ref;
     final lib = ref.watch(libraryProvider);
     final query = ref.watch(searchQueryProvider).trim().toLowerCase();
     if (!lib.loaded) return const Center(child: CircularProgressIndicator());
+    if (_section != 0) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PageHeader(title: ref.tr('library')),
+          _sections(),
+          Expanded(
+            child: CollectionBrowser(
+              kind: _section == 1
+                  ? CollectionKind.albums
+                  : CollectionKind.artists,
+            ),
+          ),
+        ],
+      );
+    }
     final playlists = lib.playlists
         .where((p) => query.isEmpty || p.name.toLowerCase().contains(query))
         .toList();
     final matchingSongs = query.isEmpty
         ? <MediaItem>[]
-        : lib.media.where((m) {
+        : lib.savedMedia.where((m) {
             final t = m.title.toLowerCase();
             final a = (m.artist ?? '').toLowerCase();
-            return t.contains(query) || a.contains(query);
+            return t.contains(query) ||
+                a.contains(query) ||
+                (m.album ?? '').toLowerCase().contains(query);
           }).toList();
 
-    if (playlists.isEmpty && lib.media.isEmpty) {
-      return const Center(
+    if (playlists.isEmpty && lib.savedMedia.isEmpty) {
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.video_library_outlined, size: 56, color: kTextSub),
+              Icon(
+                Icons.video_library_outlined,
+                size: 56,
+                color: themeTextSub(context),
+              ),
               SizedBox(height: 14),
               Text(
-                'ライブラリは空です',
+                ref.tr('empty_library'),
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
               SizedBox(height: 8),
               Text(
-                '設定 → ライブラリ管理から動画・フォルダをインポートできます',
+                ref.tr('import_video_desc'),
                 textAlign: TextAlign.center,
-                style: TextStyle(color: kTextSub, fontSize: 13),
+                style: TextStyle(color: themeTextSub(context), fontSize: 13),
               ),
             ],
           ),
         ),
       );
     }
+    final recentlyPlayed =
+        lib.savedMedia.where((item) => item.lastPlayedAt != null).toList()
+          ..sort(compareRecentlyPlayed);
+    final favorites = lib.savedMedia.where((item) => item.isFavorite).toList();
+    final recentlyAdded = [...lib.savedMedia]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
     // The middle scrolls: header + preview are fixed, so CJK line-height
     // variance (the classic 1px Column overflow) can never break this page.
     final headerTrailing = query.isNotEmpty
-        ? '${matchingSongs.length}曲 • ${playlists.length}個のプレイリスト'
-        : '${playlists.length}個のプレイリスト';
+        ? '${ref.tracksCount(matchingSongs.length)} • ${ref.playlistsCount(playlists.length)}'
+        : '${ref.tracksCount(lib.savedMedia.length)}${playlists.isEmpty ? '' : ' • ${ref.playlistsCount(playlists.length)}'}';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        PageHeader(title: 'ライブラリ', trailing: headerTrailing),
+        PageHeader(title: ref.tr('library'), trailing: headerTrailing),
+        _sections(),
         Expanded(
           child: Scrollbar(
             controller: _libraryScrollController,
@@ -145,10 +240,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               primary: false,
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
-                if (query.isEmpty)
+                if (query.isEmpty) ...[
+                  if (recentlyPlayed.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: MediaShelf(
+                        key: const ValueKey('home-recently-played'),
+                        title: ref.tr('recently_played'),
+                        items: recentlyPlayed,
+                        seeAllLabel: ref.tr('see_all'),
+                        onPlay: (media) =>
+                            _playCollection(recentlyPlayed, media),
+                        onSeeAll: widget.onOpenVideos == null
+                            ? null
+                            : () => _openCollection(
+                                favorites: false,
+                                sort: VideosSort.recentlyPlayed,
+                              ),
+                      ),
+                    ),
+                  if (favorites.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: MediaShelf(
+                        key: const ValueKey('home-favorites'),
+                        title: ref.tr('favorites'),
+                        items: favorites,
+                        seeAllLabel: ref.tr('see_all'),
+                        onPlay: (media) => _playCollection(favorites, media),
+                        onSeeAll: widget.onOpenVideos == null
+                            ? null
+                            : () => _openCollection(
+                                favorites: true,
+                                sort: VideosSort.manual,
+                              ),
+                      ),
+                    ),
                   SliverToBoxAdapter(
-                    child: _RecentStrip(onOpenVideos: widget.onOpenVideos),
+                    child: MediaShelf(
+                      key: const ValueKey('home-recently-added'),
+                      title: ref.tr('home_recently_added'),
+                      items: recentlyAdded,
+                      seeAllLabel: ref.tr('see_all'),
+                      onPlay: (media) => _playCollection(recentlyAdded, media),
+                      onSeeAll: widget.onOpenVideos == null
+                          ? null
+                          : () => _openCollection(
+                              favorites: false,
+                              sort: VideosSort.newestFirst,
+                            ),
+                    ),
                   ),
+                ],
 
                 // 1. Matching songs/videos section (shown when searching)
                 if (query.isNotEmpty) ...[
@@ -164,7 +305,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            '曲・動画 (${matchingSongs.length}件)',
+                            ref.tracksCount(matchingSongs.length),
                             style: const TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
@@ -175,15 +316,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     ),
                   ),
                   if (matchingSongs.isEmpty)
-                    const SliverToBoxAdapter(
+                    SliverToBoxAdapter(
                       child: Padding(
                         padding: EdgeInsets.symmetric(
                           horizontal: 24,
                           vertical: 12,
                         ),
                         child: Text(
-                          '一致する曲が見つかりません',
-                          style: TextStyle(color: kTextSub, fontSize: 13),
+                          ref.tr('not_found'),
+                          style: TextStyle(
+                            color: themeTextSub(context),
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                     )
@@ -229,33 +373,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                       artistText,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 12,
-                                        color: kTextSub,
+                                        color: themeTextSub(context),
                                       ),
                                     ),
                                   ),
                                   const SizedBox(width: 8),
                                   Text(
                                     '• ',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 11,
-                                      color: kTextMuted,
+                                      color: themeTextSub(context),
                                     ),
                                   ),
                                   DurationText(
                                     mediaId: m.id,
                                     localPath: m.localPath,
                                     durationMs: m.durationMs,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 11,
-                                      color: kTextMuted,
+                                      color: themeTextSub(context),
                                     ),
                                   ),
                                 ],
                               ),
                               trailing: IconButton(
-                                tooltip: '再生',
+                                tooltip: ref.tr('play'),
                                 icon: const Icon(
                                   Icons.play_circle_fill_rounded,
                                   size: 30,
@@ -297,40 +441,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     ),
                 ],
 
-                // 2. Playlists section
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-                    child: Text(
-                      query.isEmpty
-                          ? 'あなたのプレイリスト'
-                          : 'プレイリスト (${playlists.length}件)',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-                if (playlists.isEmpty)
+                // Empty playlist guidance already lives in the sidebar.
+                if (playlists.isNotEmpty) ...[
                   SliverToBoxAdapter(
-                    child: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        child: Text(
-                          query.isEmpty
-                              ? 'プレイリストはサイドバーの＋から作成できます'
-                              : '一致するプレイリストがありません',
-                          style: const TextStyle(color: kTextSub, fontSize: 13),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
+                      child: Text(
+                        query.isEmpty
+                            ? ref.tr('playlists')
+                            : ref.playlistsCount(playlists.length),
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
-                  )
-                else
+                  ),
                   SliverPadding(
-                    // Leave scroll room below the last row so playlists can be
-                    // moved clear of the fixed video preview / mini-player.
-                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 300),
+                    // PreviewBar owns its space below the scroll view.
+                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
                     sliver: SliverGrid(
                       gridDelegate:
                           const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -373,6 +502,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       }, childCount: playlists.length),
                     ),
                   ),
+                ],
               ],
             ),
           ),
@@ -383,267 +513,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-/// Recently-added horizontal strip (newest 10). Plays in library order
-/// from the tapped item, like the videos screen.
-class _RecentStrip extends ConsumerWidget {
-  final VoidCallback? onOpenVideos;
-  const _RecentStrip({this.onOpenVideos});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final lib = ref.watch(libraryProvider);
-    if (!lib.loaded || lib.media.isEmpty) return const SizedBox.shrink();
-    final recent = [...lib.media]
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final items = recent.take(10).toList();
-    final order = [for (final m in lib.media) m.id];
-    void play(int recentIndex) {
-      final id = items[recentIndex].id;
-      showPlayerView(ref);
-      ref.read(queueProvider.notifier).start(order, shuffle: false);
-      ref.read(queueProvider.notifier).jumpTo(order.indexOf(id));
-      ref.read(playbackControllerProvider).openCurrent();
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 2, 24, 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                '最近追加',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-              ),
-              if (items.length > 2)
-                Material(
-                  type: MaterialType.transparency,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: onOpenVideos,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 3,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            '横スクロール',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              color:
-                                  Theme.of(context).brightness ==
-                                      Brightness.dark
-                                  ? kTextMuted
-                                  : Colors.black45,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(width: 2),
-                          Icon(
-                            Icons.chevron_right_rounded,
-                            size: 16,
-                            color:
-                                Theme.of(context).brightness == Brightness.dark
-                                ? kTextMuted
-                                : Colors.black45,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        SizedBox(
-          height: MediaQuery.sizeOf(context).width < 600 ? 142 : 166,
-          child: ShaderMask(
-            shaderCallback: (Rect bounds) {
-              return const LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [
-                  Colors.black,
-                  Colors.black,
-                  Colors.black,
-                  Colors.transparent,
-                ],
-                stops: [0.0, 0.88, 0.94, 1.0],
-              ).createShader(bounds);
-            },
-            blendMode: BlendMode.dstIn,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: EdgeInsets.symmetric(
-                horizontal: LayoutMetrics.horizontalInset(context),
-              ),
-              itemCount: items.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 14),
-              itemBuilder: (c, i) {
-                final m = items[i];
-                return _RecentVideoCard(media: m, onTap: () => play(i));
-              },
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-      ],
-    );
-  }
-}
-
-class _RecentVideoCard extends StatefulWidget {
-  final dynamic media;
-  final VoidCallback onTap;
-
-  const _RecentVideoCard({required this.media, required this.onTap});
-
-  @override
-  State<_RecentVideoCard> createState() => _RecentVideoCardState();
-}
-
-class _RecentVideoCardState extends State<_RecentVideoCard> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final m = widget.media;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final cardWidth = LayoutMetrics.recentCardWidth(context);
-    final thumbnailWidth = cardWidth - 14;
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          width: cardWidth,
-          padding: const EdgeInsets.all(7),
-          decoration: BoxDecoration(
-            color: _hover
-                ? (isDark
-                      ? Colors.white.withValues(alpha: 0.08)
-                      : Colors.black.withValues(alpha: 0.05))
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              AnimatedScale(
-                duration: const Duration(milliseconds: 200),
-                scale: _hover ? 1.03 : 1.0,
-                curve: Curves.easeOutCubic,
-                child: Container(
-                  width: thumbnailWidth,
-                  height: thumbnailWidth * 9 / 16,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(
-                          alpha: _hover ? 0.5 : 0.25,
-                        ),
-                        blurRadius: _hover ? 14 : 8,
-                        offset: Offset(0, _hover ? 5 : 2),
-                      ),
-                    ],
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      ThumbImage(
-                        seed: m.id,
-                        mediaId: m.id,
-                        localPath: m.localPath,
-                        radius: 10,
-                        expand: true,
-                      ),
-                      // Hover Play Vignette
-                      AnimatedOpacity(
-                        duration: const Duration(milliseconds: 180),
-                        opacity: _hover ? 0.35 : 0.0,
-                        child: Container(color: Colors.black),
-                      ),
-                      // Floating Center Play Button
-                      Center(
-                        child: AnimatedScale(
-                          duration: const Duration(milliseconds: 200),
-                          scale: _hover ? 1.0 : 0.5,
-                          curve: Curves.easeOutBack,
-                          child: AnimatedOpacity(
-                            duration: const Duration(milliseconds: 180),
-                            opacity: _hover ? 1.0 : 0.0,
-                            child: Container(
-                              width: 34,
-                              height: 34,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.4),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: const Center(
-                                child: Icon(
-                                  Icons.play_arrow_rounded,
-                                  size: 22,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                displayTitle(m.title),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
-                  color: isDark ? kTextPrimary : Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 2),
-              DurationText(
-                mediaId: m.id,
-                localPath: m.localPath,
-                durationMs: m.durationMs,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: isDark ? kTextMuted : Colors.black45,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PlaylistCard extends StatefulWidget {
+class _PlaylistCard extends ConsumerStatefulWidget {
   final String playlistId;
   final String name;
   final int count;
@@ -664,10 +534,10 @@ class _PlaylistCard extends StatefulWidget {
   });
 
   @override
-  State<_PlaylistCard> createState() => _PlaylistCardState();
+  ConsumerState<_PlaylistCard> createState() => _PlaylistCardState();
 }
 
-class _PlaylistCardState extends State<_PlaylistCard> {
+class _PlaylistCardState extends ConsumerState<_PlaylistCard> {
   bool _hover = false;
 
   @override
@@ -681,7 +551,7 @@ class _PlaylistCardState extends State<_PlaylistCard> {
         curve: Curves.easeOut,
         decoration: BoxDecoration(
           color: _hover
-              ? (isDark ? kCardHover : const Color(0xFFE8EAF0))
+              ? (isDark ? kCardHover : const Color(0xFFEBEBEB))
               : (isDark ? kCard : Colors.white),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
@@ -784,7 +654,7 @@ class _PlaylistCardState extends State<_PlaylistCard> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${widget.count}本の動画',
+                      ref.tracksCount(widget.count),
                       style: TextStyle(
                         fontSize: 12,
                         color: themeTextSub(context),
@@ -819,18 +689,22 @@ class PlaylistsScreen extends ConsumerWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.queue_music_rounded, size: 48, color: kTextSub),
+            Icon(
+              Icons.queue_music_rounded,
+              size: 48,
+              color: themeTextSub(context),
+            ),
             const SizedBox(height: 12),
-            const Text(
-              'プレイリストがありません',
+            Text(
+              ref.tr('empty_playlist'),
               textAlign: TextAlign.center,
-              style: TextStyle(color: kTextSub),
+              style: TextStyle(color: themeTextSub(context)),
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: () => _createPlaylist(context, ref),
               icon: const Icon(Icons.add_rounded),
-              label: const Text('プレイリストを作成'),
+              label: Text(ref.tr('create_playlist')),
             ),
           ],
         ),
@@ -840,11 +714,11 @@ class PlaylistsScreen extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         PageHeader(
-          title: 'プレイリスト',
-          trailing: '${playlists.length}個',
+          title: ref.tr('playlists'),
+          trailing: ref.playlistsCount(playlists.length),
           actions: MediaQuery.sizeOf(context).width < 1000
               ? IconButton.filledTonal(
-                  tooltip: 'プレイリストを作成',
+                  tooltip: ref.tr('create_playlist'),
                   onPressed: () => _createPlaylist(context, ref),
                   icon: const Icon(Icons.add_rounded),
                 )
@@ -880,14 +754,17 @@ class PlaylistsScreen extends ConsumerWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: Text(
-                    '${pl.mediaIds.length}本の動画',
-                    style: const TextStyle(fontSize: 12, color: kTextSub),
+                    ref.tracksCount(pl.mediaIds.length),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: themeTextSub(context),
+                    ),
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        tooltip: '再生',
+                        tooltip: ref.tr('play'),
                         icon: const Icon(Icons.play_arrow),
                         onPressed: pl.mediaIds.isEmpty
                             ? null
@@ -899,7 +776,7 @@ class PlaylistsScreen extends ConsumerWidget {
                               },
                       ),
                       IconButton(
-                        tooltip: 'シャッフル再生',
+                        tooltip: ref.tr('shuffle'),
                         icon: const Icon(Icons.shuffle, size: 20),
                         onPressed: pl.mediaIds.isEmpty
                             ? null
@@ -930,22 +807,22 @@ Future<void> _createPlaylist(BuildContext context, WidgetRef ref) async {
   final name = await showDialog<String>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: const Text('新規プレイリスト'),
+      title: Text(ref.tr('create_playlist')),
       content: TextField(
         controller: controller,
         autofocus: true,
         textCapitalization: TextCapitalization.sentences,
-        decoration: const InputDecoration(hintText: 'プレイリスト名'),
+        decoration: InputDecoration(hintText: ref.tr('playlist_name')),
         onSubmitted: (value) => Navigator.pop(dialogContext, value),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dialogContext),
-          child: const Text('キャンセル'),
+          child: Text(ref.tr('cancel')),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(dialogContext, controller.text),
-          child: const Text('作成'),
+          child: Text(ref.tr('create')),
         ),
       ],
     ),

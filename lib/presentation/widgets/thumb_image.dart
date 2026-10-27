@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app_state.dart';
 import '../../data/thumbnails.dart';
 import '../theme.dart';
 
@@ -10,7 +12,7 @@ import '../theme.dart';
 /// and whenever generation fails (missing file, unsupported platform,
 /// corrupt video). The Future is pinned per media id so list rebuilds
 /// (e.g. position ticks) don't refire disk checks.
-class ThumbImage extends StatefulWidget {
+class ThumbImage extends ConsumerStatefulWidget {
   final String seed;
   final String? mediaId;
   final String? localPath;
@@ -33,10 +35,10 @@ class ThumbImage extends StatefulWidget {
   });
 
   @override
-  State<ThumbImage> createState() => _ThumbImageState();
+  ConsumerState<ThumbImage> createState() => _ThumbImageState();
 }
 
-class _ThumbImageState extends State<ThumbImage> {
+class _ThumbImageState extends ConsumerState<ThumbImage> {
   Future<File?>? _future;
   String? _key;
 
@@ -74,6 +76,13 @@ class _ThumbImageState extends State<ThumbImage> {
   @override
   Widget build(BuildContext context) {
     final f = _future;
+    final artworkPath = widget.mediaId == null
+        ? null
+        : ref.watch(
+            libraryProvider.select(
+              (lib) => lib.byId(widget.mediaId!)?.artworkPath,
+            ),
+          );
     final fallback = ThumbBox(
       seed: widget.seed,
       size: widget.size,
@@ -82,6 +91,19 @@ class _ThumbImageState extends State<ThumbImage> {
     );
     if (f == null) {
       return fallback;
+    }
+    if (artworkPath != null) {
+      final art = Image.file(
+        File(artworkPath),
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => fallback,
+      );
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(widget.radius),
+        child: widget.expand
+            ? SizedBox.expand(child: art)
+            : SizedBox(width: widget.size, height: widget.size, child: art),
+      );
     }
     return FutureBuilder<File?>(
       future: f,
@@ -104,8 +126,7 @@ class _ThumbImageState extends State<ThumbImage> {
         }
         return ClipRRect(
           borderRadius: BorderRadius.circular(widget.radius),
-          child: SizedBox(
-              width: widget.size, height: widget.size, child: img),
+          child: SizedBox(width: widget.size, height: widget.size, child: img),
         );
       },
     );
