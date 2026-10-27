@@ -721,6 +721,12 @@ Future<ui.Image> renderAmbientGlow(
   final averageBottom = profileAverage(diffusedBottom);
   final averageLeft = profileAverage(diffusedLeft);
   final averageRight = profileAverage(diffusedRight);
+  final roomAverage = profileAverage([
+    ...diffusedTop,
+    ...diffusedBottom,
+    ...diffusedLeft,
+    ...diffusedRight,
+  ]);
   final depthBlend = (depth / 2).clamp(0.0, 1.0);
   final spreadPixels = math.min(width, height) * 0.55 * spread.clamp(0.5, 1.5);
   // The room spill must reach beyond the immediate player border. At the old
@@ -761,6 +767,13 @@ Future<ui.Image> renderAmbientGlow(
         math.pow(normalizedDistance, 0.85).toDouble();
     final source = Color.lerp(broadened, average, amount)!;
     final luminance = source.r * 0.2126 + source.g * 0.7152 + source.b * 0.0722;
+    if (luminance < 0.12) {
+      // Black silhouettes from a scene's lower edge should not turn into
+      // jagged black cutouts beneath translucent controls. Keep their hue,
+      // but softly lift the darkest spill toward the combined room color.
+      final lift = ((0.12 - luminance) / 0.12 * 0.7).clamp(0.0, 0.7);
+      return Color.lerp(source, roomAverage, lift)!;
+    }
     if (luminance <= 0.68) return source;
     // Softly roll off near-white highlights. A full-white strip at the video
     // edge otherwise reads as a hard border when projected across the UI.

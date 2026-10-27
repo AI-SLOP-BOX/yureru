@@ -660,6 +660,33 @@ void main() {
     frame.dispose();
   });
 
+  test('lifts black silhouettes out of the ambient spill', () async {
+    final bottom = List<Color>.filled(
+      ambientZoneCount,
+      const Color(0xFF3A7890),
+    );
+    for (var i = 12; i <= 19; i++) {
+      bottom[i] = Colors.black;
+    }
+    final frame = await renderAmbientGlow(
+      AmbientEdgeColors(
+        top: List<Color>.filled(ambientZoneCount, const Color(0xFF78B6D0)),
+        bottom: bottom,
+        left: List<Color>.filled(ambientZoneCount, const Color(0xFF3A7890)),
+        right: List<Color>.filled(ambientZoneCount, const Color(0xFF3A7890)),
+      ),
+      aperture: const Rect.fromLTWH(0.2, 0.2, 0.6, 0.6),
+    );
+    final pixels = await frame.toByteData(format: ui.ImageByteFormat.rawRgba);
+    final edgePixel = (145 * 320 + 160) * 4;
+    final brightness =
+        pixels!.getUint8(edgePixel) +
+        pixels.getUint8(edgePixel + 1) +
+        pixels.getUint8(edgePixel + 2);
+    expect(brightness, greaterThan(30));
+    frame.dispose();
+  });
+
   test(
     'ambient spread changes how far edge colors continue into the room',
     () async {
