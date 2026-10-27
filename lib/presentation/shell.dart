@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
 import '../app_state.dart';
@@ -42,6 +43,8 @@ class _AppShellState extends ConsumerState<AppShell>
     with WidgetsBindingObserver {
   static const _appExitChannel = MethodChannel('yureru/app_exit');
   static const _pipChannel = MethodChannel('yureru/media_picker');
+  static const _nativeMenuChannel = MethodChannel('yureru/native_menu');
+  static const _firstLaunchCompleteKey = 'yureru_first_launch_complete_v1';
   Nav nav = Nav.library;
   String? detailPlaylistId;
   Nav _detailFrom = Nav.library;
@@ -76,12 +79,32 @@ class _AppShellState extends ConsumerState<AppShell>
       }
       return null;
     });
+    _nativeMenuChannel.setMethodCallHandler((call) async {
+      if (call.method == 'openSettings') {
+        _setNav(Nav.settings);
+        return null;
+      }
+      throw MissingPluginException(
+        'Unknown native menu action: ${call.method}',
+      );
+    });
     Future.microtask(() async {
       if (!mounted) return;
       if (!ref.read(libraryProvider).loaded) {
         await ref.read(libraryProvider.notifier).load();
       }
       if (!mounted) return;
+      final preferences = await SharedPreferences.getInstance();
+      if (preferences.getBool(_firstLaunchCompleteKey) != true) {
+        final hasImportedMedia = ref
+            .read(libraryProvider)
+            .savedMedia
+            .isNotEmpty;
+        await preferences.setBool(_firstLaunchCompleteKey, true);
+        if (!hasImportedMedia && mounted) {
+          setState(() => nav = Nav.settings);
+        }
+      }
       await ref.read(playbackControllerProvider).restoreSession();
     });
   }
@@ -102,6 +125,7 @@ class _AppShellState extends ConsumerState<AppShell>
     _playbackController?.saveCurrentPosition();
     _appExitChannel.setMethodCallHandler(null);
     _pipChannel.setMethodCallHandler(null);
+    _nativeMenuChannel.setMethodCallHandler(null);
     super.dispose();
   }
 

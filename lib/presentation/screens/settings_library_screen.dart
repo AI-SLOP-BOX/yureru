@@ -30,13 +30,13 @@ class LibraryManagementScreen extends ConsumerWidget {
             leading: const Icon(Icons.file_download),
             title: Text(ref.tr('import_video')),
             subtitle: Text(ref.tr('import_video_desc')),
-            onTap: () => _import(context, ref),
+            onTap: () => importVideos(context, ref),
           ),
           ListTile(
             leading: const Icon(Icons.folder_open),
             title: Text(ref.tr('import_folder')),
             subtitle: Text(ref.tr('import_folder_desc')),
-            onTap: () => _importFolder(context, ref),
+            onTap: () => importFolder(context, ref),
           ),
           ListTile(
             leading: const Icon(Icons.video_library),
@@ -55,14 +55,14 @@ class LibraryManagementScreen extends ConsumerWidget {
             leading: const Icon(Icons.folder),
             title: Text(ref.tr('import_folder_referenced')),
             subtitle: Text(ref.tr('import_folder_referenced_desc')),
-            onTap: () => _importFolderReferenced(context, ref),
+            onTap: () => importFolderReferenced(context, ref),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _import(BuildContext context, WidgetRef ref) async {
+  static Future<void> importVideos(BuildContext context, WidgetRef ref) async {
     debugPrint('import: onTap fired');
     final importer = ref.read(importerProvider);
     try {
@@ -99,7 +99,7 @@ class LibraryManagementScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _importFolder(BuildContext context, WidgetRef ref) async {
+  static Future<void> importFolder(BuildContext context, WidgetRef ref) async {
     debugPrint('import: folder onTap fired');
     try {
       final importer = ref.read(importerProvider);
@@ -145,7 +145,7 @@ class LibraryManagementScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _importFolderReferenced(
+  static Future<void> importFolderReferenced(
     BuildContext context,
     WidgetRef ref,
   ) async {
@@ -197,7 +197,7 @@ class LibraryManagementScreen extends ConsumerWidget {
     }
   }
 
-  Set<String> _existingSources(WidgetRef ref) => ref
+  static Set<String> _existingSources(WidgetRef ref) => ref
       .read(libraryProvider)
       .media
       .map((m) => m.sourcePath)

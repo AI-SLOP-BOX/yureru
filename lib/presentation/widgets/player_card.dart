@@ -2585,6 +2585,35 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
 
                             const SizedBox(height: 18),
 
+                            // A touch-friendly entry point to the queue/lyrics
+                            // sheet. QueuePanel already provides tabs for
+                            // switching between next contents and lyrics.
+                            Center(
+                              child: TextButton.icon(
+                                key: const ValueKey(
+                                  'compact-next-content-button',
+                                ),
+                                onPressed: () {
+                                  ref.read(lyricsPanelProvider.notifier).state =
+                                      false;
+                                  ref
+                                          .read(queueVisibleProvider.notifier)
+                                          .state =
+                                      true;
+                                  setState(() => _queueSheetExpanded = false);
+                                },
+                                icon: const Icon(
+                                  Icons.keyboard_arrow_up_rounded,
+                                  size: 20,
+                                ),
+                                label: Text(ref.tr('next_contents')),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: textSub,
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ),
+                            ),
+
                             const Spacer(flex: 1),
                           ],
                         ),

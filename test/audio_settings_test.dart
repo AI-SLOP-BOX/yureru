@@ -171,8 +171,14 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      final audioCategory = find.byKey(
+        const ValueKey('settings-category-settings_audio'),
+      );
+      await tester.ensureVisible(audioCategory);
+      await tester.tap(audioCategory);
+      await tester.pumpAndSettle();
       final setting = find.byKey(const ValueKey('volume-normalization'));
-      await tester.scrollUntilVisible(setting, 300);
+      await tester.ensureVisible(setting);
       await tester.pumpAndSettle();
       final widget = tester.widget<SwitchListTile>(setting);
       expect(widget.onChanged != null, supported);

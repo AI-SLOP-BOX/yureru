@@ -5,7 +5,9 @@ import AVFoundation
 
 class MainFlutterWindow: NSWindow {
   private var mediaPickerChannel: FlutterMethodChannel?
+  private var defaultMediaPlayerChannel: FlutterMethodChannel?
   private var appExitChannel: FlutterMethodChannel?
+  private var nativeMenuChannel: FlutterMethodChannel?
   private var systemMediaControls: SystemMediaControls?
   private var normalWindowFrameBeforeCompactPlayer: NSRect?
   private var normalWindowMinSizeBeforeCompactPlayer: NSSize?
@@ -35,6 +37,9 @@ class MainFlutterWindow: NSWindow {
       width: min(1280, visible.width - 40),
       height: min(820, visible.height - 60))
     self.contentViewController = flutterViewController
+    nativeMenuChannel = FlutterMethodChannel(
+      name: "yureru/native_menu",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
     // Let the desktop window shrink to a phone-sized viewport so the narrow
     // Flutter layout can be tested and used without a desktop-width minimum.
     self.minSize = NSSize(width: 360, height: 600)
@@ -44,6 +49,7 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     registerMediaPicker(flutterViewController)
+    registerDefaultMediaPlayer(flutterViewController)
     registerAppExit(flutterViewController)
     systemMediaControls = SystemMediaControls(messenger: flutterViewController.engine.binaryMessenger)
 
@@ -62,6 +68,50 @@ class MainFlutterWindow: NSWindow {
     appExitChannel = FlutterMethodChannel(
       name: "yureru/app_exit",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
+  }
+
+  private func registerDefaultMediaPlayer(_ flutterViewController: FlutterViewController) {
+    let channel = FlutterMethodChannel(
+      name: "yureru/default_media_player",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    defaultMediaPlayerChannel = channel
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "setAsDefaultMediaPlayer" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard #available(macOS 14.0, *) else {
+        result(FlutterError(
+          code: "unsupported_os",
+          message: "Setting default media apps requires macOS 14 or later.",
+          details: nil))
+        return
+      }
+
+      Task { @MainActor in
+        do {
+          let appURL = Bundle.main.bundleURL
+          try await NSWorkspace.shared.setDefaultApplication(
+            at: appURL,
+            toOpen: UTType.movie)
+          try await NSWorkspace.shared.setDefaultApplication(
+            at: appURL,
+            toOpen: UTType.audio)
+          result(nil)
+        } catch {
+          result(FlutterError(
+            code: "default_app_rejected",
+            message: error.localizedDescription,
+            details: nil))
+        }
+      }
+    }
+  }
+
+  func openSettingsFromMenu() {
+    nativeMenuChannel?.invokeMethod("openSettings", arguments: nil)
+    NSApp.activate(ignoringOtherApps: true)
+    makeKeyAndOrderFront(nil)
   }
 
   func prepareForTermination(completion: @escaping () -> Void) {

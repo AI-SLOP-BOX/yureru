@@ -14,6 +14,7 @@ import 'package:yureru/app_state.dart';
 import 'package:yureru/data/store.dart';
 import 'package:yureru/domain/models.dart';
 import 'package:yureru/playback/fake_engine.dart';
+import 'package:yureru/playback/playback_controller.dart';
 import 'package:yureru/playback/playback_engine.dart';
 import 'package:yureru/presentation/screens/home_screen.dart';
 import 'package:yureru/presentation/screens/videos_screen.dart';
@@ -88,7 +89,11 @@ void main() {
   Future<void> pumpShell(
     WidgetTester tester, {
     Size size = const Size(1440, 900),
+    bool firstLaunch = false,
   }) async {
+    SharedPreferences.setMockInitialValues({
+      'yureru_first_launch_complete_v1': !firstLaunch,
+    });
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -110,6 +115,17 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('first empty launch opens settings on the import section', (
+    tester,
+  ) async {
+    await pumpShell(tester, firstLaunch: true);
+
+    expect(find.text('フォルダからインポート'), findsOneWidget);
+    expect(find.text('動画をインポート'), findsWidgets);
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getBool('yureru_first_launch_complete_v1'), isTrue);
+  });
 
   testWidgets('wide ambient player leaves the glow canvas visible', (
     tester,
@@ -314,6 +330,35 @@ void main() {
     await tester.pump(const Duration(milliseconds: 2400));
     expect(tester.widget<AnimatedOpacity>(transport).opacity, 0);
     await mouse.removePointer();
+  });
+
+  testWidgets('compact player opens next contents and switches to lyrics', (
+    tester,
+  ) async {
+    await pumpShell(tester, size: const Size(390, 844));
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final media = MediaItem(title: 'スマホの動画', localPath: '/tmp/mobile.mp4');
+    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
+      media,
+    ]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    c.read(viewingPlayerProvider.notifier).state = true;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final nextContents = find.byKey(
+      const ValueKey('compact-next-content-button'),
+    );
+    expect(nextContents, findsOneWidget);
+    await tester.tap(nextContents);
+    await tester.pumpAndSettle();
+
+    expect(c.read(queueVisibleProvider), isTrue);
+    expect(find.text('次のコンテンツ'), findsNWidgets(2));
+    await tester.tap(find.text('歌詞'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(c.read(lyricsPanelProvider), isTrue);
   });
 
   testWidgets('compact full-player video keeps the seek timeline on hover', (
@@ -788,6 +833,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(c.read(queueProvider).queue, isNot(contains(first.id)));
     expect(c.read(queueProvider).currentId, current.id);
+
+    await c.read(playbackControllerProvider).openCurrent();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(ValueKey('queue-${current.id}')),
+        matching: find.byTooltip('キューから削除'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(c.read(queueProvider).currentId, second.id);
+    expect(
+      (c.read(engineProvider) as FakePlaybackEngine).loaded?.mediaId,
+      second.id,
+    );
   });
 
   testWidgets('creator name in the play queue is not interactive', (

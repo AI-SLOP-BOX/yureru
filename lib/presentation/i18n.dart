@@ -93,6 +93,11 @@ const Map<String, Map<String, String>> _kTranslations = {
     'import_folder_referenced_desc': '動画をコピーせず、元のフォルダを参照して取り込みます（PC推奨）',
     'imported_media': 'インポート済みメディア',
     'storage': 'ストレージ',
+    'default_media_player': '既定のメディアプレイヤー',
+    'default_media_player_desc': '音楽・動画ファイルのみを対象にします',
+    'set_default_media_player': 'Yureruを既定のプレイヤーにする',
+    'default_media_player_set': '既定のプレイヤーを設定しました',
+    'default_media_player_failed': '設定できませんでした: {error}',
   },
   // 2. English
   'en': {
@@ -154,6 +159,11 @@ const Map<String, Map<String, String>> _kTranslations = {
         'Reference files directly without copying (Recommended for PC)',
     'imported_media': 'Imported Media',
     'storage': 'Storage',
+    'default_media_player': 'Default Media Player',
+    'default_media_player_desc': 'Applies to audio and video files only',
+    'set_default_media_player': 'Set Yureru as the default player',
+    'default_media_player_set': 'Default player preferences were updated',
+    'default_media_player_failed': 'Could not update: {error}',
   },
   // 3. 简体中文
   'zhHans': {
@@ -214,6 +224,11 @@ const Map<String, Map<String, String>> _kTranslations = {
     'import_folder_referenced_desc': '不复制文件，直接引用原路径（推荐桌面端）',
     'imported_media': '已导入媒体',
     'storage': '存储空间',
+    'default_media_player': '默认媒体播放器',
+    'default_media_player_desc': '仅适用于音频和视频文件',
+    'set_default_media_player': '将 Yureru 设为默认播放器',
+    'default_media_player_set': '已更新默认播放器设置',
+    'default_media_player_failed': '无法更新：{error}',
   },
   // 4. 繁體中文
   'zhHant': {
@@ -274,6 +289,11 @@ const Map<String, Map<String, String>> _kTranslations = {
     'import_folder_referenced_desc': '不複製檔案，直接參照原始路徑（PC推薦）',
     'imported_media': '已匯入的媒體',
     'storage': '儲存空間',
+    'default_media_player': '預設媒體播放器',
+    'default_media_player_desc': '僅適用於音訊與影片檔案',
+    'set_default_media_player': '將 Yureru 設為預設播放器',
+    'default_media_player_set': '已更新預設播放器設定',
+    'default_media_player_failed': '無法更新：{error}',
   },
   // 5. 한국어
   'ko': {
@@ -334,6 +354,11 @@ const Map<String, Map<String, String>> _kTranslations = {
     'import_folder_referenced_desc': '파일을 복사하지 않고 원본 위치를 참조합니다 (PC 권장)',
     'imported_media': '가져온 미디어',
     'storage': '저장소',
+    'default_media_player': '기본 미디어 플레이어',
+    'default_media_player_desc': '오디오 및 동영상 파일에만 적용됩니다',
+    'set_default_media_player': 'Yureru를 기본 플레이어로 설정',
+    'default_media_player_set': '기본 플레이어 설정을 업데이트했습니다',
+    'default_media_player_failed': '설정할 수 없습니다: {error}',
   },
   // 6. Español
   'es': {
@@ -395,6 +420,11 @@ const Map<String, Map<String, String>> _kTranslations = {
         'Hacer referencia a los archivos sin copiarlos (Recomendado para PC)',
     'imported_media': 'Archivos importados',
     'storage': 'Almacenamiento',
+    'default_media_player': 'Reproductor multimedia predeterminado',
+    'default_media_player_desc': 'Solo para archivos de audio y vídeo',
+    'set_default_media_player': 'Usar Yureru como reproductor predeterminado',
+    'default_media_player_set': 'Se actualizó el reproductor predeterminado',
+    'default_media_player_failed': 'No se pudo actualizar: {error}',
   },
   // 7. Português
   'pt': {
@@ -456,6 +486,11 @@ const Map<String, Map<String, String>> _kTranslations = {
         'Referenciar arquivos diretamente sem copiar (Recomendado para PC)',
     'imported_media': 'Mídias importadas',
     'storage': 'Armazenamento',
+    'default_media_player': 'Reprodutor de mídia padrão',
+    'default_media_player_desc': 'Somente para arquivos de áudio e vídeo',
+    'set_default_media_player': 'Definir Yureru como reprodutor padrão',
+    'default_media_player_set': 'Preferências do reprodutor atualizadas',
+    'default_media_player_failed': 'Não foi possível atualizar: {error}',
   },
   // 8. Français
   'fr': {
@@ -518,6 +553,11 @@ const Map<String, Map<String, String>> _kTranslations = {
         'Référencer les fichiers sans les copier (Recommandé sur PC)',
     'imported_media': 'Médias importés',
     'storage': 'Stockage',
+    'default_media_player': 'Lecteur multimédia par défaut',
+    'default_media_player_desc': 'Uniquement pour les fichiers audio et vidéo',
+    'set_default_media_player': 'Définir Yureru comme lecteur par défaut',
+    'default_media_player_set': 'Lecteur par défaut mis à jour',
+    'default_media_player_failed': 'Mise à jour impossible : {error}',
   },
   // 9. Deutsch
   'de': {
@@ -581,6 +621,11 @@ const Map<String, Map<String, String>> _kTranslations = {
         'Dateien direkt referenzieren (Für PC empfohlen)',
     'imported_media': 'Importierte Medien',
     'storage': 'Speicherplatz',
+    'default_media_player': 'Standard-Mediaplayer',
+    'default_media_player_desc': 'Nur für Audio- und Videodateien',
+    'set_default_media_player': 'Yureru als Standardplayer festlegen',
+    'default_media_player_set': 'Standardplayer wurde aktualisiert',
+    'default_media_player_failed': 'Aktualisierung fehlgeschlagen: {error}',
   },
   // 10. العربية
   'ar': {
@@ -642,6 +687,11 @@ const Map<String, Map<String, String>> _kTranslations = {
         'الإشارة إلى الملفات مباشرة دون نسخها (موصى به للكمبيوتر)',
     'imported_media': 'الوسائط المستوردة',
     'storage': 'التخزين',
+    'default_media_player': 'مشغل الوسائط الافتراضي',
+    'default_media_player_desc': 'للملفات الصوتية والمرئية فقط',
+    'set_default_media_player': 'تعيين Yureru كمشغل افتراضي',
+    'default_media_player_set': 'تم تحديث المشغل الافتراضي',
+    'default_media_player_failed': 'تعذر التحديث: {error}',
   },
 };
 

@@ -3,6 +3,10 @@ import FlutterMacOS
 
 @main
 class AppDelegate: FlutterAppDelegate {
+  @IBAction func showPreferences(_ sender: Any?) {
+    (mainFlutterWindow as? MainFlutterWindow)?.openSettingsFromMenu()
+  }
+
   override func applicationDidFinishLaunching(_ notification: Notification) {
     if let iconPath = Bundle.main.path(forResource: "AppIcon", ofType: "icns"),
        let iconImage = NSImage(contentsOfFile: iconPath) {

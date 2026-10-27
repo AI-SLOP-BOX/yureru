@@ -115,6 +115,15 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
       mk.Media(source.uri, start: source.start, end: source.end),
       play: autoplay,
     );
+    // mpv may rebuild the audio chain when a new source is opened. Reconcile
+    // our tagged filter after each open so the saved preference remains active
+    // even if the previous source reset its filter chain.
+    if (_normalizationEnabled) {
+      final platform = p.platform;
+      if (platform is mk.NativePlayer) {
+        await _applyVolumeNormalization(platform, true);
+      }
+    }
     if (_rate != 1.0) await p.setRate(_rate);
     _snap = PlaybackSnapshot(
       position: p.state.position,
@@ -154,11 +163,22 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
 
   @override
   Future<void> setVolumeNormalizationEnabled(bool enabled) async {
-    if (_normalizationEnabled == enabled) return;
     final platform = _ensurePlayer().platform;
     if (platform is! mk.NativePlayer) {
       throw UnsupportedError('Native audio filtering is unavailable');
     }
+    await _applyVolumeNormalization(platform, enabled);
+    _normalizationEnabled = enabled;
+  }
+
+  Future<void> _applyVolumeNormalization(
+    mk.NativePlayer platform,
+    bool enabled,
+  ) async {
+    final filters = await platform.getProperty('af');
+    final isApplied = filters.contains('yureru_normalize');
+    if (isApplied == enabled) return;
+
     // A label replaces only our own filter and preserves future EQ/effects.
     await platform.command(
       enabled
@@ -170,11 +190,10 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
           : ['af', 'remove', '@yureru_normalize'],
     );
     // media_kit logs command failures rather than throwing; verify the result.
-    final filters = await platform.getProperty('af');
-    if (filters.contains('yureru_normalize') != enabled) {
+    final updatedFilters = await platform.getProperty('af');
+    if (updatedFilters.contains('yureru_normalize') != enabled) {
       throw StateError('Volume normalization could not be applied');
     }
-    _normalizationEnabled = enabled;
   }
 
   @override

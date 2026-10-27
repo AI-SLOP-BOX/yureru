@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../app_state.dart';
@@ -18,7 +21,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  String? _section = 'settings_display';
+  String? _section = 'settings_import';
   bool _ambientExpanded = false;
 
   @override
@@ -35,6 +38,60 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         .watch(engineProvider)
         .supportsVolumeNormalization;
     final groups = <_SettingsGroup>[
+      _SettingsGroup(
+        id: 'settings_import',
+        icon: 'settings_folder',
+        description: ref.tr('import_video_desc'),
+        title: ref.tr('import_video'),
+        children: [
+          ListTile(
+            leading: const Icon(Icons.video_file_outlined),
+            title: Text(ref.tr('import_video')),
+            subtitle: Text(ref.tr('import_video_desc')),
+            onTap: () => LibraryManagementScreen.importVideos(context, ref),
+          ),
+          ListTile(
+            leading: const Icon(Icons.folder_open_rounded),
+            title: Text(ref.tr('import_folder')),
+            subtitle: Text(ref.tr('import_folder_desc')),
+            onTap: () => LibraryManagementScreen.importFolder(context, ref),
+          ),
+        ],
+      ),
+      if (Platform.isMacOS)
+        _SettingsGroup(
+          id: 'settings_default_media_player',
+          icon: 'settings_info',
+          description: ref.tr('default_media_player_desc'),
+          title: ref.tr('default_media_player'),
+          children: [
+            ListTile(
+              leading: const Icon(Icons.open_in_new_rounded),
+              title: Text(ref.tr('set_default_media_player')),
+              subtitle: Text(ref.tr('default_media_player_desc')),
+              onTap: () async {
+                try {
+                  await SettingsScreenActions.setAsDefaultMediaPlayer();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(ref.tr('default_media_player_set'))),
+                  );
+                } on PlatformException catch (error) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        ref
+                            .tr('default_media_player_failed')
+                            .replaceAll('{error}', error.message ?? error.code),
+                      ),
+                    ),
+                  );
+                }
+              },
+            ),
+          ],
+        ),
       _SettingsGroup(
         id: 'settings_display',
         icon: 'settings_palette',
@@ -450,6 +507,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         }
 
         Widget mobileSectionChip(String? id, String title) => ChoiceChip(
+          key: ValueKey('settings-category-${id ?? 'all'}'),
           labelPadding: const EdgeInsets.symmetric(horizontal: 4),
           label: Text(title),
           selected: _section == id,
@@ -676,7 +734,13 @@ class _SettingsGroup extends StatelessWidget {
 
 /// Opens settings sub-screens; kept next to the settings page.
 class SettingsScreenActions {
+  static const _defaultMediaPlayerChannel = MethodChannel(
+    'yureru/default_media_player',
+  );
   static final Future<PackageInfo> packageInfo = PackageInfo.fromPlatform();
+
+  static Future<void> setAsDefaultMediaPlayer() =>
+      _defaultMediaPlayerChannel.invokeMethod<void>('setAsDefaultMediaPlayer');
 
   static void openLibraryManagement(BuildContext context) {
     Navigator.of(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
@@ -420,9 +422,26 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                                     visualDensity: VisualDensity.compact,
                                     tooltip: ref.tr('remove_from_queue'),
                                     onPressed: () {
+                                      final removesCurrent =
+                                          ref.read(queueProvider).currentId ==
+                                          id;
                                       ref
                                           .read(queueProvider.notifier)
                                           .removeAt(queueIndex);
+                                      if (!removesCurrent) return;
+
+                                      final next = ref.read(queueProvider);
+                                      if (next.hasCurrent) {
+                                        unawaited(
+                                          ref
+                                              .read(playbackControllerProvider)
+                                              .openCurrent(),
+                                        );
+                                      } else {
+                                        unawaited(
+                                          ref.read(engineProvider).pause(),
+                                        );
+                                      }
                                     },
                                   ),
                                   const SizedBox(width: 2),
