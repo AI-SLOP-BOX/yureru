@@ -226,6 +226,13 @@ void main() {
       c.read(playerViewModeProvider.notifier).state = PlayerViewMode.image;
       await tester.pump();
       expect(find.byType(TransportBar), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(TransportBar),
+          matching: find.byTooltip('次の動画'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('1.0x'), findsWidgets);
       // No floating/overlay + buttons anywhere (import/add stays in settings)
       expect(find.byType(FloatingActionButton), findsNothing);

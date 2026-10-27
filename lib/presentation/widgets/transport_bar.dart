@@ -363,6 +363,16 @@ class _TransportBarState extends ConsumerState<TransportBar> {
             );
           },
         ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: ref.tr('next_video'),
+          icon: TransportIcon.next(
+            size: previousNextIconSize,
+            color: has ? arrowIconColor : disabledIconColor,
+          ),
+          color: has ? arrowIconColor : disabledIconColor,
+          onPressed: has ? () => ctl.playNext() : null,
+        ),
         PlaybackRepeatButton(
           activeColor: primaryIconColor,
           inactiveColor: disabledIconColor,

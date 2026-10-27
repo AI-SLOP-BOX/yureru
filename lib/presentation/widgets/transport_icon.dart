@@ -25,6 +25,9 @@ class TransportIcon extends StatelessWidget {
     required this.color,
   }) : asset = 'assets/skip_previous.svg';
 
+  const TransportIcon.next({super.key, required this.size, required this.color})
+    : asset = 'assets/skip_next.svg';
+
   @override
   Widget build(BuildContext context) => SvgPicture.asset(
     asset,
