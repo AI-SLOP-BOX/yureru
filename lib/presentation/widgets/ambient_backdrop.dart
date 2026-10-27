@@ -12,13 +12,18 @@ class AmbientRoomGlowCanvas extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final frame = ref.watch(ambientFrameProvider);
+    final viewMode = ref.watch(playerViewModeProvider);
     if (!ref.watch(ambientLightProvider)) {
       return const SizedBox.expand();
     }
     final intensity = ref.watch(ambientIntensityProvider);
+    // Jacket mode already places the artwork directly on the room surface;
+    // adding a separate blurred layer only creates muddy dark patches around it.
+    // This also prevents reusing the notifier's last sampled video frame.
+    if (viewMode == PlayerViewMode.image) return const SizedBox.expand();
     if (frame == null) {
       final isVideoMode =
-          ref.watch(playerViewModeProvider) == PlayerViewMode.media &&
+          viewMode == PlayerViewMode.media &&
           ref.read(engineProvider).videoAspectRatio != null;
       // Never use the album/video thumbnail as a full-window blurred layer
       // while a video frame is unavailable. That creates a ghost copy of the
