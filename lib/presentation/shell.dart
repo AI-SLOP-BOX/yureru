@@ -3,10 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
-import 'dart:io';
 import '../app_state.dart';
 import '../data/session.dart';
 import '../platform/system_media_provider.dart';
+import '../platform/keyboard_shortcuts.dart';
 import 'i18n.dart';
 import '../playback/playback_controller.dart';
 import 'nav.dart';
@@ -146,12 +146,10 @@ class _AppShellState extends ConsumerState<AppShell>
     if (ModalRoute.of(context)?.isCurrent == false) return false;
 
     final keyboard = HardwareKeyboard.instance;
-    final key = event.logicalKey;
-    final isMac = Platform.isMacOS;
-    final hasSearchModifier = isMac
-        ? keyboard.isMetaPressed
-        : keyboard.isControlPressed;
-    if (key == LogicalKeyboardKey.keyK && hasSearchModifier) {
+    final bindings = ref.read(keyboardShortcutsProvider);
+    bool matches(AppShortcutAction action) =>
+        bindings[action]?.matches(event, keyboard) ?? false;
+    if (matches(AppShortcutAction.globalSearch)) {
       _openSearch();
       return true;
     }
@@ -165,26 +163,25 @@ class _AppShellState extends ConsumerState<AppShell>
     if (isTyping) return false;
 
     final playback = ref.read(playbackControllerProvider);
-    switch (key) {
-      case LogicalKeyboardKey.space:
-        playback.toggle();
+    if (matches(AppShortcutAction.togglePlayback)) {
+      playback.toggle();
+      return true;
+    }
+    if (matches(AppShortcutAction.exitExpandedView)) {
+      if (ref.read(immersiveModeProvider)) {
+        ref.read(immersiveModeProvider.notifier).state = false;
         return true;
-      case LogicalKeyboardKey.escape:
-        if (ref.read(immersiveModeProvider)) {
-          ref.read(immersiveModeProvider.notifier).state = false;
-          return true;
-        }
-        if (ref.read(cinemaModeProvider)) {
-          ref.read(cinemaModeProvider.notifier).state = false;
-          return true;
-        }
+      }
+      if (ref.read(cinemaModeProvider)) {
+        ref.read(cinemaModeProvider.notifier).state = false;
+        return true;
+      }
     }
     return false;
   }
 
   void _browse() {
     _desktopQueueHideTimer?.cancel();
-    _desktopQueuePinned = false;
     ref.read(immersiveModeProvider.notifier).state = false;
     ref.read(viewingPlayerProvider.notifier).state = false;
     ref.read(cinemaModeProvider.notifier).state = false;
@@ -273,6 +270,8 @@ class _AppShellState extends ConsumerState<AppShell>
   void _submitSearch(String query) {
     if (!mounted) return;
     ref.read(searchQueryProvider.notifier).state = query;
+    // Keep playlist searches scoped to the playlist currently on screen.
+    if (detailPlaylistId != null) return;
     ref.read(videoCreatorFilterProvider.notifier).state = null;
     _browse();
     setState(() {
@@ -359,15 +358,6 @@ class _AppShellState extends ConsumerState<AppShell>
     }
   }
 
-  void _toggleDesktopSidebarFromButton() {
-    _desktopSidebarHideTimer?.cancel();
-    setState(() {
-      _desktopSidebarPinned = !_desktopSidebarPinned;
-      _desktopSidebarVisible = _desktopSidebarPinned;
-      _desktopSidebarPointerInside = false;
-    });
-  }
-
   void _scheduleDesktopSidebarHide() {
     if (_desktopSidebarPinned) return;
     _desktopSidebarHideTimer?.cancel();
@@ -430,11 +420,12 @@ class _AppShellState extends ConsumerState<AppShell>
         ref.read(queueVisibleProvider.notifier).state = false;
       }
     });
-    // Do not cover the desktop player on entry; the queue is edge-revealed.
+    // Restore an explicitly pinned queue when returning from a browse screen.
     ref.listen<bool>(viewingPlayerProvider, (prev, next) {
       if (next && mounted) {
-        _desktopQueuePinned = false;
-        ref.read(queueVisibleProvider.notifier).state = false;
+        // Keep a deliberate queue pin across browse/player transitions. The
+        // panel stays hidden while browsing and returns when the player does.
+        ref.read(queueVisibleProvider.notifier).state = _desktopQueuePinned;
       }
     });
     // Persist the queue layout on every change for session restore.
@@ -497,13 +488,23 @@ class _AppShellState extends ConsumerState<AppShell>
     final hasCurrent = ref.watch(queueProvider.select((q) => q.hasCurrent));
     final showQueue = ref.watch(queueVisibleProvider);
     final viewing = ref.watch(viewingPlayerProvider);
+    final browseSidebarInset =
+        _desktopSidebarVisible && !(viewing && hasCurrent)
+        ? sideWidth + 8
+        : 0.0;
     final playerMode = ref.watch(playerViewModeProvider);
     final isCinema = hasCurrent && ref.watch(cinemaModeProvider);
     final ambientEnabled = ref.watch(ambientLightProvider);
     final theme = Theme.of(context);
-    final showAmbient = viewing && hasCurrent && ambientEnabled && !isCinema;
+    final showAmbient =
+        viewing &&
+        hasCurrent &&
+        ambientEnabled &&
+        !isCinema &&
+        playerMode == PlayerViewMode.media;
 
     return Scaffold(
+      key: const ValueKey('wide-app-shell'),
       // The room-glow canvas is painted immediately behind this Scaffold.
       // Keep the wide player surface transparent while ambient mode is on;
       // an opaque scaffold background hides every sampled video color.
@@ -538,7 +539,7 @@ class _AppShellState extends ConsumerState<AppShell>
                               onOpenFile: hasCurrent ? null : _openMediaFile,
                               onSaveTemporary: _saveTemporaryCurrent,
                               showMenuButton: true,
-                              onToggleSidebar: _toggleDesktopSidebarFromButton,
+                              onToggleSidebar: _toggleDesktopSidebarPin,
                               sidebarPinned: _desktopSidebarPinned,
                               onToggleQueuePin: viewing && hasCurrent
                                   ? _toggleDesktopQueuePin
@@ -548,20 +549,27 @@ class _AppShellState extends ConsumerState<AppShell>
                               leadingInset: _desktopSidebarVisible
                                   ? sideWidth + 8
                                   : 0,
-                              trailingInset: viewing && hasCurrent && showQueue
-                                  ? queueWidth + 8
-                                  : 0,
                             ),
                             Expanded(
-                              child: AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 140),
-                                switchInCurve: Curves.easeOut,
-                                switchOutCurve: Curves.easeOut,
-                                child: KeyedSubtree(
-                                  key: ValueKey(
-                                    'center-${viewing ? 'player' : nav.name}-${detailPlaylistId ?? ''}',
+                              child: AnimatedPadding(
+                                key: const ValueKey(
+                                  'shell-center-sidebar-inset',
+                                ),
+                                duration: const Duration(milliseconds: 240),
+                                curve: Curves.easeOutCubic,
+                                padding: EdgeInsets.only(
+                                  left: browseSidebarInset,
+                                ),
+                                child: AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 140),
+                                  switchInCurve: Curves.easeOut,
+                                  switchOutCurve: Curves.easeOut,
+                                  child: KeyedSubtree(
+                                    key: ValueKey(
+                                      'center-${viewing ? 'player' : nav.name}-${detailPlaylistId ?? ''}',
+                                    ),
+                                    child: _center(),
                                   ),
-                                  child: _center(),
                                 ),
                               ),
                             ),
@@ -608,8 +616,6 @@ class _AppShellState extends ConsumerState<AppShell>
                                     onNav: _setNav,
                                     onPlaylist: _openDetail,
                                     onLogoHome: _goLibrary,
-                                    pinned: _desktopSidebarPinned,
-                                    onTogglePin: _toggleDesktopSidebarPin,
                                   ),
                                   ShellHorizontalSplitter(
                                     tooltip: ref.tr('sidebar_width'),
@@ -714,7 +720,6 @@ class _AppShellState extends ConsumerState<AppShell>
     final detailId = detailPlaylistId;
     final q = ref.watch(queueProvider);
     final viewing = ref.watch(viewingPlayerProvider);
-    final playerMode = ref.watch(playerViewModeProvider);
     final showQueue = ref.watch(queueVisibleProvider);
     final isPlayerMode = q.hasCurrent && viewing;
     Widget body;
@@ -808,14 +813,19 @@ class _AppShellState extends ConsumerState<AppShell>
     );
 
     final isCinema = q.hasCurrent && ref.watch(cinemaModeProvider);
+    final playerMode = ref.watch(playerViewModeProvider);
     final showAmbient =
-        isPlayerMode && ref.watch(ambientLightProvider) && !isCinema;
+        isPlayerMode &&
+        ref.watch(ambientLightProvider) &&
+        !isCinema &&
+        playerMode == PlayerViewMode.media;
 
     return Stack(
       children: [
         if (showAmbient) const Positioned.fill(child: AmbientRoomGlowCanvas()),
         Positioned.fill(
           child: Scaffold(
+            key: const ValueKey('compact-app-shell'),
             backgroundColor: showAmbient
                 ? Colors.transparent
                 : Theme.of(context).scaffoldBackgroundColor,
@@ -879,16 +889,8 @@ class _AppShellState extends ConsumerState<AppShell>
             ),
             // When playing in full player view, hide the bottom navigation bar and mini player entirely.
             // User can open drawer (hamburger menu in TopBar) to navigate away.
-            bottomNavigationBar:
-                isPlayerMode && playerMode == PlayerViewMode.media
+            bottomNavigationBar: isPlayerMode
                 ? null
-                : isPlayerMode
-                ? TransportBar(
-                    queueVisible: showQueue,
-                    onToggleQueue: _toggleQueue,
-                    transportOnly: true,
-                    ambient: showAmbient,
-                  )
                 : Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [

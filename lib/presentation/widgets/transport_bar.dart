@@ -47,11 +47,30 @@ class _TransportBarState extends ConsumerState<TransportBar> {
         if (widget.transportOnly) {
           return FrostedPanel(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            fillOpacity: widget.ambient ? 0.84 : null,
+            fillOpacity: widget.ambient ? 0.45 : null,
             borderOpacity: widget.ambient ? 0.025 : null,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (constraints.maxWidth < 1000 && !widget.queueVisible)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton.icon(
+                      key: const ValueKey('transport-next-content-button'),
+                      onPressed: widget.onToggleQueue,
+                      icon: Icon(
+                        widget.queueVisible
+                            ? Icons.keyboard_arrow_down_rounded
+                            : Icons.keyboard_arrow_up_rounded,
+                        size: 20,
+                      ),
+                      label: Text(ref.tr('next_contents')),
+                      style: TextButton.styleFrom(
+                        foregroundColor: themeTextSub(context),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
                 Center(
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
@@ -59,14 +78,14 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const _TimelineBar(),
+                _TimelineBar(keyboardSeekEnabled: widget.transportOnly),
               ],
             ),
           );
         }
         return FrostedPanel(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
-          fillOpacity: widget.ambient ? 0.84 : null,
+          fillOpacity: widget.ambient ? 0.45 : null,
           borderOpacity: widget.ambient ? 0.025 : null,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -111,7 +130,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                 ),
               const SizedBox(height: 6),
               // Row 2: Full-width scrub timeline with duration labels on both sides
-              const _TimelineBar(),
+              _TimelineBar(keyboardSeekEnabled: widget.transportOnly),
             ],
           ),
         );
@@ -556,7 +575,9 @@ class _TransportBarState extends ConsumerState<TransportBar> {
 /// updates ONLY re-render this row and never trigger re-renders of thumbnails,
 /// now-playing metadata, or controls.
 class _TimelineBar extends ConsumerStatefulWidget {
-  const _TimelineBar();
+  const _TimelineBar({required this.keyboardSeekEnabled});
+
+  final bool keyboardSeekEnabled;
 
   @override
   ConsumerState<_TimelineBar> createState() => _TimelineBarState();
@@ -644,6 +665,8 @@ class _TimelineBarState extends ConsumerState<_TimelineBar> {
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
               ),
               child: Focus(
+                key: const ValueKey('browse-seekbar-keyboard-focus'),
+                descendantsAreFocusable: widget.keyboardSeekEnabled,
                 // This seekbar stays mounted while browsing. If arrow-key
                 // focus reaches it at a list's scroll boundary, Slider's
                 // built-in actions would unexpectedly seek. Keep seeking
@@ -658,6 +681,9 @@ class _TimelineBarState extends ConsumerState<_TimelineBar> {
                     ? KeyEventResult.handled
                     : KeyEventResult.ignored,
                 child: Slider(
+                  // While browsing, arrows belong to the library/video list.
+                  // The persistent seekbar must not become the next focus
+                  // target at the end of a list and consume those keys.
                   value: dur.inMilliseconds == 0
                       ? 0
                       : displayPos.inMilliseconds

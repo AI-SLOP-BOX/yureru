@@ -430,10 +430,13 @@ void main() {
         aperture: const Rect.fromLTWH(0.25, 0.25, 0.5, 0.5),
       );
       final rgba = await frame.toByteData(format: ui.ImageByteFormat.rawRgba);
-      int alphaAt(int y) => rgba!.getUint8((y * 320 + 160) * 4 + 3);
+      int alphaAt(int x, int y) => rgba!.getUint8((y * 320 + x) * 4 + 3);
 
-      expect(alphaAt(34), greaterThan(alphaAt(15)));
-      expect(alphaAt(15), greaterThan(0));
+      expect(alphaAt(160, 34), greaterThan(alphaAt(160, 15)));
+      expect(alphaAt(160, 15), greaterThan(0));
+      // Corners should still receive the room glow: multiplying independent
+      // X/Y edge fades made the top-left corner nearly transparent.
+      expect(alphaAt(0, 0), greaterThan(90));
       frame.dispose();
     },
   );

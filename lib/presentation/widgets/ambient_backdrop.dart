@@ -30,7 +30,14 @@ class AmbientRoomGlowCanvas extends ConsumerWidget {
       // video below the player, with a very visible rectangular boundary.
       // Wait for a sampled frame instead; the artwork fallback is only for
       // audio and image playback where no moving video frame exists.
-      if (isVideoMode) return const SizedBox.expand();
+      if (isVideoMode) {
+        // The shell becomes transparent while ambient lighting is enabled.
+        // Until the first decoded frame arrives, a transparent canvas exposes
+        // the platform's black window background; in light mode that leaves
+        // dark player text on black. Keep the themed surface visible during
+        // this brief capture gap, then let the sampled glow take over.
+        return ColoredBox(color: Theme.of(context).scaffoldBackgroundColor);
+      }
 
       final queue = ref.watch(queueProvider);
       final library = ref.watch(libraryProvider);

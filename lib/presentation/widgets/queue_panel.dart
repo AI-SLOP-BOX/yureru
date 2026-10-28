@@ -22,6 +22,7 @@ class QueuePanel extends ConsumerStatefulWidget {
   final Widget? compactPreview;
   final EdgeInsetsGeometry? margin;
   final bool ambient;
+  final bool opaqueSurface;
   const QueuePanel({
     super.key,
     this.width = 336,
@@ -31,6 +32,7 @@ class QueuePanel extends ConsumerStatefulWidget {
     this.compactPreview,
     this.margin,
     this.ambient = false,
+    this.opaqueSurface = false,
   });
 
   @override
@@ -75,8 +77,18 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
       child: FrostedPanel(
         margin: widget.margin ?? const EdgeInsets.fromLTRB(0, 12, 12, 12),
         borderRadius: BorderRadius.circular(16),
-        fillOpacity: widget.ambient ? 0.84 : null,
-        borderOpacity: widget.ambient ? 0.025 : null,
+        // The narrow queue is a modal sheet over the player. Keep the track
+        // metadata and video controls underneath from ghosting through it.
+        fillOpacity: widget.opaqueSurface
+            ? 1.0
+            : widget.ambient
+            ? 0.45
+            : null,
+        borderOpacity: widget.opaqueSurface
+            ? 0.08
+            : widget.ambient
+            ? 0.025
+            : null,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

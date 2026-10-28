@@ -1,12 +1,16 @@
 import 'dart:async';
-import 'dart:ui';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
+import '../../platform/keyboard_shortcuts.dart';
 import '../../playback/playback_controller.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
@@ -31,10 +35,13 @@ class ImmersivePlayerScreen extends ConsumerStatefulWidget {
 }
 
 class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
+  late final PlaybackEngine _engine;
   final _surfaceKey = GlobalKey();
+  final _ambientCaptureKey = GlobalKey();
   Timer? _idleTimer;
   StreamSubscription<bool>? _playbackSubscription;
   bool _controlsVisible = true;
+  bool _pointerOverSurface = false;
   bool _overControls = false;
   bool _pressed = false;
   bool _editingControls = false;
@@ -43,7 +50,15 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
   @override
   void initState() {
     super.initState();
+    _engine = ref.read(engineProvider);
     _reveal();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref
+            .read(engineProvider)
+            .setAmbientFrameSource(_captureAmbientVideoFrame);
+      }
+    });
     _playbackSubscription = ref
         .read(engineProvider)
         .snapshots
@@ -57,6 +72,7 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
   void _reveal() {
     _idleTimer?.cancel();
     if (!_controlsVisible) setState(() => _controlsVisible = true);
+    if (_pointerOverSurface) return;
     _idleTimer = Timer(const Duration(seconds: 3), () {
       if (mounted &&
           !_overControls &&
@@ -93,6 +109,24 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
     });
   }
 
+  Future<ui.Image?> _captureAmbientVideoFrame() async {
+    final renderObject = _ambientCaptureKey.currentContext?.findRenderObject();
+    if (renderObject is! RenderRepaintBoundary || !renderObject.hasSize) {
+      return null;
+    }
+    final size = renderObject.size;
+    if (size.width <= 0 || size.height <= 0) return null;
+    final pixelRatio = math.min(
+      1.0,
+      math.min(480 / size.width, 320 / size.height),
+    );
+    try {
+      return await renderObject.toImage(pixelRatio: pixelRatio);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Widget _controls(Widget child) => MouseRegion(
     onEnter: (_) {
       _overControls = true;
@@ -120,6 +154,7 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
   void dispose() {
     _idleTimer?.cancel();
     _playbackSubscription?.cancel();
+    _engine.setAmbientFrameSource(null);
     super.dispose();
   }
 
@@ -131,6 +166,9 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
     if (media == null) return const SizedBox.shrink();
     final engine = ref.watch(engineProvider);
     final mode = ref.watch(playerViewModeProvider);
+    final exitShortcut = ref
+        .watch(keyboardShortcutsProvider)[AppShortcutAction.exitExpandedView]!
+        .label(macOS: defaultTargetPlatform == TargetPlatform.macOS);
     return Theme(
       data: yureruTheme(),
       child: PopScope(
@@ -141,7 +179,14 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
         child: Scaffold(
           backgroundColor: const Color(0xFF0D0D0D),
           body: MouseRegion(
-            onHover: (_) => _reveal(),
+            onHover: (_) {
+              _pointerOverSurface = true;
+              _reveal();
+            },
+            onExit: (_) {
+              _pointerOverSurface = false;
+              _reveal();
+            },
             cursor: _controlsVisible
                 ? SystemMouseCursors.basic
                 : SystemMouseCursors.none,
@@ -164,7 +209,10 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                   if (mode != PlayerViewMode.media)
                     IgnorePointer(
                       child: ImageFiltered(
-                        imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+                        imageFilter: ui.ImageFilter.blur(
+                          sigmaX: 70,
+                          sigmaY: 70,
+                        ),
                         child: Opacity(
                           opacity: 0.22,
                           child: ThumbImage(
@@ -243,7 +291,8 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                         builder: (context, constraints) {
                           final compact = constraints.maxWidth < 600;
                           final exit = Tooltip(
-                            message: ref.tr('exit_immersive'),
+                            message:
+                                '${ref.tr('exit_immersive')} ($exitShortcut)',
                             child: TextButton.icon(
                               key: const ValueKey('immersive-exit'),
                               style: TextButton.styleFrom(
@@ -477,7 +526,10 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(20),
                     child: video
-                        ? engine.buildVideoView(fit: BoxFit.contain)
+                        ? RepaintBoundary(
+                            key: _ambientCaptureKey,
+                            child: engine.buildVideoView(fit: BoxFit.contain),
+                          )
                         : ThumbImage(
                             seed: media.id,
                             mediaId: media.id,

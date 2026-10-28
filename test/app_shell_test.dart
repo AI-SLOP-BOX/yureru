@@ -17,6 +17,7 @@ import 'package:yureru/playback/fake_engine.dart';
 import 'package:yureru/playback/playback_controller.dart';
 import 'package:yureru/playback/playback_engine.dart';
 import 'package:yureru/presentation/screens/home_screen.dart';
+import 'package:yureru/presentation/screens/settings_screen.dart';
 import 'package:yureru/presentation/screens/videos_screen.dart';
 import 'package:yureru/presentation/shell.dart';
 import 'package:yureru/presentation/theme.dart';
@@ -90,6 +91,7 @@ void main() {
     WidgetTester tester, {
     Size size = const Size(1440, 900),
     bool firstLaunch = false,
+    bool lightMode = false,
   }) async {
     SharedPreferences.setMockInitialValues({
       'yureru_first_launch_complete_v1': !firstLaunch,
@@ -106,9 +108,9 @@ void main() {
           engineProvider.overrideWithValue(fake),
         ],
         child: MaterialApp(
-          theme: yureruTheme(),
+          theme: yureruLightTheme(),
           darkTheme: yureruTheme(),
-          themeMode: ThemeMode.dark,
+          themeMode: lightMode ? ThemeMode.light : ThemeMode.dark,
           home: const AppShell(),
         ),
       ),
@@ -195,7 +197,7 @@ void main() {
     expect(
       (tester.widget<AnimatedPadding>(topbarInsets).padding as EdgeInsets)
           .right,
-      greaterThan(16),
+      16,
     );
     await mouse.moveTo(const Offset(500, 400));
     await tester.pump(const Duration(milliseconds: 600));
@@ -206,18 +208,25 @@ void main() {
     await tester.pumpAndSettle();
     expect(c.read(queueProvider).currentId, nextMedia.id);
 
-    // Returning to browsing closes and unpins the desktop queue.
+    // Browsing hides the queue, but its explicit pin survives the transition.
     await mouse.moveTo(const Offset(1, 200));
     await tester.pumpAndSettle();
     final openPanelInsets =
         tester.widget<AnimatedPadding>(topbarInsets).padding as EdgeInsets;
     expect(openPanelInsets.left, greaterThan(16));
-    expect(openPanelInsets.right, greaterThan(16));
+    expect(openPanelInsets.right, 16);
     await tester.tap(find.byIcon(Icons.video_library_rounded));
     await tester.pumpAndSettle();
     expect(c.read(queueVisibleProvider), isFalse);
     expect(find.byTooltip('再生キューを固定'), findsNothing);
     expect(find.byType(PlayerCard), findsNothing);
+
+    // Returning to the player restores the pinned queue.
+    c.read(viewingPlayerProvider.notifier).state = true;
+    await tester.pumpAndSettle();
+    expect(c.read(queueVisibleProvider), isTrue);
+    expect(find.byTooltip('再生キューの固定を解除'), findsOneWidget);
+    expect(tester.getRect(queuePanel).left, lessThan(1440));
     await mouse.removePointer();
   });
 
@@ -282,16 +291,22 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
       await tester.pump(const Duration(milliseconds: 2400));
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
+      await mouse.moveTo(const Offset(2, 2));
+      await tester.pump(const Duration(milliseconds: 300));
       expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
 
-      // Repeated tiny pointer deltas (as from trackpad jitter) are not real
-      // activity and must not keep pushing the idle timeout back forever.
+      // Tiny pointer jitter still counts as hovering, so the controls remain
+      // available until the pointer leaves the player.
       await mouse.moveTo(cardRect.center);
       await tester.pump(const Duration(milliseconds: 100));
       for (var i = 0; i < 27; i++) {
         await mouse.moveTo(cardRect.center + Offset(i.isEven ? 1 : -1, 0));
         await tester.pump(const Duration(milliseconds: 100));
       }
+      expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
+      await mouse.moveTo(const Offset(2, 2));
+      await tester.pump(const Duration(milliseconds: 300));
       expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
 
       final fake = c.read(engineProvider) as FakePlaybackEngine;
@@ -303,8 +318,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(fake.playCalls, playCallsBeforeDoubleTap);
       expect(fake.pauseCalls, pauseCallsBeforeDoubleTap);
-      expect(c.read(cinemaModeProvider), isTrue);
-      c.read(cinemaModeProvider.notifier).state = false;
+      expect(c.read(cinemaModeProvider), isFalse);
       await tester.pump();
 
       await mouse.moveTo(cardRect.center);
@@ -343,17 +357,32 @@ void main() {
     ]);
     await c.read(libraryProvider.notifier).load();
     c.read(queueProvider.notifier).start([media.id], shuffle: false);
-    c.read(viewingPlayerProvider.notifier).state = false;
     final engine = c.read(engineProvider) as FakePlaybackEngine;
     await engine.play();
     await tester.pumpAndSettle();
+    // Starting the first queue item opens the player; force the browse state
+    // only after that listener has run to exercise the persistent browse bar.
+    c.read(viewingPlayerProvider.notifier).state = false;
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TransportBar>(find.byType(TransportBar)).transportOnly,
+      isFalse,
+    );
 
     final timeline = find
         .descendant(
           of: find.byType(TransportBar),
           matching: find.byType(Slider),
         )
-        .first;
+        .last;
+    expect(
+      tester
+          .widget<Focus>(
+            find.byKey(const ValueKey('browse-seekbar-keyboard-focus')),
+          )
+          .descendantsAreFocusable,
+      isFalse,
+    );
     Focus.of(tester.element(timeline)).requestFocus();
     await tester.pump();
 
@@ -368,7 +397,7 @@ void main() {
     expect(engine.seeks, isEmpty);
   });
 
-  testWidgets('paused video controls appear on hover and auto-hide', (
+  testWidgets('paused video controls remain visible while hovered', (
     tester,
   ) async {
     await pumpShell(tester);
@@ -396,11 +425,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
     await tester.pump(const Duration(seconds: 3));
+    expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 1);
+    await mouse.moveTo(const Offset(2, 2));
+    await tester.pump(const Duration(milliseconds: 300));
     expect(tester.widget<AnimatedOpacity>(hoverTransport).opacity, 0);
     await mouse.removePointer();
   });
 
-  testWidgets('compact video transport is hidden until the pointer moves', (
+  testWidgets('compact video transport stays visible while hovered', (
     tester,
   ) async {
     await pumpShell(tester, size: const Size(700, 900));
@@ -416,18 +448,18 @@ void main() {
 
     final transport = find.byKey(const ValueKey('compact-player-transport'));
     expect(transport, findsOneWidget);
-    expect(tester.widget<AnimatedOpacity>(transport).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(transport).opacity, 1);
 
     final bounds = tester.getRect(transport);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: bounds.center);
     await tester.pump();
-    expect(tester.widget<AnimatedOpacity>(transport).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(transport).opacity, 1);
     await mouse.moveTo(bounds.center + const Offset(4, 0));
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.widget<AnimatedOpacity>(transport).opacity, 1);
     await tester.pump(const Duration(milliseconds: 2400));
-    expect(tester.widget<AnimatedOpacity>(transport).opacity, 0);
+    expect(tester.widget<AnimatedOpacity>(transport).opacity, 1);
     await mouse.removePointer();
   });
 
@@ -449,6 +481,8 @@ void main() {
     final nextContents = find.byKey(
       const ValueKey('compact-next-content-button'),
     );
+    final visual = find.byKey(const ValueKey('compact-player-visual'));
+    final visualSizeBeforeQueue = tester.getSize(visual);
     expect(find.byIcon(Icons.queue_music_rounded), findsNothing);
     expect(nextContents, findsOneWidget);
     await tester.tap(nextContents);
@@ -456,13 +490,34 @@ void main() {
 
     expect(c.read(queueVisibleProvider), isTrue);
     expect(find.byIcon(Icons.arrow_forward_rounded), findsNothing);
-    expect(find.text('次のコンテンツ'), findsNWidgets(2));
+    expect(find.text('次のコンテンツ'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('transport-next-content-button')),
+      findsNothing,
+    );
+    final playerBounds = tester.getRect(find.byType(PlayerCard));
+    final queuePanel = find.byType(QueuePanel);
+    expect(
+      tester.getRect(queuePanel).top,
+      greaterThanOrEqualTo(playerBounds.top),
+    );
+    expect(tester.getSize(visual), visualSizeBeforeQueue);
+    await tester.tap(
+      find
+          .descendant(of: queuePanel, matching: find.byType(GestureDetector))
+          .first,
+    );
+    await tester.pumpAndSettle();
+    final expandedQueueBounds = tester.getRect(queuePanel);
+    expect(expandedQueueBounds.top, greaterThanOrEqualTo(playerBounds.top));
+    expect(expandedQueueBounds.top - playerBounds.top, lessThan(100));
+    expect(expandedQueueBounds.bottom, lessThanOrEqualTo(playerBounds.bottom));
     await tester.tap(find.text('歌詞'));
     await tester.pump(const Duration(milliseconds: 400));
     expect(c.read(lyricsPanelProvider), isTrue);
   });
 
-  testWidgets('compact full-player video keeps the seek timeline on hover', (
+  testWidgets('compact player keeps the same frame when switching to artwork', (
     tester,
   ) async {
     await pumpShell(tester, size: const Size(700, 900));
@@ -476,23 +531,86 @@ void main() {
     c.read(viewingPlayerProvider.notifier).state = true;
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      find.byKey(const ValueKey('transport-next-content-button')),
+      findsNothing,
+    );
 
     final timeline = find.byKey(const ValueKey('compact-player-timeline'));
     expect(timeline, findsOneWidget);
-    expect(tester.widget<AnimatedOpacity>(timeline).opacity, 0);
-
-    final bounds = tester.getRect(timeline);
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    await mouse.addPointer(location: bounds.center);
-    await mouse.moveTo(bounds.center + const Offset(4, 0));
-    await tester.pump(const Duration(milliseconds: 100));
     expect(tester.widget<AnimatedOpacity>(timeline).opacity, 1);
     expect(
       find.descendant(of: timeline, matching: find.byType(Slider)),
       findsOneWidget,
     );
-    await mouse.removePointer();
+
+    // Artwork fills and crops inside exactly the same frame as the video.
+    final visual = find.byKey(const ValueKey('compact-player-visual'));
+    final videoSize = tester.getSize(visual);
+    c.read(playerViewModeProvider.notifier).state = PlayerViewMode.image;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 320));
+    expect(tester.getSize(visual), videoSize);
+    expect(
+      find.byKey(const ValueKey('compact-player-timeline')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('compact-player-transport')),
+      findsOneWidget,
+    );
   });
+
+  testWidgets('artwork mode keeps the light theme surface bright', (
+    tester,
+  ) async {
+    await pumpShell(tester, size: const Size(390, 844), lightMode: true);
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    final media = MediaItem(title: 'ライトの確認', localPath: '/tmp/light.mp4');
+    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
+      media,
+    ]);
+    await c.read(libraryProvider.notifier).load();
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    c.read(viewingPlayerProvider.notifier).state = true;
+    c.read(playerViewModeProvider.notifier).state = PlayerViewMode.image;
+    await tester.pumpAndSettle();
+
+    final surface = tester.widget<Container>(
+      find.byKey(const ValueKey('compact-player-visual-surface')),
+    );
+    expect(
+      (surface.decoration! as BoxDecoration).color,
+      yureruLightTheme().scaffoldBackgroundColor,
+    );
+  });
+
+  testWidgets(
+    'light artwork mode does not leave the ambient shell transparent',
+    (tester) async {
+      await pumpShell(tester, lightMode: true);
+      final c = ProviderScope.containerOf(
+        tester.element(find.byType(AppShell)),
+      );
+      final media = MediaItem(
+        title: 'ライト背景',
+        localPath: '/tmp/light-shell.mp4',
+      );
+      await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia(
+        [media],
+      );
+      await c.read(libraryProvider.notifier).load();
+      c.read(queueProvider.notifier).start([media.id], shuffle: false);
+      c.read(viewingPlayerProvider.notifier).state = true;
+      c.read(playerViewModeProvider.notifier).state = PlayerViewMode.image;
+      await tester.pumpAndSettle();
+
+      final shell = tester.widget<Scaffold>(
+        find.byKey(const ValueKey('wide-app-shell')),
+      );
+      expect(shell.backgroundColor, yureruLightTheme().scaffoldBackgroundColor);
+    },
+  );
 
   testWidgets('seek thumb waits for the engine position after release', (
     tester,
@@ -607,6 +725,8 @@ void main() {
     tester,
   ) async {
     await pumpShell(tester);
+    await tester.tap(find.byKey(const ValueKey('desktop-sidebar-toggle')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('設定'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ChoiceChip, 'ライブラリ'));
@@ -641,10 +761,37 @@ void main() {
     expect(find.text('Yureru について'), findsOneWidget);
   });
 
+  testWidgets('settings opens with all categories selected', (tester) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activeLanguageCodeProvider.overrideWithValue('ja'),
+          repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
+          engineProvider.overrideWithValue(FakePlaybackEngine()),
+        ],
+        child: MaterialApp(
+          theme: yureruLightTheme(),
+          darkTheme: yureruTheme(),
+          themeMode: ThemeMode.dark,
+          home: const Scaffold(body: SettingsScreen()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('settings-list-all')), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings-category-all')), findsOneWidget);
+  });
+
   testWidgets('playlist can be created from the sidebar + button', (
     tester,
   ) async {
     await pumpShell(tester);
+    await tester.tap(find.byKey(const ValueKey('desktop-sidebar-toggle')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('新規プレイリスト'));
     await tester.pumpAndSettle();
     final dialogField = find.descendant(
@@ -995,14 +1142,24 @@ void main() {
 
     final title = find.byKey(const ValueKey('player-title'));
     final creator = find.byKey(const ValueKey('player-creator-search'));
+    final timeline = find.byKey(const ValueKey('player-hover-timeline'));
     final controls = find.byKey(const ValueKey('player-hover-transport'));
     expect(title, findsOneWidget);
     expect(creator, findsOneWidget);
+    expect(timeline, findsOneWidget);
     expect(tester.widget<AnimatedOpacity>(controls).opacity, 0);
     expect(
       tester.getRect(title).bottom,
-      lessThan(tester.getRect(controls).top),
+      lessThan(tester.getRect(timeline).top),
     );
+    expect(
+      tester.getRect(creator).bottom,
+      lessThan(tester.getRect(timeline).top),
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getRect(controls).center);
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(creator);
     await tester.pumpAndSettle();
 
@@ -1466,29 +1623,41 @@ void main() {
       MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
     );
     final sidebarToggle = find.byKey(const ValueKey('desktop-sidebar-toggle'));
-    final searchField = find.byType(TextField).first;
-    expect(
-      tester.getRect(sidebarToggle).right,
-      lessThan(tester.getRect(searchField).left),
-    );
+    expect(sidebarToggle, findsOneWidget);
     expect(tester.getRect(sidebarToggle).top, lessThan(80));
     final sidebar = find.byType(Sidebar);
+    final center = find.byWidgetPredicate(
+      (widget) =>
+          widget.key is ValueKey<String> &&
+          (widget.key! as ValueKey<String>).value.startsWith('center-'),
+    );
+    final centerBeforeSidebar = tester.getRect(center);
+    expect(
+      find.descendant(of: sidebar, matching: find.byTooltip('サイドバーを固定')),
+      findsNothing,
+    );
     expect(tester.getRect(sidebar).right, lessThanOrEqualTo(0));
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: const Offset(1, 200));
     await mouse.moveTo(const Offset(1, 200));
     await tester.pumpAndSettle();
     expect(tester.getRect(sidebar).right, greaterThan(0));
-    await tester.tap(find.byTooltip('サイドバーを固定').last);
+    final centerWithSidebar = tester.getRect(center);
+    expect(centerWithSidebar.left, greaterThan(centerBeforeSidebar.left));
+    expect(centerWithSidebar.width, lessThan(centerBeforeSidebar.width));
+    await tester.tap(sidebarToggle);
     await mouse.moveTo(const Offset(500, 200));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     expect(tester.getRect(sidebar).right, greaterThan(0));
-    await tester.tap(find.byTooltip('サイドバーの固定を解除').last);
+    await tester.tap(sidebarToggle);
     await mouse.moveTo(const Offset(700, 200));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     expect(tester.getRect(sidebar).right, lessThanOrEqualTo(0));
+    final centerAfterSidebar = tester.getRect(center);
+    expect(centerAfterSidebar.left, centerBeforeSidebar.left);
+    expect(centerAfterSidebar.width, centerBeforeSidebar.width);
     await mouse.removePointer();
     expect(tester.takeException(), isNull);
   });

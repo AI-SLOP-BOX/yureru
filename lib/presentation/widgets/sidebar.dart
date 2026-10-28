@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
@@ -20,8 +18,6 @@ class Sidebar extends ConsumerWidget {
   final ValueChanged<Nav> onNav;
   final ValueChanged<String> onPlaylist;
   final VoidCallback? onLogoHome;
-  final bool pinned;
-  final VoidCallback? onTogglePin;
   const Sidebar({
     super.key,
     this.width = 248,
@@ -32,8 +28,6 @@ class Sidebar extends ConsumerWidget {
     required this.onNav,
     required this.onPlaylist,
     this.onLogoHome,
-    this.pinned = false,
-    this.onTogglePin,
   });
 
   @override
@@ -49,7 +43,7 @@ class Sidebar extends ConsumerWidget {
       width: width,
       // Match the top bar's frosted surface opacity so the brand/header area
       // reads as one continuous, even-colored strip while ambient light runs.
-      color: ambient ? panelColor.withValues(alpha: 0.84) : panelColor,
+      color: ambient ? panelColor.withValues(alpha: 0.20) : panelColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -65,16 +59,6 @@ class Sidebar extends ConsumerWidget {
                     child: const YureruBrandHeader(iconSize: 32),
                   ),
                 ),
-                if (onTogglePin != null)
-                  IconButton(
-                    tooltip: ref.tr(pinned ? 'unpin_sidebar' : 'pin_sidebar'),
-                    visualDensity: VisualDensity.compact,
-                    icon: Icon(
-                      pinned ? Icons.push_pin_rounded : Icons.menu_rounded,
-                      size: 20,
-                    ),
-                    onPressed: onTogglePin,
-                  ),
               ],
             ),
           ),
@@ -179,14 +163,7 @@ class Sidebar extends ConsumerWidget {
         ],
       ),
     );
-    return ambient
-        ? ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-              child: panel,
-            ),
-          )
-        : panel;
+    return panel;
   }
 
   /// Collapsed icon rail (labels + playlist list hidden).
@@ -199,7 +176,7 @@ class Sidebar extends ConsumerWidget {
     bool sel(bool v) => v && !viewingPlayer;
     final panel = Container(
       width: 76,
-      color: ambient ? panelColor.withValues(alpha: 0.84) : panelColor,
+      color: ambient ? panelColor.withValues(alpha: 0.20) : panelColor,
       child: Column(
         children: [
           const SizedBox(height: 8),
@@ -207,21 +184,6 @@ class Sidebar extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _LogoButton(onTap: onLogoHome, tooltip: ref.tr('library')),
-              if (onTogglePin != null)
-                IconButton(
-                  tooltip: ref.tr(pinned ? 'unpin_sidebar' : 'pin_sidebar'),
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 28,
-                    height: 32,
-                  ),
-                  icon: Icon(
-                    pinned ? Icons.push_pin_rounded : Icons.menu_rounded,
-                    size: 18,
-                  ),
-                  onPressed: onTogglePin,
-                ),
             ],
           ),
           const SizedBox(height: 20),
@@ -259,14 +221,7 @@ class Sidebar extends ConsumerWidget {
         ],
       ),
     );
-    return ambient
-        ? ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-              child: panel,
-            ),
-          )
-        : panel;
+    return panel;
   }
 
   Future<void> _newPlaylist(BuildContext context, WidgetRef ref) async {

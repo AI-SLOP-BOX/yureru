@@ -30,15 +30,92 @@ class PlaylistDetailScreen extends ConsumerStatefulWidget {
 
 class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   static const double _desktopContentMaxWidth = 1440;
-  bool _showSearch = false;
   bool _sortByCreator = false;
-  final TextEditingController _searchCtrl = TextEditingController();
-  String _searchQuery = '';
 
-  @override
-  void dispose() {
-    _searchCtrl.dispose();
-    super.dispose();
+  Widget _sortSelector({required bool isDark}) {
+    final options = [
+      (
+        value: false,
+        label: ref.tr('playlist_order'),
+        icon: Icons.playlist_play_rounded,
+        tooltip: ref.tr('playlist_order'),
+      ),
+      (
+        value: true,
+        label: ref.tr('metadata_artist'),
+        icon: Icons.person_outline_rounded,
+        tooltip: ref.tr('creator_order'),
+      ),
+    ];
+    final selectedFill = isDark
+        ? Colors.white.withValues(alpha: 0.14)
+        : Colors.black.withValues(alpha: 0.08);
+    final quietFill = isDark
+        ? Colors.white.withValues(alpha: 0.055)
+        : Colors.black.withValues(alpha: 0.035);
+
+    return DecoratedBox(
+      key: const ValueKey('playlist-sort-selector'),
+      decoration: BoxDecoration(
+        color: quietFill,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: themeBorder(context).withValues(alpha: 0.55)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(3),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final option in options)
+              SizedBox(
+                width: option.value ? 88 : 132,
+                child: Tooltip(
+                  message: option.tooltip,
+                  child: Material(
+                    color: _sortByCreator == option.value
+                        ? selectedFill
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      key: ValueKey('playlist-sort-${option.value}'),
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: () =>
+                          setState(() => _sortByCreator = option.value),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 7,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(option.icon, size: 16),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                option.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: _sortByCreator == option.value
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _contentFrame({required Widget child}) => Center(
@@ -76,8 +153,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
         .toDouble();
     final artworkGap = screenWidth < 600 ? 14.0 : 20.0;
 
-    // Filter media items when search query is active
-    final query = _searchQuery.trim().toLowerCase();
+    // The shared top-bar search filters the current playlist while its detail
+    // page is open, so there is only one search field in the app.
+    final query = ref.watch(searchQueryProvider).trim().toLowerCase();
     final filteredMediaIds =
         (query.isEmpty
                 ? pl.mediaIds
@@ -333,138 +411,14 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                     if (screenWidth >= 1200) ...[
                       const SizedBox(width: 28),
                       SizedBox(
-                        width: 270,
+                        width: 238,
                         child: FrostedPanel(
                           borderRadius: BorderRadius.circular(16),
-                          padding: const EdgeInsets.all(14),
+                          padding: const EdgeInsets.all(9),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (!_sortByCreator && query.isEmpty) ...[
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.drag_indicator_rounded,
-                                      size: 17,
-                                      color: themeTextSub(context),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        ref.tr('drag_to_reorder'),
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: themeTextSub(context),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-                                Divider(height: 1, color: themeBorder(context)),
-                                const SizedBox(height: 6),
-                              ],
-                              Row(
-                                children: [
-                                  IconButton(
-                                    tooltip: ref.tr(
-                                      _showSearch ? 'close' : 'search_playlist',
-                                    ),
-                                    visualDensity: VisualDensity.compact,
-                                    icon: Icon(
-                                      _showSearch
-                                          ? Icons.close_rounded
-                                          : Icons.search_rounded,
-                                    ),
-                                    onPressed: () {
-                                      setState(() {
-                                        _showSearch = !_showSearch;
-                                        if (!_showSearch) {
-                                          _searchCtrl.clear();
-                                          _searchQuery = '';
-                                        }
-                                      });
-                                    },
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Expanded(
-                                    child: PopupMenuButton<bool>(
-                                      tooltip: ref.tr('sort'),
-                                      initialValue: _sortByCreator,
-                                      onSelected: (value) => setState(
-                                        () => _sortByCreator = value,
-                                      ),
-                                      itemBuilder: (_) => [
-                                        PopupMenuItem(
-                                          value: false,
-                                          child: Text(ref.tr('playlist_order')),
-                                        ),
-                                        PopupMenuItem(
-                                          value: true,
-                                          child: Text(ref.tr('creator_order')),
-                                        ),
-                                      ],
-                                      child: DecoratedBox(
-                                        decoration: BoxDecoration(
-                                          color: _sortByCreator
-                                              ? themeTextSub(
-                                                  context,
-                                                ).withValues(alpha: 0.12)
-                                              : Colors.transparent,
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                          border: Border.all(
-                                            color: _sortByCreator
-                                                ? themeTextSub(
-                                                    context,
-                                                  ).withValues(alpha: 0.3)
-                                                : Colors.transparent,
-                                          ),
-                                        ),
-                                        child: Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 8,
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                _sortByCreator
-                                                    ? Icons
-                                                          .sort_by_alpha_rounded
-                                                    : Icons.sort_rounded,
-                                                size: 18,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Expanded(
-                                                child: Text(
-                                                  ref.tr(
-                                                    _sortByCreator
-                                                        ? 'creator_order'
-                                                        : 'playlist_order',
-                                                  ),
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ),
-                                              const Icon(
-                                                Icons.expand_more_rounded,
-                                                size: 18,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                            children: [_sortSelector(isDark: isDark)],
                           ),
                         ),
                       ),
@@ -476,73 +430,6 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
           ],
         ),
 
-        // Search bar if opened via "プレイリストで検索"
-        if (_showSearch)
-          _contentFrame(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                horizontalInset,
-                0,
-                horizontalInset,
-                12,
-              ),
-              child: FrostedPanel(
-                borderRadius: BorderRadius.circular(20),
-                child: SizedBox(
-                  height: 40,
-                  child: Row(
-                    children: [
-                      const SizedBox(width: 14),
-                      Icon(
-                        Icons.search_rounded,
-                        size: 20,
-                        color: isDark ? kTextSub : Colors.black54,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: _searchCtrl,
-                          autofocus: true,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: isDark ? Colors.white : Colors.black87,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: ref.tr('search_playlist'),
-                            hintStyle: TextStyle(
-                              fontSize: 13,
-                              color: isDark ? kTextSub : Colors.black45,
-                            ),
-                            border: InputBorder.none,
-                            isDense: true,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                          onChanged: (val) {
-                            setState(() {
-                              _searchQuery = val;
-                            });
-                          },
-                        ),
-                      ),
-                      if (_searchQuery.isNotEmpty)
-                        IconButton(
-                          tooltip: ref.tr('browse_clear_search'),
-                          icon: const Icon(Icons.close_rounded, size: 18),
-                          onPressed: () {
-                            _searchCtrl.clear();
-                            setState(() {
-                              _searchQuery = '';
-                            });
-                          },
-                        ),
-                      const SizedBox(width: 6),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-
         if (screenWidth < 1200)
           _contentFrame(
             child: Padding(
@@ -553,101 +440,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                 2,
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Flexible(
-                    child: !_sortByCreator && query.isEmpty
-                        ? Text(
-                            ref.tr('drag_to_reorder'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: themeTextSub(context),
-                            ),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: ref.tr(
-                          _showSearch ? 'close' : 'search_playlist',
-                        ),
-                        visualDensity: VisualDensity.compact,
-                        icon: Icon(
-                          _showSearch
-                              ? Icons.close_rounded
-                              : Icons.search_rounded,
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            _showSearch = !_showSearch;
-                            if (!_showSearch) {
-                              _searchCtrl.clear();
-                              _searchQuery = '';
-                            }
-                          });
-                        },
-                      ),
-                      PopupMenuButton<bool>(
-                        tooltip: ref.tr('sort'),
-                        initialValue: _sortByCreator,
-                        onSelected: (value) =>
-                            setState(() => _sortByCreator = value),
-                        itemBuilder: (_) => [
-                          PopupMenuItem(
-                            value: false,
-                            child: Text(ref.tr('playlist_order')),
-                          ),
-                          PopupMenuItem(
-                            value: true,
-                            child: Text(ref.tr('creator_order')),
-                          ),
-                        ],
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: _sortByCreator
-                                ? themeTextSub(context).withValues(alpha: 0.12)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: _sortByCreator
-                                  ? themeTextSub(context).withValues(alpha: 0.3)
-                                  : Colors.transparent,
-                            ),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 6,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  _sortByCreator
-                                      ? Icons.sort_by_alpha_rounded
-                                      : Icons.sort_rounded,
-                                  size: 18,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  ref.tr(
-                                    _sortByCreator
-                                        ? 'creator_order'
-                                        : 'playlist_order',
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [_sortSelector(isDark: isDark)],
               ),
             ),
           ),
@@ -675,7 +469,10 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                   child: Text(
                     ref
                         .tr('no_playlist_matches')
-                        .replaceAll('{query}', _searchQuery),
+                        .replaceAll(
+                          '{query}',
+                          ref.read(searchQueryProvider).trim(),
+                        ),
                     style: const TextStyle(color: kTextSub),
                   ),
                 )
@@ -733,88 +530,93 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                               borderRadius: BorderRadius.circular(10),
                             ),
                             clipBehavior: Clip.antiAlias,
-                            child: ListTile(
-                              minLeadingWidth: 0,
-                              horizontalTitleGap: 10,
-                              leading: SizedBox(
-                                width: 78,
-                                child: Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 22,
-                                      child: Center(
-                                        child: m.id == currentId
-                                            ? Icon(
-                                                Icons.equalizer_rounded,
-                                                size: 16,
-                                                color: themeTextSub(context),
-                                              )
-                                            : Text(
-                                                '${i + 1}'.padLeft(2, '0'),
-                                                style: TextStyle(
-                                                  fontSize: 11,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: ListTile(
+                                minLeadingWidth: 0,
+                                horizontalTitleGap: 10,
+                                leading: SizedBox(
+                                  width: 78,
+                                  child: Row(
+                                    children: [
+                                      SizedBox(
+                                        width: 22,
+                                        child: Center(
+                                          child: m.id == currentId
+                                              ? Icon(
+                                                  Icons.equalizer_rounded,
+                                                  size: 16,
                                                   color: themeTextSub(context),
+                                                )
+                                              : Text(
+                                                  '${i + 1}'.padLeft(2, '0'),
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: themeTextSub(
+                                                      context,
+                                                    ),
+                                                  ),
                                                 ),
-                                              ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    ThumbImage(
-                                      seed: m.id,
-                                      mediaId: m.id,
-                                      localPath: m.localPath,
-                                      size: 48,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              title: Text(
-                                displayTitle(m.title),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: m.artist?.trim().isNotEmpty == true
-                                  ? Text(
-                                      formatCreatorNames(m.artist),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: themeTextSub(context),
-                                      ),
-                                    )
-                                  : DurationText(
-                                      mediaId: m.id,
-                                      localPath: m.localPath,
-                                      durationMs: m.durationMs,
-                                    ),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  m.id == currentId
-                                      ? const SizedBox(width: 48)
-                                      : IconButton(
-                                          tooltip: ref.tr('play'),
-                                          icon: const Icon(Icons.play_arrow),
-                                          onPressed: playFromHere,
                                         ),
-                                  if (!_sortByCreator && query.isEmpty)
-                                    Tooltip(
-                                      message: ref.tr('drag_to_reorder'),
-                                      child: SizedBox(
-                                        width: 52,
-                                        height: 52,
-                                        child: ReorderableDragStartListener(
-                                          index: i,
-                                          child: const Icon(
-                                            Icons.drag_handle_rounded,
-                                            size: 28,
-                                            color: kTextSub,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      ThumbImage(
+                                        seed: m.id,
+                                        mediaId: m.id,
+                                        localPath: m.localPath,
+                                        size: 48,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                title: Text(
+                                  displayTitle(m.title),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: m.artist?.trim().isNotEmpty == true
+                                    ? Text(
+                                        formatCreatorNames(m.artist),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: themeTextSub(context),
+                                        ),
+                                      )
+                                    : DurationText(
+                                        mediaId: m.id,
+                                        localPath: m.localPath,
+                                        durationMs: m.durationMs,
+                                      ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    m.id == currentId
+                                        ? const SizedBox(width: 48)
+                                        : IconButton(
+                                            tooltip: ref.tr('play'),
+                                            icon: const Icon(Icons.play_arrow),
+                                            onPressed: playFromHere,
+                                          ),
+                                    if (!_sortByCreator && query.isEmpty)
+                                      Tooltip(
+                                        message: ref.tr('drag_to_reorder'),
+                                        child: SizedBox(
+                                          width: 52,
+                                          height: 52,
+                                          child: ReorderableDragStartListener(
+                                            index: i,
+                                            child: const Icon(
+                                              Icons.drag_handle_rounded,
+                                              size: 28,
+                                              color: kTextSub,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                ],
+                                  ],
+                                ),
+                                onTap: playFromHere,
                               ),
-                              onTap: playFromHere,
                             ),
                           ),
                         );
@@ -900,68 +702,71 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                       ? Colors.white.withValues(alpha: 0.03)
                                       : Colors.black.withValues(alpha: 0.02),
                                 ),
-                                child: ListTile(
-                                  dense: true,
-                                  leading: ThumbImage(
-                                    seed: cand.id,
-                                    mediaId: cand.id,
-                                    localPath: cand.localPath,
-                                    size: 40,
-                                  ),
-                                  title: Text(
-                                    displayTitle(cand.title),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: ListTile(
+                                    dense: true,
+                                    leading: ThumbImage(
+                                      seed: cand.id,
+                                      mediaId: cand.id,
+                                      localPath: cand.localPath,
+                                      size: 40,
                                     ),
-                                  ),
-                                  subtitle:
-                                      formatCreatorNames(cand.artist).isEmpty
-                                      ? DurationText(
-                                          mediaId: cand.id,
-                                          localPath: cand.localPath,
-                                          durationMs: cand.durationMs,
-                                        )
-                                      : Text(
-                                          formatCreatorNames(cand.artist),
-                                          style: TextStyle(
-                                            fontSize: 11.5,
-                                            color: themeTextSub(context),
-                                          ),
-                                        ),
-                                  trailing: IconButton(
-                                    tooltip: ref.tr('add_playlist'),
-                                    icon: Icon(
-                                      Icons.add_rounded,
-                                      size: 20,
-                                      color: themeTextSub(context),
+                                    title: Text(
+                                      displayTitle(cand.title),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                      ),
                                     ),
-                                    onPressed: () async {
-                                      await ref
-                                          .read(libraryProvider.notifier)
-                                          .addToPlaylist(pl.id, cand.id);
-                                      if (context.mounted) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                              ref
-                                                  .tr('added_media_title')
-                                                  .replaceAll(
-                                                    '{title}',
-                                                    displayTitle(cand.title),
-                                                  ),
-                                            ),
-                                            duration: const Duration(
-                                              seconds: 2,
+                                    subtitle:
+                                        formatCreatorNames(cand.artist).isEmpty
+                                        ? DurationText(
+                                            mediaId: cand.id,
+                                            localPath: cand.localPath,
+                                            durationMs: cand.durationMs,
+                                          )
+                                        : Text(
+                                            formatCreatorNames(cand.artist),
+                                            style: TextStyle(
+                                              fontSize: 11.5,
+                                              color: themeTextSub(context),
                                             ),
                                           ),
-                                        );
-                                      }
-                                    },
+                                    trailing: IconButton(
+                                      tooltip: ref.tr('add_playlist'),
+                                      icon: Icon(
+                                        Icons.add_rounded,
+                                        size: 20,
+                                        color: themeTextSub(context),
+                                      ),
+                                      onPressed: () async {
+                                        await ref
+                                            .read(libraryProvider.notifier)
+                                            .addToPlaylist(pl.id, cand.id);
+                                        if (context.mounted) {
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                ref
+                                                    .tr('added_media_title')
+                                                    .replaceAll(
+                                                      '{title}',
+                                                      displayTitle(cand.title),
+                                                    ),
+                                              ),
+                                              duration: const Duration(
+                                                seconds: 2,
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                    ),
                                   ),
                                 ),
                               ),

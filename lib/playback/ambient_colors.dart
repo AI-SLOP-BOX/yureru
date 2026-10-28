@@ -824,8 +824,6 @@ Future<ui.Image> renderAmbientGlow(
     for (var x = 0; x < width; x++) {
       final pixelX = x + 0.5;
       final pixelY = y + 0.5;
-      final insideX = pixelX >= apertureLeft && pixelX <= apertureRight;
-      final insideY = pixelY >= apertureTop && pixelY <= apertureBottom;
       final horizontalPosition =
           (pixelX - apertureLeft) / (apertureRight - apertureLeft);
       final verticalPosition =
@@ -986,25 +984,23 @@ Future<ui.Image> renderAmbientGlow(
         // Shape the spill around the rounded video, while allowing a faint
         // amount to remain at the window boundary instead of exposing the
         // black app surface as a sharp outline.
-        final horizontalFade = insideX
-            ? 1.0
-            : x < apertureLeft
+        final horizontalFade = x < apertureLeft
             ? (x / apertureLeft).clamp(0.0, 1.0)
             : ((width - 1 - x) / (width - 1 - apertureRight)).clamp(0.0, 1.0);
-        final verticalFade = insideY
-            ? 1.0
-            : y < apertureTop
+        final verticalFade = y < apertureTop
             ? (y / apertureTop).clamp(0.0, 1.0)
             : ((height - 1 - y) / (height - 1 - apertureBottom)).clamp(
                 0.0,
                 1.0,
               );
-        final radialFade = horizontalFade * verticalFade;
+        // At a corner both axis fades were multiplied, dimming the light
+        // twice. Let the nearer window edge control the falloff instead.
+        final radialFade = math.min(horizontalFade, verticalFade);
         final eased = radialFade * radialFade * (3 - 2 * radialFade);
         final edgeFade = math
             .pow((1 - signedDistance / glowFadeDistance).clamp(0.0, 1.0), 1.5)
             .toDouble();
-        alpha = math.max(math.pow(eased, 1.35).toDouble() * edgeFade, 0.24);
+        alpha = math.max(math.pow(eased, 1.35).toDouble() * edgeFade, 0.36);
       }
       final averageBrightness = (color.r + color.g + color.b) / 3;
       if (!matteOnly && averageBrightness < 0.18) {

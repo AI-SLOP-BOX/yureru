@@ -56,7 +56,11 @@ Future<void> _settle(WidgetTester tester) async {
   await tester.runAsync(
     () => Future<void>.delayed(const Duration(milliseconds: 40)),
   );
-  await tester.pumpAndSettle();
+  // Ambient glow and media controls can keep an animation ticker alive, so
+  // pump the transition window explicitly instead of waiting for global idle.
+  for (var frame = 0; frame < 5; frame++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
 }
 
 void main() {
@@ -267,14 +271,15 @@ void main() {
   }
 
   testWidgets(
-    'idle controls hide, pointer activity reveals them and Escape exits',
+    'immersive controls stay visible while hovered and Escape exits',
     (tester) async {
       final (container, engine) = await pumpPlayer(
         tester,
         const Size(1440, 900),
       );
       container.read(immersiveModeProvider.notifier).state = true;
-      await _settle(tester);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       engine.snap = const PlaybackSnapshot(initialized: true, isPlaying: true);
       await tester.pump(const Duration(seconds: 4));
       await tester.pump(const Duration(milliseconds: 300));
@@ -291,7 +296,7 @@ void main() {
       );
       await pointer.addPointer(location: const Offset(700, 450));
       await pointer.moveTo(const Offset(710, 450));
-      await _settle(tester);
+      await tester.pump(const Duration(milliseconds: 300));
       expect(
         tester
             .widgetList<AnimatedOpacity>(
@@ -300,9 +305,29 @@ void main() {
             .every((widget) => widget.opacity == 1),
         isTrue,
       );
+      await tester.pump(const Duration(seconds: 4));
+      expect(
+        tester
+            .widgetList<AnimatedOpacity>(
+              find.byKey(const ValueKey('immersive-controls')),
+            )
+            .every((widget) => widget.opacity == 1),
+        isTrue,
+      );
+      await pointer.moveTo(const Offset(-10, -10));
+      await tester.pump(const Duration(seconds: 4));
+      expect(
+        tester
+            .widgetList<AnimatedOpacity>(
+              find.byKey(const ValueKey('immersive-controls')),
+            )
+            .every((widget) => widget.opacity == 0),
+        isTrue,
+      );
       await pointer.removePointer();
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await _settle(tester);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(container.read(immersiveModeProvider), isFalse);
     },
   );

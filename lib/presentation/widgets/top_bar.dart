@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:ui' as ui;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
+import '../../platform/keyboard_shortcuts.dart';
 import '../../platform/window_utils.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
@@ -24,7 +26,6 @@ class TopBar extends ConsumerStatefulWidget {
   final bool showMenuButton;
   final bool ambient;
   final double leadingInset;
-  final double trailingInset;
   const TopBar({
     super.key,
     required this.onOpenSearch,
@@ -38,7 +39,6 @@ class TopBar extends ConsumerStatefulWidget {
     this.showMenuButton = true,
     this.ambient = false,
     this.leadingInset = 0,
-    this.trailingInset = 0,
   });
 
   @override
@@ -184,6 +184,10 @@ class _TopBarState extends ConsumerState<TopBar> {
     final shortcutTextColor = isDark ? kTextSub : Colors.black54;
 
     final isMacOS = defaultTargetPlatform == TargetPlatform.macOS;
+    final shortcuts = ref.watch(keyboardShortcutsProvider);
+    final focusSearchShortcut = shortcuts[AppShortcutAction.focusSearch]!;
+    final openFileShortcut = shortcuts[AppShortcutAction.openFile]!;
+    final globalSearchShortcut = shortcuts[AppShortcutAction.globalSearch]!;
     final isDesktop =
         !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.macOS ||
@@ -236,9 +240,11 @@ class _TopBarState extends ConsumerState<TopBar> {
             // ⌘F / Ctrl+F: Focus the in-page search bar
             // Scoped: Only trigger if the current route is active (prevents hijacking modal / sub-view Ctrl+F)
             SingleActivator(
-              LogicalKeyboardKey.keyF,
-              meta: isMacOS,
-              control: !isMacOS,
+              focusSearchShortcut.key ?? LogicalKeyboardKey.keyF,
+              meta: focusSearchShortcut.meta,
+              control: focusSearchShortcut.control,
+              alt: focusSearchShortcut.alt,
+              shift: focusSearchShortcut.shift,
             ): () {
               if (ModalRoute.of(context)?.isCurrent != true) return;
               if (isVeryCompact) {
@@ -247,9 +253,11 @@ class _TopBarState extends ConsumerState<TopBar> {
               _searchFocusNode.requestFocus();
             },
             SingleActivator(
-              LogicalKeyboardKey.keyO,
-              meta: isMacOS,
-              control: !isMacOS,
+              openFileShortcut.key ?? LogicalKeyboardKey.keyO,
+              meta: openFileShortcut.meta,
+              control: openFileShortcut.control,
+              alt: openFileShortcut.alt,
+              shift: openFileShortcut.shift,
             ): () {
               if (ModalRoute.of(context)?.isCurrent != true) return;
               widget.onOpenFile?.call();
@@ -259,12 +267,7 @@ class _TopBarState extends ConsumerState<TopBar> {
             key: const ValueKey('shell-topbar-chrome-insets'),
             duration: const Duration(milliseconds: 240),
             curve: Curves.easeOutCubic,
-            padding: EdgeInsets.fromLTRB(
-              16 + widget.leadingInset,
-              12,
-              16 + widget.trailingInset,
-              8,
-            ),
+            padding: EdgeInsets.fromLTRB(16 + widget.leadingInset, 12, 16, 8),
             child: Row(
               children: [
                 if (!isCompactExpanded && widget.showMenuButton) ...[
@@ -273,6 +276,25 @@ class _TopBarState extends ConsumerState<TopBar> {
                       key: widget.onToggleSidebar == null
                           ? null
                           : const ValueKey('desktop-sidebar-toggle'),
+                      style: widget.onToggleSidebar == null
+                          ? null
+                          : IconButton.styleFrom(
+                              foregroundColor: widget.sidebarPinned
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
+                              backgroundColor: widget.sidebarPinned
+                                  ? Theme.of(context).colorScheme.primary
+                                        .withValues(alpha: 0.22)
+                                  : null,
+                              side: widget.sidebarPinned
+                                  ? BorderSide(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary
+                                          .withValues(alpha: 0.62),
+                                    )
+                                  : BorderSide.none,
+                            ),
                       tooltip: Scaffold.maybeOf(bContext)?.hasDrawer == true
                           ? ref.tr('menu')
                           : widget.onToggleSidebar != null
@@ -287,7 +309,9 @@ class _TopBarState extends ConsumerState<TopBar> {
                       icon: Icon(
                         Icons.menu_rounded,
                         size: 22,
-                        color: iconColor,
+                        color: widget.sidebarPinned
+                            ? Theme.of(context).colorScheme.primary
+                            : iconColor,
                       ),
                       onPressed: () {
                         final scaffold = Scaffold.maybeOf(bContext);
@@ -306,7 +330,7 @@ class _TopBarState extends ConsumerState<TopBar> {
                 ] else if (isCompactExpanded) ...[
                   // Back button when search is expanded full-width on very small screens
                   IconButton(
-                    tooltip: '${ref.tr('close')} (Esc)',
+                    tooltip: ref.tr('close'),
                     icon: Icon(
                       Icons.arrow_back_rounded,
                       size: 22,
@@ -486,7 +510,9 @@ class _TopBarState extends ConsumerState<TopBar> {
                                                   ),
                                                 ),
                                                 child: Text(
-                                                  isMacOS ? '⌘ K' : 'Ctrl+K',
+                                                  globalSearchShortcut.label(
+                                                    macOS: isMacOS,
+                                                  ),
                                                   style: TextStyle(
                                                     fontFamily: isMacOS
                                                         ? '.AppleSystemUIFont'
@@ -530,7 +556,8 @@ class _TopBarState extends ConsumerState<TopBar> {
 
                   if (widget.onOpenFile != null)
                     IconButton(
-                      tooltip: '${ref.tr('open_file')} (⌘O)',
+                      tooltip:
+                          '${ref.tr('open_file')} (${openFileShortcut.label(macOS: isMacOS)})',
                       icon: Icon(
                         Icons.folder_open_rounded,
                         size: 20,
@@ -583,20 +610,6 @@ class _TopBarState extends ConsumerState<TopBar> {
                         );
                       },
                     ),
-                  if (widget.onToggleQueuePin != null)
-                    IconButton(
-                      tooltip: ref.tr(
-                        widget.queuePinned ? 'unpin_queue' : 'pin_queue',
-                      ),
-                      icon: Icon(
-                        widget.queuePinned
-                            ? Icons.push_pin_rounded
-                            : Icons.queue_music_rounded,
-                        size: 21,
-                        color: iconColor,
-                      ),
-                      onPressed: widget.onToggleQueuePin,
-                    ),
                   if (isDesktop && !isCompact)
                     IconButton(
                       tooltip: ref.tr('fullscreen'),
@@ -607,6 +620,32 @@ class _TopBarState extends ConsumerState<TopBar> {
                       ),
                       onPressed: toggleFullscreen,
                     ),
+                  if (widget.onToggleQueuePin != null)
+                    IconButton(
+                      key: const ValueKey('desktop-queue-pin-toggle'),
+                      tooltip: ref.tr(
+                        widget.queuePinned ? 'unpin_queue' : 'pin_queue',
+                      ),
+                      icon: const Icon(Icons.queue_music_rounded, size: 21),
+                      style: IconButton.styleFrom(
+                        foregroundColor: widget.queuePinned
+                            ? Theme.of(context).colorScheme.primary
+                            : iconColor,
+                        backgroundColor: widget.queuePinned
+                            ? Theme.of(
+                                context,
+                              ).colorScheme.primary.withValues(alpha: 0.18)
+                            : null,
+                        side: widget.queuePinned
+                            ? BorderSide(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.primary.withValues(alpha: 0.52),
+                              )
+                            : BorderSide.none,
+                      ),
+                      onPressed: widget.onToggleQueuePin,
+                    ),
                 ],
               ],
             ),
@@ -614,7 +653,7 @@ class _TopBarState extends ConsumerState<TopBar> {
         );
 
         final chromeSurface = widget.ambient
-            ? themePanel(context).withValues(alpha: 0.84)
+            ? themePanel(context).withValues(alpha: 0.45)
             : themePanel(context);
         final header = Stack(
           clipBehavior: Clip.none,

@@ -231,7 +231,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                               )
                             : null,
                       ),
-                      child: ListTile(
+                      child: Material(color: Colors.transparent, child: ListTile(
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
@@ -265,7 +265,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                           Navigator.pop(context);
                           widget.onOpenPlaylist(pl.id);
                         },
-                      ),
+                      )),
                     );
                   }(),
                 ],
@@ -305,7 +305,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                               )
                             : null,
                       ),
-                      child: ListTile(
+                      child: Material(color: Colors.transparent, child: ListTile(
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
@@ -358,7 +358,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                         ),
                         onTap: () =>
                             _activateIndex(globalIdx, playlists, videos, lib),
-                      ),
+                      )),
                     );
                   }(),
                 ],

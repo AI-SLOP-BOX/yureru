@@ -8,6 +8,7 @@ import 'translations/pt.dart';
 import 'translations/fr.dart';
 import 'translations/de.dart';
 import 'translations/ar.dart';
+import 'translations/shortcuts.dart';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,14 +16,29 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Translation dictionaries assembled from per-locale files.
 const Map<String, Map<String, String>> _kTranslations = {
-  'ja': {...jaBase, ...jaFeature, ...jaScreen, ...jaExtra, ...jaLibrary},
-  'en': {...enBase, ...enFeature, ...enScreen, ...enExtra, ...enLibrary},
+  'ja': {
+    ...jaBase,
+    ...jaFeature,
+    ...jaScreen,
+    ...jaExtra,
+    ...jaLibrary,
+    ...jaShortcuts,
+  },
+  'en': {
+    ...enBase,
+    ...enFeature,
+    ...enScreen,
+    ...enExtra,
+    ...enLibrary,
+    ...enShortcuts,
+  },
   'zhHans': {
     ...zhHansBase,
     ...zhHansFeature,
     ...zhHansScreen,
     ...zhHansExtra,
     ...zhHansLibrary,
+    ...zhHansShortcuts,
   },
   'zhHant': {
     ...zhHantBase,
@@ -30,13 +46,56 @@ const Map<String, Map<String, String>> _kTranslations = {
     ...zhHantScreen,
     ...zhHantExtra,
     ...zhHantLibrary,
+    ...zhHantShortcuts,
   },
-  'ko': {...koBase, ...koFeature, ...koScreen, ...koExtra, ...koLibrary},
-  'es': {...esBase, ...esFeature, ...esScreen, ...esExtra, ...esLibrary},
-  'pt': {...ptBase, ...ptFeature, ...ptScreen, ...ptExtra, ...ptLibrary},
-  'fr': {...frBase, ...frFeature, ...frScreen, ...frExtra, ...frLibrary},
-  'de': {...deBase, ...deFeature, ...deScreen, ...deExtra, ...deLibrary},
-  'ar': {...arBase, ...arFeature, ...arScreen, ...arExtra, ...arLibrary},
+  'ko': {
+    ...koBase,
+    ...koFeature,
+    ...koScreen,
+    ...koExtra,
+    ...koLibrary,
+    ...koShortcuts,
+  },
+  'es': {
+    ...esBase,
+    ...esFeature,
+    ...esScreen,
+    ...esExtra,
+    ...esLibrary,
+    ...esShortcuts,
+  },
+  'pt': {
+    ...ptBase,
+    ...ptFeature,
+    ...ptScreen,
+    ...ptExtra,
+    ...ptLibrary,
+    ...ptShortcuts,
+  },
+  'fr': {
+    ...frBase,
+    ...frFeature,
+    ...frScreen,
+    ...frExtra,
+    ...frLibrary,
+    ...frShortcuts,
+  },
+  'de': {
+    ...deBase,
+    ...deFeature,
+    ...deScreen,
+    ...deExtra,
+    ...deLibrary,
+    ...deShortcuts,
+  },
+  'ar': {
+    ...arBase,
+    ...arFeature,
+    ...arScreen,
+    ...arExtra,
+    ...arLibrary,
+    ...arShortcuts,
+  },
 };
 
 /// 10 Major Global Languages + System Default

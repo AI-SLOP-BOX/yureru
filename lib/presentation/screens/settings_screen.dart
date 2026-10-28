@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../app_state.dart';
+import '../../platform/keyboard_shortcuts.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/app_svg_icon.dart';
@@ -21,8 +22,77 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  String? _section = 'settings_import';
+  // Show all settings when the page first opens; users can narrow the list
+  // with the category controls when they want a focused section.
+  String? _section;
   bool _ambientExpanded = false;
+
+  Future<void> _editShortcut(AppShortcutAction action) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(ref.tr('settings_shortcuts')),
+        content: SizedBox(
+          width: 320,
+          height: 72,
+          child: Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+              final key = event.logicalKey;
+              final modifierKeys = [
+                LogicalKeyboardKey.shiftLeft,
+                LogicalKeyboardKey.shiftRight,
+                LogicalKeyboardKey.controlLeft,
+                LogicalKeyboardKey.controlRight,
+                LogicalKeyboardKey.altLeft,
+                LogicalKeyboardKey.altRight,
+                LogicalKeyboardKey.metaLeft,
+                LogicalKeyboardKey.metaRight,
+              ];
+              if (modifierKeys.contains(key)) return KeyEventResult.handled;
+              final keyboard = HardwareKeyboard.instance;
+              final binding = AppShortcutBinding(
+                keyId: key.keyId,
+                meta: keyboard.isMetaPressed,
+                control: keyboard.isControlPressed,
+                alt: keyboard.isAltPressed,
+                shift: keyboard.isShiftPressed,
+              );
+              final bindings = ref.read(keyboardShortcutsProvider);
+              final conflict = bindings.entries.any(
+                (entry) =>
+                    entry.key != action && sameShortcut(entry.value, binding),
+              );
+              if (conflict) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(ref.tr('shortcut_conflict'))),
+                );
+                return KeyEventResult.handled;
+              }
+              ref
+                  .read(keyboardShortcutsProvider.notifier)
+                  .setBinding(action, binding);
+              Navigator.pop(dialogContext);
+              return KeyEventResult.handled;
+            },
+            child: Center(
+              child: Text(
+                ref.tr('shortcut_recording'),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(ref.tr('shortcut_cancel')),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -279,6 +349,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+      _SettingsGroup(
+        id: 'settings_shortcuts',
+        icon: 'settings_tune',
+        description: ref.tr('settings_shortcuts_hint'),
+        title: ref.tr('settings_shortcuts'),
+        children: [
+          for (final action in AppShortcutAction.values)
+            ListTile(
+              title: Text(ref.tr(shortcutActionName(action))),
+              subtitle: Text(
+                ref
+                    .watch(keyboardShortcutsProvider)[action]!
+                    .label(macOS: Platform.isMacOS),
+              ),
+              trailing: TextButton(
+                onPressed: () => _editShortcut(action),
+                child: Text(ref.tr('shortcut_change')),
+              ),
+              onTap: () => _editShortcut(action),
+            ),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: TextButton(
+              onPressed: ref.read(keyboardShortcutsProvider.notifier).reset,
+              child: Text(ref.tr('shortcut_reset')),
+            ),
           ),
         ],
       ),

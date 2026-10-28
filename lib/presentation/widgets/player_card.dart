@@ -3,10 +3,12 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
+import '../../platform/keyboard_shortcuts.dart';
 import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
 import '../../playback/playback_controller.dart';
@@ -56,6 +58,8 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   Rect? _lastAmbientAperture;
   bool _ambientBoundsReportScheduled = false;
   bool _ambientBoundsNeeded = false;
+  bool _ambientSourceInstallScheduled = false;
+  bool? _ambientSourceEnabled;
   StreamSubscription? _sub;
   bool _controlsVisible = false;
   bool _isPlaybackPlaying = false;
@@ -224,6 +228,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     // to resetting it.
     if (!reset && _hideTimer?.isActive == true) return;
     _hideTimer?.cancel();
+    // Keep video controls available for as long as the pointer remains over
+    // the player. The idle timeout starts only after the pointer leaves.
+    if (_pointerOverPlayer) return;
     if (!_isPlaybackPlaying && !_autoHideVideoControls) {
       // Paused playback has no idle timeout: users may need time to choose a
       // seek position or another queued item in the music/image player.
@@ -266,7 +273,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
         _controlsVisible = true;
       });
     }
-    _startHideTimer(reset: true);
+    _hideTimer?.cancel();
   }
 
   void _onPointerHover() {
@@ -399,92 +406,6 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     );
   }
 
-  Widget _desktopVideoMetadata(MediaItem media) {
-    final creator = formatCreatorNames(media.artist);
-    return Positioned(
-      bottom: 192,
-      left: 32,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.55,
-        ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.58),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  key: const ValueKey('player-title'),
-                  displayTitle(media.title),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    shadows: [Shadow(color: Colors.black87, blurRadius: 8)],
-                  ),
-                ),
-                const SizedBox(height: 2),
-                if (creator.isNotEmpty)
-                  Tooltip(
-                    message: ref.tr('search_by_creator'),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        key: const ValueKey('player-creator-search'),
-                        borderRadius: BorderRadius.circular(4),
-                        onTap: () =>
-                            ref
-                                    .read(creatorVideosRequestProvider.notifier)
-                                    .state =
-                                creator,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 2),
-                          child: Text(
-                            key: const ValueKey('player-creator'),
-                            creator,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                              shadows: [
-                                Shadow(color: Colors.black87, blurRadius: 6),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  )
-                else
-                  Text(
-                    key: const ValueKey('player-creator'),
-                    ref.tr('creator_not_set'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                      shadows: [Shadow(color: Colors.black87, blurRadius: 6)],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _videoSurface(PlaybackEngine engine, {BoxFit fit = BoxFit.contain}) {
     // Video stays as an untouched foreground surface. Ambient colors are
     // rendered only in the surrounding app canvas beneath this aperture.
@@ -516,7 +437,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   void _onSwitchMode(PlayerViewMode newMode) {
     _onPointerHover();
     ref.read(playerViewModeProvider.notifier).state = newMode;
-    // mpv video track toggle: vid=auto for media, vid=no for audio-only
+    // Keep the player layout in place while the visual smoothly changes mode.
     final engine = ref.read(engineProvider);
     engine.setVideoTrackEnabled(newMode == PlayerViewMode.media);
   }
@@ -669,10 +590,22 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     // at every responsive size so the primary action remains visually primary.
     final playPauseIconSize = previousNextIconSize * 60 / 34;
     final isCinema = ref.watch(cinemaModeProvider);
+    final exitExpandedShortcut = ref
+        .watch(keyboardShortcutsProvider)[AppShortcutAction.exitExpandedView]!
+        .label(macOS: defaultTargetPlatform == TargetPlatform.macOS);
     final useVideoOverlay = mode == PlayerViewMode.media && !isCinema;
-    engine.setAmbientFrameSource(
-      useVideoOverlay ? _captureAmbientVideoFrame : null,
-    );
+    if (_ambientSourceEnabled != useVideoOverlay &&
+        !_ambientSourceInstallScheduled) {
+      _ambientSourceInstallScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _ambientSourceInstallScheduled = false;
+        if (!mounted) return;
+        _ambientSourceEnabled = useVideoOverlay;
+        engine.setAmbientFrameSource(
+          useVideoOverlay ? _captureAmbientVideoFrame : null,
+        );
+      });
+    }
     if (snap.initialized && mode == PlayerViewMode.media && !isCinema) {
       _reportAmbientVideoBounds();
     } else {
@@ -835,10 +768,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                     );
                   },
                   onDoubleTap: () {
+                    // Keep double-tapping the video from unexpectedly
+                    // switching to cinema mode. Use the explicit fullscreen
+                    // control for that action.
                     _pendingVideoTapTimer?.cancel();
-                    ref.read(cinemaModeProvider.notifier).state = !ref.read(
-                      cinemaModeProvider,
-                    );
                   },
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 280),
@@ -987,9 +920,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                         : Center(
                             key: const ValueKey('player-mode-image'),
                             child: AspectRatio(
-                              // Artwork is presented as a square sleeve;
-                              // video mode keeps the video's own frame ratio.
-                              aspectRatio: 1,
+                              // Keep artwork in the exact frame used by video;
+                              // BoxFit.cover crops the sleeve to fill that frame.
+                              aspectRatio: videoAspectRatio,
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: themeCard(context),
@@ -1048,10 +981,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
               ),
             ),
 
-            if (isCinema)
-              _cinemaMetadata(media)
-            else if (useVideoOverlay && !isCompact)
-              _desktopVideoMetadata(media),
+            if (isCinema) _cinemaMetadata(media),
 
             // 3. Top Floating Capsule: Collapse Button + Media / Image Mode Switcher (or pure cinema exit button)
             Positioned(
@@ -1123,7 +1053,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                     ),
                                     child: IconButton(
                                       tooltip:
-                                          '${ref.tr('close_fullscreen')} (Esc)',
+                                          '${ref.tr('close_fullscreen')} ($exitExpandedShortcut)',
                                       icon: const Icon(
                                         Icons.fullscreen_exit_rounded,
                                         size: 26,
@@ -1425,8 +1355,16 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
             if (!isCinema)
               Positioned(
                 bottom: isCompact ? 10 : 34,
-                left: isCompact ? 10 : 24,
-                right: isCompact ? 10 : 24,
+                // The desktop sidebar and queue are edge overlays above the
+                // player. Keep the whole transport (including its title and
+                // creator row) in the unobstructed center area while either
+                // overlay is open. Compact layouts never use these overlays.
+                left:
+                    (isCompact ? 10.0 : 24.0) +
+                    (isCompact ? 0 : widget.leadingChromeInset),
+                right:
+                    (isCompact ? 10.0 : 24.0) +
+                    (isCompact ? 0 : widget.trailingChromeInset),
                 child: MouseRegion(
                   onExit: (_) => _onControlsExit(),
                   child: AnimatedOpacity(
@@ -1508,132 +1446,136 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      // Prominent Music Track Info & Artwork Pill
-                                      if (!useVideoOverlay)
-                                        Padding(
-                                          padding: EdgeInsets.fromLTRB(
-                                            isCompact ? 2 : 6,
-                                            2,
-                                            isCompact ? 2 : 6,
-                                            isCompact ? 4 : 8,
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Container(
-                                                decoration: BoxDecoration(
-                                                  borderRadius:
-                                                      BorderRadius.circular(8),
-                                                  boxShadow: [
-                                                    BoxShadow(
-                                                      color: Colors.black
-                                                          .withValues(
-                                                            alpha: isDark
-                                                                ? 0.35
-                                                                : 0.15,
-                                                          ),
-                                                      blurRadius: 6,
-                                                      offset: const Offset(
-                                                        0,
-                                                        2,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                                child: ThumbImage(
-                                                  seed: media.id,
-                                                  mediaId: media.id,
-                                                  localPath: media.localPath,
-                                                  size: isCompact ? 36 : 42,
-                                                  radius: 8,
-                                                ),
+                                      // Keep the current title and searchable
+                                      // creator directly above the transport,
+                                      // including while a video is playing.
+                                      Padding(
+                                        padding: EdgeInsets.fromLTRB(
+                                          isCompact ? 2 : 6,
+                                          2,
+                                          isCompact ? 2 : 6,
+                                          isCompact ? 4 : 8,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              decoration: BoxDecoration(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: Colors.black
+                                                        .withValues(
+                                                          alpha: isDark
+                                                              ? 0.35
+                                                              : 0.15,
+                                                        ),
+                                                    blurRadius: 6,
+                                                    offset: const Offset(0, 2),
+                                                  ),
+                                                ],
                                               ),
-                                              const SizedBox(width: 10),
-                                              Expanded(
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    Text(
-                                                      displayTitle(media.title),
-                                                      maxLines: 1,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                      style: TextStyle(
-                                                        fontSize: isCompact
-                                                            ? 13.5
-                                                            : 15,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                        color:
-                                                            playerTextPrimary,
-                                                        letterSpacing: -0.2,
-                                                      ),
+                                              child: ThumbImage(
+                                                seed: media.id,
+                                                mediaId: media.id,
+                                                localPath: media.localPath,
+                                                size: isCompact ? 36 : 42,
+                                                radius: 8,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    key: const ValueKey(
+                                                      'player-title',
                                                     ),
-                                                    const SizedBox(height: 2),
-                                                    if (media.artist
-                                                            ?.trim()
-                                                            .isNotEmpty ==
-                                                        true)
-                                                      InkWell(
-                                                        onTap: () =>
-                                                            ref
-                                                                    .read(
-                                                                      creatorVideosRequestProvider
-                                                                          .notifier,
-                                                                    )
-                                                                    .state =
-                                                                formatCreatorNames(
-                                                                  media.artist,
-                                                                ),
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              4,
-                                                            ),
-                                                        child: Text(
-                                                          formatCreatorNames(
-                                                            media.artist,
+                                                    displayTitle(media.title),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      fontSize: isCompact
+                                                          ? 13.5
+                                                          : 15,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color: playerTextPrimary,
+                                                      letterSpacing: -0.2,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  if (media.artist
+                                                          ?.trim()
+                                                          .isNotEmpty ==
+                                                      true)
+                                                    InkWell(
+                                                      key: const ValueKey(
+                                                        'player-creator-search',
+                                                      ),
+                                                      onTap: () =>
+                                                          ref
+                                                                  .read(
+                                                                    creatorVideosRequestProvider
+                                                                        .notifier,
+                                                                  )
+                                                                  .state =
+                                                              formatCreatorNames(
+                                                                media.artist,
+                                                              ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            4,
                                                           ),
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          style: TextStyle(
-                                                            fontSize: isCompact
-                                                                ? 11
-                                                                : 12,
-                                                            fontWeight:
-                                                                FontWeight.w500,
-                                                            color:
-                                                                playerTextSub,
-                                                          ),
+                                                      child: Text(
+                                                        key: const ValueKey(
+                                                          'player-creator',
+                                                        ),
+                                                        formatCreatorNames(
+                                                          media.artist,
+                                                        ),
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: TextStyle(
+                                                          fontSize: isCompact
+                                                              ? 11
+                                                              : 12,
+                                                          fontWeight:
+                                                              FontWeight.w500,
+                                                          color: playerTextSub,
                                                         ),
                                                       ),
-                                                  ],
-                                                ),
+                                                    ),
+                                                ],
                                               ),
-                                              const SizedBox(width: 8),
-                                              // Expandable volume slider
-                                              _ExpandableVolume(
-                                                onHoverActivity:
-                                                    _onPointerHover,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              // Speed Indicator Pill
-                                              _PlayerSpeedButton(
-                                                speed: q.speed,
-                                                tooltip: ref.tr(
-                                                  'playback_speed',
-                                                ),
-                                                onSelected: (s) =>
-                                                    ctl.setSpeed(s),
-                                              ),
-                                            ],
-                                          ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            // Expandable volume slider
+                                            _ExpandableVolume(
+                                              onHoverActivity: _onPointerHover,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            // Speed Indicator Pill
+                                            _PlayerSpeedButton(
+                                              speed: q.speed,
+                                              tooltip: ref.tr('playback_speed'),
+                                              onSelected: (s) =>
+                                                  ctl.setSpeed(s),
+                                            ),
+                                          ],
                                         ),
+                                      ),
                                       // Floating Timeline Slider with Bubble Preview
                                       if (useVideoOverlay || !fullPlayerView)
                                         _FloatingTimeline(
+                                          key: const ValueKey(
+                                            'player-hover-timeline',
+                                          ),
                                           desktop: !isCompact,
                                           onHoverActivity: _onPointerHover,
                                         ),
@@ -1833,7 +1775,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final controller = ref.read(playbackControllerProvider);
     return Scaffold(
       key: key,
-      backgroundColor: Colors.black,
+      backgroundColor: mode == PlayerViewMode.media
+          ? Colors.black
+          : Theme.of(context).scaffoldBackgroundColor,
       body: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _showCompactCinemaControls,
@@ -1998,7 +1942,6 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     // instead of relying on hover, which mobile devices do not have.
     final keepVideoControlsVisible = useVideoOverlay;
     final ambientLightEnabled = ref.watch(ambientLightProvider);
-    final fullPlayerView = ref.watch(viewingPlayerProvider);
     final title = displayTitle(media.title);
     final artist = formatCreatorNames(media.artist);
 
@@ -2033,7 +1976,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
       },
       child: Scaffold(
         key: key,
-        backgroundColor: ambientLightEnabled
+        backgroundColor: ambientLightEnabled && mode == PlayerViewMode.media
             ? Colors.transparent
             : Theme.of(context).scaffoldBackgroundColor,
         body: Stack(
@@ -2359,7 +2302,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
 
                             const Spacer(flex: 1),
 
-                            // 2. Main Visual Area (16:9 Video or 1:1 Artwork)
+                            // 2. Main Visual Area (source-sized video or square artwork)
                             if (!_queueSheetExpanded)
                               Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -2368,101 +2311,150 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                 child: Center(
                                   child: Builder(
                                     builder: (context) {
-                                      final isArtwork =
-                                          mode == PlayerViewMode.image;
                                       final safePadding = MediaQuery.paddingOf(
                                         context,
                                       );
-                                      final aspectRatio = isArtwork
-                                          ? 1.0
-                                          : (engine.videoAspectRatio ??
-                                                (16 / 9));
+                                      // Keep the video frame unchanged when
+                                      // swapping to a cropped artwork image.
+                                      final reportedRatio =
+                                          engine.videoAspectRatio;
+                                      final aspectRatio =
+                                          reportedRatio != null &&
+                                              reportedRatio.isFinite &&
+                                              reportedRatio > 0
+                                          ? reportedRatio
+                                          : 16 / 9;
                                       final maxVisualHeight =
-                                          MediaQuery.sizeOf(context).height *
-                                          (isArtwork ? 0.4 : 0.48);
-                                      final maxVisualWidth = isArtwork
-                                          ? (MediaQuery.sizeOf(context).width -
-                                                    safePadding.horizontal -
-                                                    32) *
-                                                0.82
-                                          : MediaQuery.sizeOf(context).width -
-                                                safePadding.horizontal -
-                                                32;
-                                      // Fit the square sleeve or source video
-                                      // frame inside the viewport without overflow.
+                                          constraints.maxHeight * 0.48;
+                                      final maxVisualWidth =
+                                          MediaQuery.sizeOf(context).width -
+                                          safePadding.horizontal -
+                                          32;
+                                      // Fit the source frame inside the available player area.
                                       final visualWidth = math.min(
                                         maxVisualWidth,
                                         maxVisualHeight * aspectRatio,
                                       );
                                       final visualHeight =
                                           visualWidth / aspectRatio;
-                                      return SizedBox(
-                                        width: visualWidth,
-                                        height: visualHeight,
-                                        child: Stack(
-                                          clipBehavior: Clip.none,
-                                          children: [
-                                            Positioned.fill(
-                                              child: Container(
-                                                key:
-                                                    mode == PlayerViewMode.media
-                                                    ? _ambientVideoBoundsKey
-                                                    : null,
-                                                decoration: BoxDecoration(
-                                                  color: Colors.black,
-                                                  borderRadius:
-                                                      BorderRadius.circular(16),
-                                                  boxShadow: ambientLightEnabled
-                                                      ? null
-                                                      : [
-                                                          BoxShadow(
-                                                            color: Colors.black
-                                                                .withValues(
-                                                                  alpha: isDark
-                                                                      ? 0.6
-                                                                      : 0.15,
-                                                                ),
-                                                            blurRadius: 24,
-                                                            offset:
-                                                                const Offset(
-                                                                  0,
-                                                                  8,
-                                                                ),
-                                                          ),
-                                                        ],
-                                                ),
-                                                clipBehavior: Clip.antiAlias,
-                                                child: GestureDetector(
-                                                  behavior:
-                                                      HitTestBehavior.opaque,
-                                                  onTap: () => ctl.toggle(),
-                                                  child:
+                                      return AnimatedSize(
+                                        duration: const Duration(
+                                          milliseconds: 320,
+                                        ),
+                                        curve: Curves.easeInOutCubic,
+                                        alignment: Alignment.center,
+                                        child: SizedBox(
+                                          key: const ValueKey(
+                                            'compact-player-visual',
+                                          ),
+                                          width: visualWidth,
+                                          height: visualHeight,
+                                          child: Stack(
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              Positioned.fill(
+                                                child: Container(
+                                                  decoration: BoxDecoration(
+                                                    color:
+                                                        mode ==
+                                                            PlayerViewMode.media
+                                                        ? Colors.black
+                                                        : Theme.of(
+                                                            context,
+                                                          ).scaffoldBackgroundColor,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          16,
+                                                        ),
+                                                    boxShadow:
+                                                        ambientLightEnabled
+                                                        ? null
+                                                        : [
+                                                            BoxShadow(
+                                                              color: Colors
+                                                                  .black
+                                                                  .withValues(
+                                                                    alpha:
+                                                                        isDark
+                                                                        ? 0.6
+                                                                        : 0.15,
+                                                                  ),
+                                                              blurRadius: 24,
+                                                              offset:
+                                                                  const Offset(
+                                                                    0,
+                                                                    8,
+                                                                  ),
+                                                            ),
+                                                          ],
+                                                  ),
+                                                  key:
                                                       mode ==
                                                           PlayerViewMode.media
-                                                      ? (snap.initialized
-                                                            ? Stack(
-                                                                fit: StackFit
-                                                                    .expand,
-                                                                children: [
-                                                                  ThumbImage(
-                                                                    seed: media
-                                                                        .id,
-                                                                    mediaId:
-                                                                        media
-                                                                            .id,
-                                                                    localPath: media
-                                                                        .localPath,
-                                                                    expand:
-                                                                        true,
-                                                                  ),
-                                                                  if (engine
-                                                                          .videoAspectRatio !=
-                                                                      null)
-                                                                    _videoSurface(
-                                                                      engine,
-                                                                    ),
-                                                                ],
-                                                              )
+                                                      ? _ambientVideoBoundsKey
+                                                      : const ValueKey(
+                                                          'compact-player-visual-surface',
+                                                        ),
+                                                  clipBehavior: Clip.antiAlias,
+                                                  child: GestureDetector(
+                                                    behavior:
+                                                        HitTestBehavior.opaque,
+                                                    onTap: () => ctl.toggle(),
+                                                    child: AnimatedSwitcher(
+                                                      duration: const Duration(
+                                                        milliseconds: 240,
+                                                      ),
+                                                      switchInCurve:
+                                                          Curves.easeOut,
+                                                      switchOutCurve:
+                                                          Curves.easeIn,
+                                                      transitionBuilder:
+                                                          (child, animation) =>
+                                                              FadeTransition(
+                                                                opacity:
+                                                                    animation,
+                                                                child: child,
+                                                              ),
+                                                      child: SizedBox.expand(
+                                                        key: ValueKey(mode),
+                                                        child:
+                                                            mode ==
+                                                                PlayerViewMode
+                                                                    .media
+                                                            ? (snap.initialized
+                                                                  ? Stack(
+                                                                      fit: StackFit
+                                                                          .expand,
+                                                                      children: [
+                                                                        ThumbImage(
+                                                                          seed:
+                                                                              media.id,
+                                                                          mediaId:
+                                                                              media.id,
+                                                                          localPath:
+                                                                              media.localPath,
+                                                                          expand:
+                                                                              true,
+                                                                        ),
+                                                                        if (engine.videoAspectRatio !=
+                                                                            null)
+                                                                          _videoSurface(
+                                                                            engine,
+                                                                          ),
+                                                                      ],
+                                                                    )
+                                                                  : ThumbImage(
+                                                                      seed: media
+                                                                          .id,
+                                                                      mediaId:
+                                                                          media
+                                                                              .id,
+                                                                      localPath:
+                                                                          media
+                                                                              .localPath,
+                                                                      expand:
+                                                                          true,
+                                                                    ))
                                                             : ThumbImage(
                                                                 seed: media.id,
                                                                 mediaId:
@@ -2470,19 +2462,15 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                                 localPath: media
                                                                     .localPath,
                                                                 expand: true,
-                                                              ))
-                                                      : ThumbImage(
-                                                          seed: media.id,
-                                                          mediaId: media.id,
-                                                          localPath:
-                                                              media.localPath,
-                                                          expand: true,
-                                                          highRes: true,
-                                                        ),
+                                                                highRes: true,
+                                                              ),
+                                                      ),
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
-                                            ),
-                                          ],
+                                            ],
+                                          ),
                                         ),
                                       );
                                     },
@@ -2556,144 +2544,138 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                             const SizedBox(height: 18),
 
                             // 4. Seekbar + Time indicators underneath
-                            if (useVideoOverlay || !fullPlayerView)
-                              AnimatedOpacity(
-                                key: useVideoOverlay
-                                    ? const ValueKey('compact-player-timeline')
-                                    : null,
-                                opacity:
-                                    useVideoOverlay && !keepVideoControlsVisible
-                                    ? (_controlsVisible ? 1 : 0)
-                                    : 1,
-                                duration: const Duration(milliseconds: 240),
-                                curve: Curves.easeInOut,
-                                child: IgnorePointer(
-                                  ignoring:
-                                      useVideoOverlay &&
-                                      !keepVideoControlsVisible &&
-                                      !_controlsVisible,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                    ),
-                                    child: _MobileTimeline(
-                                      engine: engine,
-                                      ctl: ctl,
-                                    ),
+                            AnimatedOpacity(
+                              key: const ValueKey('compact-player-timeline'),
+                              opacity:
+                                  useVideoOverlay && !keepVideoControlsVisible
+                                  ? (_controlsVisible ? 1 : 0)
+                                  : 1,
+                              duration: const Duration(milliseconds: 240),
+                              curve: Curves.easeInOut,
+                              child: IgnorePointer(
+                                ignoring:
+                                    useVideoOverlay &&
+                                    !keepVideoControlsVisible &&
+                                    !_controlsVisible,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                  ),
+                                  child: _MobileTimeline(
+                                    engine: engine,
+                                    ctl: ctl,
                                   ),
                                 ),
                               ),
+                            ),
 
                             const SizedBox(height: 12),
 
                             // 5. Transport Bar (Shuffle, Prev, Play/Pause Circle, Repeat)
-                            if (useVideoOverlay || !fullPlayerView)
-                              AnimatedOpacity(
-                                key: useVideoOverlay
-                                    ? const ValueKey('compact-player-transport')
-                                    : null,
-                                opacity:
-                                    useVideoOverlay && !keepVideoControlsVisible
-                                    ? (_controlsVisible ? 1 : 0)
-                                    : 1,
-                                duration: const Duration(milliseconds: 240),
-                                curve: Curves.easeInOut,
-                                child: IgnorePointer(
-                                  ignoring:
-                                      useVideoOverlay &&
-                                      !keepVideoControlsVisible &&
-                                      !_controlsVisible,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceEvenly,
-                                      children: [
-                                        // Shuffle
-                                        IconButton(
-                                          tooltip: ref.tr('shuffle'),
-                                          icon: TransportIcon.shuffle(
-                                            size: 26,
-                                            color: transportArrowColor,
-                                          ),
-                                          onPressed: () {
-                                            ref
-                                                .read(queueProvider.notifier)
-                                                .toggleShuffle();
-                                          },
+                            AnimatedOpacity(
+                              key: const ValueKey('compact-player-transport'),
+                              opacity:
+                                  useVideoOverlay && !keepVideoControlsVisible
+                                  ? (_controlsVisible ? 1 : 0)
+                                  : 1,
+                              duration: const Duration(milliseconds: 240),
+                              curve: Curves.easeInOut,
+                              child: IgnorePointer(
+                                ignoring:
+                                    useVideoOverlay &&
+                                    !keepVideoControlsVisible &&
+                                    !_controlsVisible,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceEvenly,
+                                    children: [
+                                      // Shuffle
+                                      IconButton(
+                                        tooltip: ref.tr('shuffle'),
+                                        icon: TransportIcon.shuffle(
+                                          size: 26,
+                                          color: transportArrowColor,
                                         ),
+                                        onPressed: () {
+                                          ref
+                                              .read(queueProvider.notifier)
+                                              .toggleShuffle();
+                                        },
+                                      ),
 
-                                        // Skip Previous
-                                        IconButton(
-                                          tooltip: ref.tr('prev_video'),
-                                          icon: TransportIcon.previous(
-                                            size: compactSkipSize,
-                                            color: transportArrowColor,
-                                          ),
-                                          onPressed: () => ctl.playPrev(),
+                                      // Skip Previous
+                                      IconButton(
+                                        tooltip: ref.tr('prev_video'),
+                                        icon: TransportIcon.previous(
+                                          size: compactSkipSize,
+                                          color: transportArrowColor,
                                         ),
+                                        onPressed: () => ctl.playPrev(),
+                                      ),
 
-                                        // Play / Pause Button
-                                        Material(
-                                          color: Colors.transparent,
-                                          shape: const CircleBorder(),
-                                          elevation: 0,
-                                          child: InkWell(
-                                            customBorder: const CircleBorder(),
-                                            onTap: () => ctl.toggle(),
-                                            child: Padding(
-                                              padding: const EdgeInsets.all(16),
-                                              child: _playPauseGlyph(
-                                                snap.isPlaying,
-                                                compactPlayPauseSize,
-                                                playIconColor,
-                                              ),
+                                      // Play / Pause Button
+                                      Material(
+                                        color: Colors.transparent,
+                                        shape: const CircleBorder(),
+                                        elevation: 0,
+                                        child: InkWell(
+                                          customBorder: const CircleBorder(),
+                                          onTap: () => ctl.toggle(),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(16),
+                                            child: _playPauseGlyph(
+                                              snap.isPlaying,
+                                              compactPlayPauseSize,
+                                              playIconColor,
                                             ),
                                           ),
                                         ),
+                                      ),
 
-                                        // Skip Next
-                                        IconButton(
-                                          tooltip: ref.tr('next_video'),
-                                          icon: SkipNextIcon(
-                                            size: compactSkipSize,
-                                            color: transportArrowColor,
-                                          ),
-                                          onPressed: () => ctl.playNext(),
+                                      // Skip Next
+                                      IconButton(
+                                        tooltip: ref.tr('next_video'),
+                                        icon: SkipNextIcon(
+                                          size: compactSkipSize,
+                                          color: transportArrowColor,
                                         ),
+                                        onPressed: () => ctl.playNext(),
+                                      ),
 
-                                        // Repeat
-                                        IconButton(
-                                          tooltip: q.repeat == 'one'
-                                              ? ref.tr('repeat_one')
-                                              : (q.repeat == 'off'
-                                                    ? ref.tr('repeat_off')
-                                                    : ref.tr('repeat_all')),
-                                          icon: RepeatIcon(
-                                            size: 26,
-                                            color: transportArrowColor,
-                                            repeatMode: q.repeat,
-                                          ),
-                                          onPressed: () {
-                                            ref
-                                                .read(queueProvider.notifier)
-                                                .cycleRepeat();
-                                          },
+                                      // Repeat
+                                      IconButton(
+                                        tooltip: q.repeat == 'one'
+                                            ? ref.tr('repeat_one')
+                                            : (q.repeat == 'off'
+                                                  ? ref.tr('repeat_off')
+                                                  : ref.tr('repeat_all')),
+                                        icon: RepeatIcon(
+                                          size: 26,
+                                          color: transportArrowColor,
+                                          repeatMode: q.repeat,
                                         ),
-                                      ],
-                                    ),
+                                        onPressed: () {
+                                          ref
+                                              .read(queueProvider.notifier)
+                                              .cycleRepeat();
+                                        },
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
+                            ),
 
                             const SizedBox(height: 18),
 
                             // A touch-friendly entry point to the queue/lyrics
                             // sheet. QueuePanel already provides tabs for
                             // switching between next contents and lyrics.
-                            if (!lockQueueOpen)
+                            if (!lockQueueOpen && !showQueueSheet)
                               Center(
                                 child: TextButton.icon(
                                   key: const ValueKey(
@@ -2734,39 +2716,69 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
 
             // Slide-up queue sheet for mobile
             if (showQueueSheet)
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 320),
-                curve: Curves.easeOutCubic,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height:
-                    MediaQuery.sizeOf(context).height *
-                    (_queueSheetExpanded ? 0.88 : 0.52),
-                child: QueuePanel(
-                  width: double.infinity,
-                  ambient: ambientLightEnabled,
-                  margin: EdgeInsets.zero,
-                  showCompactPreview: _queueSheetExpanded,
-                  compactPreview: SizedBox(
-                    width: 112,
-                    height: 63,
-                    child: ThumbImage(
-                      seed: media.id,
-                      mediaId: media.id,
-                      localPath: media.localPath,
-                      expand: true,
-                    ),
-                  ),
-                  onToggleExpanded: () {
-                    setState(() => _queueSheetExpanded = !_queueSheetExpanded);
+              Positioned.fill(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // The player body is shorter than the window when the
+                    // transport bar is outside it. Size the sheet from this
+                    // actual body, otherwise an expanded sheet can start above
+                    // the window and clip its handle/header.
+                    final safeTop = MediaQuery.paddingOf(context).top;
+                    // Expanded queue should begin just under the player
+                    // toolbar, eliminating the dead band above the sheet
+                    // without covering its top controls.
+                    final expandedHeight =
+                        (constraints.maxHeight - safeTop - 64)
+                            .clamp(0.0, constraints.maxHeight)
+                            .toDouble();
+                    final sheetHeight = _queueSheetExpanded
+                        ? expandedHeight
+                        : constraints.maxHeight * 0.52;
+                    return Stack(
+                      children: [
+                        AnimatedPositioned(
+                          duration: const Duration(milliseconds: 320),
+                          curve: Curves.easeOutCubic,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          height: sheetHeight,
+                          child: QueuePanel(
+                            width: double.infinity,
+                            ambient: ambientLightEnabled,
+                            opaqueSurface: true,
+                            margin: EdgeInsets.zero,
+                            showCompactPreview: _queueSheetExpanded,
+                            compactPreview: SizedBox(
+                              width: 112,
+                              height: 63,
+                              child: ThumbImage(
+                                seed: media.id,
+                                mediaId: media.id,
+                                localPath: media.localPath,
+                                expand: true,
+                              ),
+                            ),
+                            onToggleExpanded: () {
+                              setState(
+                                () =>
+                                    _queueSheetExpanded = !_queueSheetExpanded,
+                              );
+                            },
+                            onClose: isPhoneSize
+                                ? () {
+                                    ref
+                                            .read(queueVisibleProvider.notifier)
+                                            .state =
+                                        false;
+                                    setState(() => _queueSheetExpanded = false);
+                                  }
+                                : null,
+                          ),
+                        ),
+                      ],
+                    );
                   },
-                  onClose: isPhoneSize
-                      ? () {
-                          ref.read(queueVisibleProvider.notifier).state = false;
-                          setState(() => _queueSheetExpanded = false);
-                        }
-                      : null,
                 ),
               ),
           ],
@@ -2781,6 +2793,7 @@ class _FloatingTimeline extends ConsumerStatefulWidget {
   final bool desktop;
   final VoidCallback onHoverActivity;
   const _FloatingTimeline({
+    super.key,
     required this.desktop,
     required this.onHoverActivity,
   });

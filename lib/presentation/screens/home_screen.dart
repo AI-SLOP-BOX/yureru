@@ -345,7 +345,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(color: themeBorder(context)),
                             ),
-                            child: ListTile(
+                            child: Material(color: Colors.transparent, child: ListTile(
                               contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 12,
                                 vertical: 2,
@@ -434,7 +434,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                     .read(playbackControllerProvider)
                                     .openCurrent();
                               },
-                            ),
+                            )),
                           );
                         }, childCount: matchingSongs.length),
                       ),
@@ -737,7 +737,7 @@ class PlaylistsScreen extends ConsumerWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: ListTile(
+                child: Material(color: Colors.transparent, child: ListTile(
                   leading: ThumbImage(
                     seed: pl.id,
                     mediaId: pl.mediaIds.isEmpty
@@ -792,7 +792,7 @@ class PlaylistsScreen extends ConsumerWidget {
                   onTap: onOpenPlaylist == null
                       ? null
                       : () => onOpenPlaylist!(pl.id),
-                ),
+                )),
               );
             },
           ),
