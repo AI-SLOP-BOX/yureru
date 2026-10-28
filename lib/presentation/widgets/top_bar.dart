@@ -18,6 +18,7 @@ class TopBar extends ConsumerStatefulWidget {
   final VoidCallback? onOpenFile;
   final VoidCallback? onSaveTemporary;
   final VoidCallback? onToggleSidebar;
+  final bool sidebarPinned;
   final VoidCallback? onToggleQueuePin;
   final bool queuePinned;
   final bool showMenuButton;
@@ -31,6 +32,7 @@ class TopBar extends ConsumerStatefulWidget {
     this.onOpenFile,
     this.onSaveTemporary,
     this.onToggleSidebar,
+    this.sidebarPinned = false,
     this.onToggleQueuePin,
     this.queuePinned = false,
     this.showMenuButton = true,
@@ -268,8 +270,17 @@ class _TopBarState extends ConsumerState<TopBar> {
                 if (!isCompactExpanded && widget.showMenuButton) ...[
                   Builder(
                     builder: (bContext) => IconButton(
+                      key: widget.onToggleSidebar == null
+                          ? null
+                          : const ValueKey('desktop-sidebar-toggle'),
                       tooltip: Scaffold.maybeOf(bContext)?.hasDrawer == true
                           ? ref.tr('menu')
+                          : widget.onToggleSidebar != null
+                          ? ref.tr(
+                              widget.sidebarPinned
+                                  ? 'unpin_sidebar'
+                                  : 'pin_sidebar',
+                            )
                           : (collapsed
                                 ? ref.tr('show_sidebar')
                                 : ref.tr('hide_sidebar')),

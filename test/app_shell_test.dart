@@ -1465,6 +1465,13 @@ void main() {
       tester,
       MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
     );
+    final sidebarToggle = find.byKey(const ValueKey('desktop-sidebar-toggle'));
+    final searchField = find.byType(TextField).first;
+    expect(
+      tester.getRect(sidebarToggle).right,
+      lessThan(tester.getRect(searchField).left),
+    );
+    expect(tester.getRect(sidebarToggle).top, lessThan(80));
     final sidebar = find.byType(Sidebar);
     expect(tester.getRect(sidebar).right, lessThanOrEqualTo(0));
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
@@ -1472,12 +1479,12 @@ void main() {
     await mouse.moveTo(const Offset(1, 200));
     await tester.pumpAndSettle();
     expect(tester.getRect(sidebar).right, greaterThan(0));
-    await tester.tap(find.byTooltip('サイドバーを固定'));
+    await tester.tap(find.byTooltip('サイドバーを固定').last);
     await mouse.moveTo(const Offset(500, 200));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     expect(tester.getRect(sidebar).right, greaterThan(0));
-    await tester.tap(find.byTooltip('サイドバーの固定を解除'));
+    await tester.tap(find.byTooltip('サイドバーの固定を解除').last);
     await mouse.moveTo(const Offset(700, 200));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();

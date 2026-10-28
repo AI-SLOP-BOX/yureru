@@ -359,6 +359,15 @@ class _AppShellState extends ConsumerState<AppShell>
     }
   }
 
+  void _toggleDesktopSidebarFromButton() {
+    _desktopSidebarHideTimer?.cancel();
+    setState(() {
+      _desktopSidebarPinned = !_desktopSidebarPinned;
+      _desktopSidebarVisible = _desktopSidebarPinned;
+      _desktopSidebarPointerInside = false;
+    });
+  }
+
   void _scheduleDesktopSidebarHide() {
     if (_desktopSidebarPinned) return;
     _desktopSidebarHideTimer?.cancel();
@@ -528,7 +537,9 @@ class _AppShellState extends ConsumerState<AppShell>
                               onSubmitSearch: _submitSearch,
                               onOpenFile: hasCurrent ? null : _openMediaFile,
                               onSaveTemporary: _saveTemporaryCurrent,
-                              showMenuButton: false,
+                              showMenuButton: true,
+                              onToggleSidebar: _toggleDesktopSidebarFromButton,
+                              sidebarPinned: _desktopSidebarPinned,
                               onToggleQueuePin: viewing && hasCurrent
                                   ? _toggleDesktopQueuePin
                                   : null,
