@@ -73,12 +73,28 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
     if (id == null || path == null) {
       _future = null;
     } else {
-      _future = ThumbnailService.forMedia(
-        mediaId: id,
-        localPath: path,
-        highRes: widget.highRes,
-      );
+      _future = _loadThumbnail(id, path, highRes: widget.highRes);
     }
+  }
+
+  Future<File?> _loadThumbnail(
+    String mediaId,
+    String localPath, {
+    required bool highRes,
+  }) async {
+    final image = await ThumbnailService.forMedia(
+      mediaId: mediaId,
+      localPath: localPath,
+      highRes: highRes,
+    );
+    if (image != null || !highRes) return image;
+    // Large player artwork requests can fail for a codec even though the
+    // regular thumbnail is already cached and displayed elsewhere.
+    return ThumbnailService.forMedia(
+      mediaId: mediaId,
+      localPath: localPath,
+      highRes: false,
+    );
   }
 
   @override
