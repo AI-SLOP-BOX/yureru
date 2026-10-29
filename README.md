@@ -60,6 +60,14 @@ persistence. Run `flutter analyze` and `flutter test` after changes.
 
 `flutter test`
 
+## Release builds
+
+Pushing to `main` runs `.github/workflows/release.yml` on GitHub Actions and
+uploads macOS, Windows, Linux, Android APK, and unsigned iOS build artifacts
+to that workflow run. Pushing a `v*` tag also attaches those files to a GitHub
+Release. Android uses the debug key unless release keystore secrets are
+configured; the iOS IPA is unsigned and cannot be installed without signing.
+
 ### Immersive player
 
 While playing, use the Immersive mode button in the player controls.

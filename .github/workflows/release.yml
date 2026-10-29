@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -36,6 +38,13 @@ jobs:
           hdiutil create -volname "Yureru" -srcfolder build/dmg_tmp -ov -format UDZO build/Yureru-macos.dmg
           rm -rf build/dmg_tmp
 
+      - name: Upload macOS build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yureru-macos
+          path: build/Yureru-macos.dmg
+          if-no-files-found: error
+
       - name: Upload macOS Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
@@ -67,6 +76,13 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath build\Yureru-windows-x64.zip
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yureru-windows-x64
+          path: build/Yureru-windows-x64.zip
+          if-no-files-found: error
 
       - name: Upload Windows Release Asset
         uses: softprops/action-gh-release@v2
@@ -104,6 +120,13 @@ jobs:
         run: |
           tar -czvf build/Yureru-linux-x64.tar.gz -C build/linux/x64/release/bundle .
 
+      - name: Upload Linux build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yureru-linux-x64
+          path: build/Yureru-linux-x64.tar.gz
+          if-no-files-found: error
+
       - name: Upload Linux Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
@@ -130,6 +153,13 @@ jobs:
 
       - name: Rename Android APK
         run: cp build/app/outputs/flutter-apk/app-release.apk build/Yureru-android.apk
+
+      - name: Upload Android build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yureru-android-apk
+          path: build/Yureru-android.apk
+          if-no-files-found: error
 
       - name: Upload Android Release Asset
         uses: softprops/action-gh-release@v2
@@ -168,6 +198,16 @@ jobs:
         run: |
           ditto -c -k --sequesterRsrc --keepParent build/ios/archive/Runner.xcarchive build/Yureru-ios-unsigned.xcarchive.zip
           ditto -c -k --sequesterRsrc --keepParent build/ios/SimulatorDerived/Build/Products/Debug-iphonesimulator/Runner.app build/Yureru-ios-simulator-arm64.zip
+
+      - name: Upload iOS build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yureru-ios-unsigned
+          path: |
+            build/ios/Yureru-ios-unsigned.ipa
+            build/Yureru-ios-unsigned.xcarchive.zip
+            build/Yureru-ios-simulator-arm64.zip
+          if-no-files-found: error
 
       - name: Upload iOS Release Asset
         uses: softprops/action-gh-release@v2
