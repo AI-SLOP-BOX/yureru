@@ -211,6 +211,7 @@ void main() {
         discNumber: 2,
         artworkPath: media.artworkPath,
         thumbnailPath: '/thumb/details.jpg',
+        imagePriority: 'thumbnailFirst',
         lyricsOffsetMs: 1250,
       );
 
@@ -220,8 +221,10 @@ void main() {
       expect(updated.album, 'New album');
       expect(updated.trackNumber, 3);
       expect(updated.thumbnailPath, '/thumb/details.jpg');
+      expect(updated.imagePriority, 'thumbnailFirst');
       await library.load();
       expect(library.state.byId(media.id)!.title, 'New title');
+      expect(library.state.byId(media.id)!.imagePriority, 'thumbnailFirst');
     },
   );
 }

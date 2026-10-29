@@ -90,19 +90,20 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
               final playlistChoice = widget.playlistId == null
                   ? null
                   : lib.playlistById(widget.playlistId!)?.imagePriority;
+              final media = lib.byId(widget.mediaId!);
+              if (media == null) return null;
               // Unscoped surfaces (player chrome, search, queue, etc.) follow
               // the Home preference. Historically they bypassed settings and
               // showed jacket art by default.
               final effectivePriority = effectiveMediaImagePriority(
                 priorities: priorities,
                 imageContext: widget.imageContext,
+                mediaPriority: media.imagePriority,
                 playlistPriority: playlistChoice,
                 useArtwork: widget.useArtwork,
               );
               final preferArtwork =
                   effectivePriority == MediaImagePriority.artworkFirst;
-              final media = lib.byId(widget.mediaId!);
-              if (media == null) return null;
               return preferArtwork
                   ? media.artworkPath ?? media.thumbnailPath
                   : media.thumbnailPath;

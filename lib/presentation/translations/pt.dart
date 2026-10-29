@@ -183,7 +183,7 @@ const Map<String, String> ptFeature = {
   'artwork': 'Imagem',
   'choose_artwork': 'Escolher imagem',
   'image_priority_hint':
-      'A capa é exibida quando definida; caso contrário, usa-se a miniatura.',
+      'Por padrão, segue as configurações da tela ou playlist. Capa ou miniatura substitui essa preferência somente para esta mídia.',
   'clear_artwork': 'Remover imagem selecionada',
   'cancel': 'Cancelar',
   'save': 'Salvar',

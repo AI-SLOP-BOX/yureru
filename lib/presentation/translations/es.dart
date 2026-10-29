@@ -186,7 +186,7 @@ const Map<String, String> esFeature = {
   'artwork': 'Imagen',
   'choose_artwork': 'Elegir imagen',
   'image_priority_hint':
-      'Se muestra la portada si existe; si no, se usa la miniatura.',
+      'De forma predeterminada se usa el ajuste de la pantalla o lista. Elige una imagen para cambiarlo solo en este medio.',
   'clear_artwork': 'Quitar imagen seleccionada',
   'cancel': 'Cancelar',
   'save': 'Guardar',

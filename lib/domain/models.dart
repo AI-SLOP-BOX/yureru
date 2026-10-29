@@ -33,8 +33,15 @@ class MediaItem {
   /// User-selected thumbnail, stored separately from jacket artwork.
   final String? thumbnailPath;
 
-  /// Jackets take precedence, then custom thumbnails, then extracted frames.
-  String? get preferredImagePath => artworkPath ?? thumbnailPath;
+  /// Optional per-media image choice. Null inherits the playlist or screen
+  /// preference; values are `artworkFirst` or `thumbnailFirst`.
+  final String? imagePriority;
+
+  /// Image for integrations without a screen context, such as the OS media
+  /// session. Per-media preference wins; otherwise preserve jacket-first.
+  String? get preferredImagePath => imagePriority == 'thumbnailFirst'
+      ? thumbnailPath ?? artworkPath
+      : artworkPath ?? thumbnailPath;
 
   /// User-selected lyrics file (.lrc or plain text), if available.
   final String? lyricsPath;
@@ -60,6 +67,7 @@ class MediaItem {
     this.sourcePath,
     this.artworkPath,
     this.thumbnailPath,
+    this.imagePriority,
     this.lyricsPath,
     this.lyricsOffsetMs = 0,
   }) : id = id ?? _uuid.v4(),
@@ -83,6 +91,7 @@ class MediaItem {
     Object? sourcePath = _unchanged,
     Object? artworkPath = _unchanged,
     Object? thumbnailPath = _unchanged,
+    Object? imagePriority = _unchanged,
     Object? lyricsPath = _unchanged,
     int? lyricsOffsetMs,
   }) => MediaItem(
@@ -121,6 +130,9 @@ class MediaItem {
     thumbnailPath: identical(thumbnailPath, _unchanged)
         ? this.thumbnailPath
         : thumbnailPath as String?,
+    imagePriority: identical(imagePriority, _unchanged)
+        ? this.imagePriority
+        : imagePriority as String?,
     lyricsPath: identical(lyricsPath, _unchanged)
         ? this.lyricsPath
         : lyricsPath as String?,
@@ -149,6 +161,7 @@ class MediaItem {
     sourcePath: j['sourcePath'] as String?,
     artworkPath: j['artworkPath'] as String?,
     thumbnailPath: j['thumbnailPath'] as String?,
+    imagePriority: j['imagePriority'] as String?,
     lyricsPath: j['lyricsPath'] as String?,
     lyricsOffsetMs: (j['lyricsOffsetMs'] as num?)?.toInt() ?? 0,
   );
@@ -171,6 +184,7 @@ class MediaItem {
     'sourcePath': sourcePath,
     'artworkPath': artworkPath,
     'thumbnailPath': thumbnailPath,
+    'imagePriority': imagePriority,
     'lyricsPath': lyricsPath,
     'lyricsOffsetMs': lyricsOffsetMs,
   };

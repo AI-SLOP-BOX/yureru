@@ -40,6 +40,11 @@ Future<void> showMediaMetadataEditor(
   var clearArtwork = false;
   String? selectedThumbnailPath;
   var clearThumbnail = false;
+  var selectedImagePriority = switch (media.imagePriority) {
+    'artworkFirst' => 'artworkFirst',
+    'thumbnailFirst' => 'thumbnailFirst',
+    _ => 'inherit',
+  };
   var editLyricsAfterClose = false;
   var deleteMediaAfterClose = false;
   DialogRoute<bool>? dialogRoute;
@@ -272,6 +277,55 @@ Future<void> showMediaMetadataEditor(
                                 clearThumbnail = true;
                               },
                             ),
+                            const SizedBox(height: 18),
+                            Text(
+                              tr('image_display_priority'),
+                              style: TextStyle(
+                                color: subtle,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            DropdownButtonFormField<String>(
+                              initialValue: selectedImagePriority,
+                              isExpanded: true,
+                              decoration: InputDecoration(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide(color: border),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide(color: border),
+                                ),
+                              ),
+                              items: [
+                                DropdownMenuItem(
+                                  value: 'inherit',
+                                  child: Text(tr('image_priority_default')),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'artworkFirst',
+                                  child: Text(tr('image_priority_artwork')),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'thumbnailFirst',
+                                  child: Text(tr('image_priority_thumbnail')),
+                                ),
+                              ],
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setDialogState(
+                                    () => selectedImagePriority = value,
+                                  );
+                                }
+                              },
+                            ),
                           ],
                         );
                       },
@@ -497,6 +551,9 @@ Future<void> showMediaMetadataEditor(
           discNumber: int.tryParse(discController.text.trim()),
           artworkPath: artworkPath,
           thumbnailPath: thumbnailPath,
+          imagePriority: selectedImagePriority == 'inherit'
+              ? null
+              : selectedImagePriority,
           lyricsOffsetMs: offsetMs,
         );
   } finally {

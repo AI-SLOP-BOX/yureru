@@ -187,7 +187,8 @@ const Map<String, String> jaFeature = {
   'lyrics_timing_hint': '＋で遅く、−で早く表示します。例：−1.25',
   'artwork': 'ジャケット',
   'choose_artwork': '画像を選ぶ',
-  'image_priority_hint': 'ジャケットがある場合はジャケットを表示し、なければサムネイルを使います',
+  'image_priority_hint':
+      '「設定の既定値」は画面やプレイリストの設定に従います。ジャケットまたはサムネイルを選ぶと、この動画だけ設定を上書きします。',
   'clear_artwork': '設定した画像を消す',
   'cancel': 'キャンセル',
   'save': '保存',

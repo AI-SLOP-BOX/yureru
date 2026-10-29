@@ -196,7 +196,7 @@ const Map<String, String> enFeature = {
   'artwork': 'Artwork',
   'choose_artwork': 'Choose image',
   'image_priority_hint':
-      'The jacket is shown when set; otherwise the thumbnail is used.',
+      'Use the screen or playlist setting by default, or override it for this media item.',
   'clear_artwork': 'Remove selected artwork',
   'cancel': 'Cancel',
   'save': 'Save',

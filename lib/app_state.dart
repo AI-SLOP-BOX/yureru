@@ -439,13 +439,15 @@ const defaultMediaImagePriorities = <MediaImageContext, MediaImagePriority>{
 MediaImagePriority effectiveMediaImagePriority({
   required Map<MediaImageContext, MediaImagePriority> priorities,
   MediaImageContext? imageContext,
+  String? mediaPriority,
   String? playlistPriority,
   bool useArtwork = true,
 }) {
   if (!useArtwork) return MediaImagePriority.thumbnailFirst;
-  if (playlistPriority != null) {
+  for (final override in [mediaPriority, playlistPriority]) {
+    if (override == null) continue;
     for (final priority in MediaImagePriority.values) {
-      if (priority.name == playlistPriority) return priority;
+      if (priority.name == override) return priority;
     }
   }
   return priorities[imageContext ?? MediaImageContext.home] ??

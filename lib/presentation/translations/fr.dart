@@ -186,7 +186,7 @@ const Map<String, String> frFeature = {
   'artwork': 'Image',
   'choose_artwork': 'Choisir une image',
   'image_priority_hint':
-      'La pochette est affichée si elle existe, sinon la miniature.',
+      'Par défaut, le réglage de l’écran ou de la playlist est utilisé. Choisissez une image pour le remplacer uniquement pour ce média.',
   'clear_artwork': 'Supprimer l’image sélectionnée',
   'cancel': 'Annuler',
   'save': 'Enregistrer',

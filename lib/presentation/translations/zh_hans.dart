@@ -173,7 +173,7 @@ const Map<String, String> zhHansFeature = {
   'lyrics_timing_hint': '+ 延后，− 提前显示歌词。例：−1.25',
   'artwork': '封面',
   'choose_artwork': '选择图片',
-  'image_priority_hint': '有封面时显示封面，否则使用缩略图。',
+  'image_priority_hint': '默认跟随页面或播放列表设置；选择封面或缩略图可仅覆盖此媒体的设置。',
   'clear_artwork': '移除已选图片',
   'cancel': '取消',
   'save': '保存',

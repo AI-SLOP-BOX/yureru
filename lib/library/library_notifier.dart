@@ -159,6 +159,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     required int? discNumber,
     required String? artworkPath,
     required String? thumbnailPath,
+    required String? imagePriority,
     required int lyricsOffsetMs,
   }) async {
     final current = state.byId(id);
@@ -174,6 +175,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         discNumber: discNumber,
         artworkPath: artworkPath,
         thumbnailPath: thumbnailPath,
+        imagePriority: imagePriority,
         lyricsOffsetMs: lyricsOffsetMs,
       ),
     );

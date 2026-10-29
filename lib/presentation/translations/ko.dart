@@ -174,7 +174,8 @@ const Map<String, String> koFeature = {
   'lyrics_timing_hint': '+는 늦게, −는 빠르게 표시합니다. 예: −1.25',
   'artwork': '이미지',
   'choose_artwork': '이미지 선택',
-  'image_priority_hint': '재킷 이미지가 있으면 표시하고, 없으면 썸네일을 사용합니다.',
+  'image_priority_hint':
+      '기본 설정은 화면 또는 재생목록 설정을 따릅니다. 재킷이나 썸네일을 선택하면 이 미디어 항목만 재정의합니다.',
   'clear_artwork': '선택한 이미지 삭제',
   'cancel': '취소',
   'save': '저장',

@@ -36,6 +36,18 @@ void main() {
     },
   );
 
+  test('media priority overrides playlist and screen priorities', () {
+    expect(
+      effectiveMediaImagePriority(
+        priorities: defaultMediaImagePriorities,
+        imageContext: MediaImageContext.album,
+        playlistPriority: MediaImagePriority.artworkFirst.name,
+        mediaPriority: MediaImagePriority.thumbnailFirst.name,
+      ),
+      MediaImagePriority.thumbnailFirst,
+    );
+  });
+
   test('image priorities are saved independently by screen', () async {
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer();

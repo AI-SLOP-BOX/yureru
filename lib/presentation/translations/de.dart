@@ -186,7 +186,7 @@ const Map<String, String> deFeature = {
   'artwork': 'Cover',
   'choose_artwork': 'Bild auswählen',
   'image_priority_hint':
-      'Wenn ein Cover festgelegt ist, wird es angezeigt, sonst das Vorschaubild.',
+      'Standardmäßig gelten die Einstellungen für Bildschirm oder Playlist. Cover oder Vorschaubild überschreiben sie nur für dieses Medium.',
   'clear_artwork': 'Ausgewähltes Bild entfernen',
   'cancel': 'Abbrechen',
   'save': 'Speichern',

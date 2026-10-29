@@ -173,7 +173,7 @@ const Map<String, String> zhHantFeature = {
   'lyrics_timing_hint': '+ 延後、− 提前顯示歌詞。例：−1.25',
   'artwork': '封面',
   'choose_artwork': '選擇圖片',
-  'image_priority_hint': '有封面時顯示封面，否則使用縮圖。',
+  'image_priority_hint': '預設依照頁面或播放清單設定；選擇封面或縮圖可只覆寫此媒體的設定。',
   'clear_artwork': '移除已選圖片',
   'cancel': '取消',
   'save': '儲存',
