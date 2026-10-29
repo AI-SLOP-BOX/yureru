@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
+import '../../domain/models.dart';
 import '../../library/media_order.dart';
 import '../../playback/playback_controller.dart';
 import '../i18n.dart';
@@ -214,6 +215,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           mediaId: first!.id,
                           localPath: first.localPath,
                           imageContext: MediaImageContext.playlist,
+                          playlistId: pl.id,
                           size: artworkSize,
                           expand: true,
                         ),
@@ -289,6 +291,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                               mediaId: first?.id,
                               localPath: first?.localPath,
                               imageContext: MediaImageContext.playlist,
+                              playlistId: pl.id,
                               size: artworkSize,
                               radius: 16,
                               expand: true,
@@ -363,6 +366,11 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                       isDark: isDark,
                                       onTap: () =>
                                           _showRenameDialog(context, pl),
+                                    ),
+                                    _playlistImagePriorityButton(
+                                      pl,
+                                      isDark,
+                                      buttonSize: tight ? 40 : 44,
                                     ),
                                     // 2. Center Large White Play Button
                                     Material(
@@ -580,6 +588,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                         localPath: m.localPath,
                                         imageContext:
                                             MediaImageContext.playlist,
+                                        playlistId: pl.id,
                                         size: 48,
                                       ),
                                     ],
@@ -751,6 +760,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                       mediaId: cand.id,
                                       localPath: cand.localPath,
                                       imageContext: MediaImageContext.playlist,
+                                      playlistId: pl.id,
                                       size: 40,
                                     ),
                                     title: Text(
@@ -845,6 +855,58 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             child: Icon(
               icon,
               size: iconSize,
+              color: isDark ? Colors.white : Colors.black87,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _playlistImagePriorityButton(
+    Playlist playlist,
+    bool isDark, {
+    required double buttonSize,
+  }) {
+    final current = playlist.imagePriority;
+    return Tooltip(
+      message: ref.tr('playlist_image_priority'),
+      child: PopupMenuButton<String>(
+        tooltip: ref.tr('playlist_image_priority'),
+        popUpAnimationStyle: AnimationStyle.noAnimation,
+        onSelected: (value) => ref
+            .read(libraryProvider.notifier)
+            .setPlaylistImagePriority(
+              playlist.id,
+              value == 'default' ? null : value,
+            ),
+        itemBuilder: (_) => [
+          CheckedPopupMenuItem(
+            value: 'default',
+            checked: current == null,
+            child: Text(ref.tr('image_priority_default')),
+          ),
+          CheckedPopupMenuItem(
+            value: MediaImagePriority.artworkFirst.name,
+            checked: current == MediaImagePriority.artworkFirst.name,
+            child: Text(ref.tr('image_priority_artwork')),
+          ),
+          CheckedPopupMenuItem(
+            value: MediaImagePriority.thumbnailFirst.name,
+            checked: current == MediaImagePriority.thumbnailFirst.name,
+            child: Text(ref.tr('image_priority_thumbnail')),
+          ),
+        ],
+        child: Material(
+          color: isDark ? const Color(0xFF242424) : const Color(0xFFE4E4E4),
+          shape: const CircleBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: SizedBox(
+            width: buttonSize,
+            height: buttonSize,
+            child: Icon(
+              Icons.image_outlined,
+              size: 20,
               color: isDark ? Colors.white : Colors.black87,
             ),
           ),

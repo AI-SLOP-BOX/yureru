@@ -201,6 +201,8 @@ const Map<String, String> jaFeature = {
   'image_priority_home': 'ホーム',
   'image_priority_playlists': 'プレイリスト',
   'image_priority_albums': 'アルバム',
+  'playlist_image_priority': 'このプレイリストの画像優先度',
+  'image_priority_default': '設定の既定値',
 
   'settings_display': '表示',
   'theme': 'テーマ',

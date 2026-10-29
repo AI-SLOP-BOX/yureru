@@ -201,6 +201,8 @@ class PlaylistsScreen extends ConsumerWidget {
                           ? null
                           : lib.byId(pl.mediaIds.first)?.localPath,
                       size: 48,
+                      imageContext: MediaImageContext.playlist,
+                      playlistId: pl.id,
                     ),
                     title: Text(
                       displayTitle(pl.name),

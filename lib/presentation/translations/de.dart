@@ -201,6 +201,8 @@ const Map<String, String> deFeature = {
   'image_priority_home': 'Startseite',
   'image_priority_playlists': 'Wiedergabelisten',
   'image_priority_albums': 'Alben',
+  'playlist_image_priority': 'Bildpriorität für diese Wiedergabeliste',
+  'image_priority_default': 'Standardeinstellung verwenden',
 
   'settings_display': 'Anzeige',
   'theme': 'Design',

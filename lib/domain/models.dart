@@ -183,20 +183,31 @@ class Playlist {
   final List<String> mediaIds;
   final DateTime createdAt;
 
+  /// Optional per-playlist image choice; null follows the playlist default.
+  final String? imagePriority;
+
   Playlist({
     String? id,
     required this.name,
     List<String>? mediaIds,
     DateTime? createdAt,
+    this.imagePriority,
   }) : id = id ?? _uuid.v4(),
        mediaIds = List.unmodifiable(mediaIds ?? const []),
        createdAt = createdAt ?? DateTime.now();
 
-  Playlist copyWith({String? name, List<String>? mediaIds}) => Playlist(
+  Playlist copyWith({
+    String? name,
+    List<String>? mediaIds,
+    Object? imagePriority = _unchanged,
+  }) => Playlist(
     id: id,
     name: name ?? this.name,
     mediaIds: mediaIds ?? this.mediaIds,
     createdAt: createdAt,
+    imagePriority: identical(imagePriority, _unchanged)
+        ? this.imagePriority
+        : imagePriority as String?,
   );
 
   factory Playlist.fromJson(Map<String, dynamic> j) {
@@ -211,6 +222,7 @@ class Playlist {
       createdAt: j['createdAt'] is String
           ? (DateTime.tryParse(j['createdAt'] as String) ?? DateTime.now())
           : DateTime.now(),
+      imagePriority: j['imagePriority'] as String?,
     );
   }
 
@@ -219,6 +231,7 @@ class Playlist {
     'name': name,
     'mediaIds': mediaIds,
     'createdAt': createdAt.toIso8601String(),
+    'imagePriority': imagePriority,
   };
 }
 

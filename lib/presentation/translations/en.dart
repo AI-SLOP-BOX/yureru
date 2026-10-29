@@ -211,6 +211,8 @@ const Map<String, String> enFeature = {
   'image_priority_home': 'Home',
   'image_priority_playlists': 'Playlists',
   'image_priority_albums': 'Albums',
+  'playlist_image_priority': 'Image priority for this playlist',
+  'image_priority_default': 'Use settings default',
 
   'settings_display': 'Display',
   'theme': 'Theme',

@@ -526,6 +526,7 @@ class _PlaylistCardState extends ConsumerState<_PlaylistCard> {
                               mediaId: widget.thumbMediaId,
                               localPath: widget.thumbPath,
                               imageContext: MediaImageContext.playlist,
+                              playlistId: widget.playlistId,
                               radius: 0,
                               expand: true,
                             ),

@@ -202,6 +202,8 @@ const Map<String, String> esFeature = {
   'image_priority_home': 'Inicio',
   'image_priority_playlists': 'Listas de reproducción',
   'image_priority_albums': 'Álbumes',
+  'playlist_image_priority': 'Prioridad de imagen de esta lista',
+  'image_priority_default': 'Usar valor predeterminado',
 
   'settings_display': 'Pantalla',
   'theme': 'Tema',

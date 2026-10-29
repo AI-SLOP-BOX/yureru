@@ -22,6 +22,31 @@ MediaItem _media(String id, {String origin = 'referenced'}) => MediaItem(
 
 void main() {
   test(
+    'playlist image preference persists and can inherit settings again',
+    () async {
+      final repo = InMemoryLibraryRepository();
+      final library = LibraryNotifier(repo);
+      addTearDown(library.dispose);
+      final playlist = await library.createPlaylist('Mix');
+
+      await library.setPlaylistImagePriority(playlist.id, 'artworkFirst');
+      expect(
+        library.state.playlistById(playlist.id)!.imagePriority,
+        'artworkFirst',
+      );
+      await library.load();
+      expect(
+        library.state.playlistById(playlist.id)!.imagePriority,
+        'artworkFirst',
+      );
+
+      await library.setPlaylistImagePriority(playlist.id, null);
+      await library.load();
+      expect(library.state.playlistById(playlist.id)!.imagePriority, isNull);
+    },
+  );
+
+  test(
     'favorites persist through metadata edits and cannot include temporary items',
     () async {
       final repo = InMemoryLibraryRepository();

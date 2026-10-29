@@ -300,6 +300,24 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     await repo.savePlaylists(p);
   }
 
+  Future<void> setPlaylistImagePriority(String id, String? priority) async {
+    final current = state.playlistById(id);
+    if (current == null || current.imagePriority == priority) return;
+    final playlists = state.playlists
+        .map(
+          (playlist) => playlist.id == id
+              ? playlist.copyWith(imagePriority: priority)
+              : playlist,
+        )
+        .toList();
+    state = LibraryState(
+      media: state.media,
+      playlists: playlists,
+      loaded: true,
+    );
+    await repo.savePlaylists(playlists);
+  }
+
   /// Persist a probed duration so lists show it instantly next launch.
   /// No-op when unknown or unchanged (avoids prefs churn).
   Future<void> setDurationMs(String id, int ms) async {

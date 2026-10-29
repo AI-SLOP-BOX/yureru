@@ -202,6 +202,8 @@ const Map<String, String> frFeature = {
   'image_priority_home': 'Accueil',
   'image_priority_playlists': 'Listes de lecture',
   'image_priority_albums': 'Albums',
+  'playlist_image_priority': 'Priorité d’image de cette liste',
+  'image_priority_default': 'Utiliser le réglage par défaut',
 
   'settings_display': 'Affichage',
   'theme': 'Thème',

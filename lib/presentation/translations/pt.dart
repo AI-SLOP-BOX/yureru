@@ -199,6 +199,8 @@ const Map<String, String> ptFeature = {
   'image_priority_home': 'Início',
   'image_priority_playlists': 'Playlists',
   'image_priority_albums': 'Álbuns',
+  'playlist_image_priority': 'Prioridade de imagem desta playlist',
+  'image_priority_default': 'Usar padrão das configurações',
 
   'settings_display': 'Exibição',
   'theme': 'Tema',

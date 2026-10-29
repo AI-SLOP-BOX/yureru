@@ -194,6 +194,8 @@ const Map<String, String> arFeature = {
   'image_priority_home': 'الرئيسية',
   'image_priority_playlists': 'قوائم التشغيل',
   'image_priority_albums': 'الألبومات',
+  'playlist_image_priority': 'أولوية الصور لقائمة التشغيل هذه',
+  'image_priority_default': 'استخدام الإعداد الافتراضي',
 
   'settings_display': 'العرض',
   'theme': 'السمة',

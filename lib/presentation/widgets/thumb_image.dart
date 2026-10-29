@@ -24,6 +24,7 @@ class ThumbImage extends ConsumerStatefulWidget {
   final bool highRes;
   final bool useArtwork;
   final MediaImageContext? imageContext;
+  final String? playlistId;
 
   const ThumbImage({
     super.key,
@@ -36,6 +37,7 @@ class ThumbImage extends ConsumerStatefulWidget {
     this.highRes = false,
     this.useArtwork = true,
     this.imageContext,
+    this.playlistId,
   });
 
   @override
@@ -84,13 +86,23 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
     final priority = widget.imageContext == null
         ? null
         : priorities[widget.imageContext!];
-    final preferArtwork = priority == null
-        ? widget.useArtwork
-        : priority == MediaImagePriority.artworkFirst;
     final imagePath = widget.mediaId == null
         ? null
         : ref.watch(
             libraryProvider.select((lib) {
+              final playlistChoice = widget.playlistId == null
+                  ? null
+                  : lib.playlistById(widget.playlistId!)?.imagePriority;
+              final effectivePriority = playlistChoice == null
+                  ? priority
+                  : MediaImagePriority.values.firstWhere(
+                      (value) => value.name == playlistChoice,
+                      orElse: () =>
+                          priority ?? MediaImagePriority.thumbnailFirst,
+                    );
+              final preferArtwork = effectivePriority == null
+                  ? widget.useArtwork
+                  : effectivePriority == MediaImagePriority.artworkFirst;
               final media = lib.byId(widget.mediaId!);
               if (media == null) return null;
               return preferArtwork

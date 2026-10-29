@@ -187,6 +187,8 @@ const Map<String, String> zhHantFeature = {
   'image_priority_home': '首頁',
   'image_priority_playlists': '播放清單',
   'image_priority_albums': '專輯',
+  'playlist_image_priority': '此播放清單的圖片優先順序',
+  'image_priority_default': '使用設定預設值',
 
   'settings_display': '顯示',
   'theme': '主題',

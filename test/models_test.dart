@@ -83,4 +83,14 @@ void main() {
       expect(item.mediaIds, ['a', 'b']);
     },
   );
+
+  test('playlist image priority round-trips and can return to default', () {
+    final playlist = Playlist(
+      id: 'mix',
+      name: 'Mix',
+      imagePriority: 'artworkFirst',
+    );
+    expect(Playlist.fromJson(playlist.toJson()).imagePriority, 'artworkFirst');
+    expect(playlist.copyWith(imagePriority: null).imagePriority, isNull);
+  });
 }

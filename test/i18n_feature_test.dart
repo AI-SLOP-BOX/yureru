@@ -29,6 +29,8 @@ void main() {
         'image_priority_home',
         'image_priority_playlists',
         'image_priority_albums',
+        'playlist_image_priority',
+        'image_priority_default',
         'save',
       ]) {
         final value = translate(key, language.name);
@@ -57,6 +59,8 @@ void main() {
             'image_priority_home' => 'ホーム',
             'image_priority_playlists' => 'プレイリスト',
             'image_priority_albums' => 'アルバム',
+            'playlist_image_priority' => 'このプレイリストの画像優先度',
+            'image_priority_default' => '設定の既定値',
             _ => '保存',
           };
           expect(value, isNot(japanese));

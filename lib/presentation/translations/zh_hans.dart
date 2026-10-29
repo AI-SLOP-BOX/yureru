@@ -187,6 +187,8 @@ const Map<String, String> zhHansFeature = {
   'image_priority_home': '主页',
   'image_priority_playlists': '播放列表',
   'image_priority_albums': '专辑',
+  'playlist_image_priority': '此播放列表的图片优先级',
+  'image_priority_default': '使用设置默认值',
 
   'settings_display': '显示',
   'theme': '主题',

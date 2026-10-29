@@ -188,6 +188,8 @@ const Map<String, String> koFeature = {
   'image_priority_home': '홈',
   'image_priority_playlists': '재생목록',
   'image_priority_albums': '앨범',
+  'playlist_image_priority': '이 재생목록의 이미지 우선순위',
+  'image_priority_default': '설정 기본값 사용',
 
   'settings_display': '표시',
   'theme': '테마',
