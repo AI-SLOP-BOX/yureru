@@ -52,26 +52,59 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
+        if (size.width < 900) {
+          expect(
+            find.byKey(const ValueKey('settings-category-scroll-left')),
+            findsNothing,
+          );
+          final scrollRight = find.byKey(
+            const ValueKey('settings-category-scroll-right'),
+          );
+          expect(scrollRight, findsOneWidget);
+          final allCategory = find.byKey(
+            const ValueKey('settings-category-all'),
+          );
+          final allCategoryXBefore = tester.getTopLeft(allCategory).dx;
+          await tester.tap(scrollRight);
+          await tester.pumpAndSettle();
+          final allCategoryShift =
+              allCategoryXBefore - tester.getTopLeft(allCategory).dx;
+          expect(allCategoryShift, greaterThan(0));
+          expect(allCategoryShift, lessThan(size.width * 0.6));
+          for (
+            var tap = 0;
+            tap < 8 && scrollRight.evaluate().isNotEmpty;
+            tap++
+          ) {
+            await tester.tap(scrollRight);
+            await tester.pump(const Duration(milliseconds: 40));
+          }
+          await tester.pumpAndSettle();
+          expect(
+            find.widgetWithText(ChoiceChip, 'アプリ').hitTestable(),
+            findsOneWidget,
+          );
+          final scrollLeft = find.byKey(
+            const ValueKey('settings-category-scroll-left'),
+          );
+          expect(scrollLeft, findsOneWidget);
+          for (
+            var tap = 0;
+            tap < 8 && scrollLeft.evaluate().isNotEmpty;
+            tap++
+          ) {
+            await tester.tap(scrollLeft);
+            await tester.pumpAndSettle();
+          }
+          expect(scrollLeft, findsNothing);
+          expect(
+            find.widgetWithText(ChoiceChip, 'すべて').hitTestable(),
+            findsOneWidget,
+          );
+        }
         final container = ProviderScope.containerOf(
           tester.element(find.byType(SettingsScreen)),
         );
-        final audioCategory = size.width >= 900
-            ? find.byKey(const ValueKey('settings-category-settings_audio'))
-            : find.widgetWithText(
-                ChoiceChip,
-                translate('settings_audio', 'ja'),
-              );
-        await tester.ensureVisible(audioCategory);
-        await tester.tap(audioCategory);
-        await tester.pumpAndSettle();
-        final normalization = find.byKey(
-          const ValueKey('volume-normalization'),
-        );
-        await tester.ensureVisible(normalization);
-        await tester.tap(normalization);
-        await tester.pumpAndSettle();
-        expect(container.read(audioSettingsProvider).value, true);
-        expect(find.text('テーマ'), findsNothing);
         final appCategory = size.width >= 900
             ? find.byKey(const ValueKey('settings-category-settings_app'))
             : find.widgetWithText(ChoiceChip, 'アプリ');

@@ -84,6 +84,10 @@ void main() {
           {'artworkPath': '/art/new.jpg'},
         ),
         (
+          () => library.updateMediaThumbnail(original.id, '/thumb/new.jpg'),
+          {'thumbnailPath': '/thumb/new.jpg'},
+        ),
+        (
           () => library.updateMediaLyrics(original.id, '/lyrics/new.lrc'),
           {'lyricsPath': '/lyrics/new.lrc'},
         ),
@@ -98,6 +102,10 @@ void main() {
         (
           () => library.updateMediaArtwork(original.id, null),
           {'artworkPath': null},
+        ),
+        (
+          () => library.updateMediaThumbnail(original.id, null),
+          {'thumbnailPath': null},
         ),
         (
           () => library.updateMediaLyrics(original.id, null),

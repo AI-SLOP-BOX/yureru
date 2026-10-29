@@ -16,6 +16,7 @@ import '../../playback/playback_engine.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/ambient_backdrop.dart';
+import '../widgets/semantics_safe_slider.dart';
 import '../widgets/app_svg_icon.dart';
 import '../widgets/transport_icon.dart';
 import '../widgets/skip_next_icon.dart';
@@ -46,6 +47,7 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
   bool _pressed = false;
   bool _editingControls = false;
   bool _showLyrics = true;
+  bool _editingLyrics = false;
 
   @override
   void initState() {
@@ -240,6 +242,11 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                           engine: engine,
                           media: media,
                           immersive: true,
+                          onEditingChanged: (editing) {
+                            if (_editingLyrics != editing) {
+                              setState(() => _editingLyrics = editing);
+                            }
+                          },
                         );
                         return Padding(
                           padding: EdgeInsets.fromLTRB(
@@ -267,13 +274,17 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                                 )
                               : Column(
                                   children: [
-                                    Expanded(
-                                      flex: _showLyrics ? 3 : 1,
-                                      child: content,
-                                    ),
-                                    if (_showLyrics) ...[
-                                      const SizedBox(height: 20),
-                                      Expanded(flex: 2, child: lyrics),
+                                    if (_editingLyrics && _showLyrics)
+                                      Expanded(child: lyrics)
+                                    else ...[
+                                      Expanded(
+                                        flex: _showLyrics ? 3 : 1,
+                                        child: content,
+                                      ),
+                                      if (_showLyrics) ...[
+                                        const SizedBox(height: 20),
+                                        Expanded(flex: 2, child: lyrics),
+                                      ],
                                     ],
                                   ],
                                 ),
@@ -623,25 +634,27 @@ class _ImmersiveTransportState extends ConsumerState<_ImmersiveTransport> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Slider(
-              value: positionMs,
-              max: (duration > 0 ? duration : 1).toDouble(),
-              activeColor: Colors.white,
-              inactiveColor: Colors.white24,
-              onChangeStart: playback.initialized && duration > 0
-                  ? (value) => setState(() => _dragPositionMs = value)
-                  : null,
-              onChanged: playback.initialized && duration > 0
-                  ? (value) => setState(() => _dragPositionMs = value)
-                  : null,
-              onChangeEnd: playback.initialized && duration > 0
-                  ? (value) async {
-                      await controller.seekTo(
-                        Duration(milliseconds: value.round()),
-                      );
-                      if (mounted) setState(() => _dragPositionMs = null);
-                    }
-                  : null,
+            semanticsSafeSlider(
+              Slider(
+                value: positionMs,
+                max: (duration > 0 ? duration : 1).toDouble(),
+                activeColor: Colors.white,
+                inactiveColor: Colors.white24,
+                onChangeStart: playback.initialized && duration > 0
+                    ? (value) => setState(() => _dragPositionMs = value)
+                    : null,
+                onChanged: playback.initialized && duration > 0
+                    ? (value) => setState(() => _dragPositionMs = value)
+                    : null,
+                onChangeEnd: playback.initialized && duration > 0
+                    ? (value) async {
+                        await controller.seekTo(
+                          Duration(milliseconds: value.round()),
+                        );
+                        if (mounted) setState(() => _dragPositionMs = null);
+                      }
+                    : null,
+              ),
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,

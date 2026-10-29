@@ -7,6 +7,7 @@ import '../i18n.dart';
 import '../theme.dart';
 import 'app_svg_icon.dart';
 import 'repeat_icon.dart';
+import 'semantics_safe_slider.dart';
 import 'transport_icon.dart';
 
 class PlaybackShuffleButton extends ConsumerWidget {
@@ -110,11 +111,13 @@ class _VolumeDialog extends ConsumerWidget {
               onPressed: controller.toggleMute,
             ),
             Expanded(
-              child: Slider(
-                value: volume.clamp(0, 1),
-                semanticFormatterCallback: (value) =>
-                    '${(value * 100).round()}%',
-                onChanged: controller.setVolume,
+              child: semanticsSafeSlider(
+                Slider(
+                  value: volume.clamp(0, 1),
+                  semanticFormatterCallback: (value) =>
+                      '${(value * 100).round()}%',
+                  onChanged: controller.setVolume,
+                ),
               ),
             ),
             SizedBox(

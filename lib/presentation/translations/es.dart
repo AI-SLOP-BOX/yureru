@@ -86,7 +86,6 @@ const Map<String, String> esFeature = {
       "Intensidad, extensión, profundidad y frecuencia",
   "settings_all": "Todo",
   "settings_display_hint": "Tema e iluminación de fondo",
-  "settings_audio_hint": "Volumen de escucha más uniforme",
   "settings_library_hint": "Importaciones, información e historial",
   "settings_app_hint": "Idioma e información de la app",
   'videos_manual_hint': "Mantén pulsada una pista para reordenar",
@@ -162,13 +161,6 @@ const Map<String, String> esFeature = {
   'favorite_requires_save':
       'Guarda en tu biblioteca antes de añadir a favoritos',
 
-  'settings_audio': 'Audio',
-  'volume_normalization': 'Reducir diferencias de volumen',
-  'normalization_desc':
-      'Ajusta el volumen automáticamente. También puede alterar la dinámica musical.',
-  'normalization_unsupported': 'No disponible con este motor de reproducción.',
-  'normalization_failed': 'No se pudo aplicar el ajuste. Inténtalo de nuevo.',
-
   'volume': 'Volumen',
   'immersive': 'Modo inmersivo',
   'exit_immersive': 'Salir del modo inmersivo',
@@ -193,12 +185,24 @@ const Map<String, String> esFeature = {
   'lyrics_timing_hint': '+ retrasa y − adelanta las letras. Ejemplo: −1.25',
   'artwork': 'Imagen',
   'choose_artwork': 'Elegir imagen',
+  'image_priority_hint':
+      'Se muestra la portada si existe; si no, se usa la miniatura.',
   'clear_artwork': 'Quitar imagen seleccionada',
   'cancel': 'Cancelar',
   'save': 'Guardar',
   'invalid_lyrics_timing':
       'Introduce segundos o minutos:segundos para la sincronización',
   'artwork_save_error': 'No se pudo guardar la imagen: {error}',
+  'image_display_priority': 'Prioridad de imagen',
+  'image_display_priority_desc':
+      'Elige qué imagen priorizar en toda la aplicación',
+  'image_priority_by_screen': 'Según pantalla',
+  'image_priority_artwork': 'Carátula',
+  'image_priority_thumbnail': 'Miniatura',
+  'image_priority_home': 'Inicio',
+  'image_priority_playlists': 'Listas de reproducción',
+  'image_priority_albums': 'Álbumes',
+
   'settings_display': 'Pantalla',
   'theme': 'Tema',
   'theme_desc': 'Claro, oscuro o según el sistema',
@@ -258,6 +262,7 @@ const Map<String, String> esScreen = {
   'add_queue': 'Añadir a la cola',
   'add_playlist': 'Añadir a la lista',
   'change_thumbnail': 'Cambiar miniatura',
+  'thumbnail_label': 'Miniatura',
   'delete_from_library': 'Quitar de la biblioteca',
   'menu': 'Menú',
   'remove_from_queue': 'Quitar de la cola',

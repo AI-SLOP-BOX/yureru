@@ -10,7 +10,7 @@ import 'importer.dart';
 
 /// Best-of-N JPEG thumbnails from local media. macOS uses AVFoundation;
 /// Android, iOS, Windows and Linux use the bundled media_kit decoder.
-/// Disk-cached per media id under the temp dir; any failure yields null
+/// Disk-cached per media id under app support; any failure yields null
 /// and callers fall back to the gradient placeholder.
 class ThumbnailService {
   static final Map<String, Future<File?>> _inflight = {};
@@ -45,19 +45,27 @@ class ThumbnailService {
     String mediaId, {
     bool highRes = false,
   }) async {
-    final dir = await getTemporaryDirectory();
+    final dir = await _cacheDirectory();
     final suffix = highRes ? '.hi.v3.jpg' : '.v3.jpg';
     return File('${dir.path}/yureru_thumbs/$mediaId$suffix');
   }
 
   static Future<List<File>> legacyCacheFilesFor(String mediaId) async {
-    final dir = await getTemporaryDirectory();
+    final dir = await _cacheDirectory();
     return [
       File('${dir.path}/yureru_thumbs/$mediaId.jpg'),
       File('${dir.path}/yureru_thumbs/$mediaId.jpg.txt'),
       File('${dir.path}/yureru_thumbs/$mediaId.v2.jpg'),
       File('${dir.path}/yureru_thumbs/$mediaId.v2.jpg.txt'),
     ];
+  }
+
+  static Future<Directory> _cacheDirectory() async {
+    try {
+      return await getApplicationSupportDirectory();
+    } catch (_) {
+      return getTemporaryDirectory();
+    }
   }
 
   /// Best-frame timestamp (ms) when the thumbnail was generated, if known.
@@ -121,10 +129,17 @@ class ThumbnailService {
         }
       }
       if (Platform.isMacOS && _isWebm(localPath)) {
-        // media_kit's screenshot() calls mpv's screenshot-raw command, which
-        // aborts inside libmpv on this macOS build. Keep WebM playback stable
-        // and let callers show their normal placeholder instead.
-        return null;
+        // mpv's screenshot-raw command aborts inside libmpv on this macOS
+        // build. If ffmpeg is installed, extract frames in a child process
+        // instead so imported WebM files can still get persistent thumbnails.
+        return _throttled(
+          () => _generateWebmWithFfmpeg(
+            mediaId,
+            localPath,
+            maxWidth,
+            highRes: highRes,
+          ),
+        );
       }
       return _throttled(
         () => _generate(mediaId, localPath, maxWidth, highRes: highRes),
@@ -137,6 +152,80 @@ class ThumbnailService {
 
   static bool _isWebm(String path) =>
       path.toLowerCase().split('?').first.endsWith('.webm');
+
+  static Future<String?> _findFfmpeg() async {
+    final candidates = <String>[
+      '/opt/homebrew/bin/ffmpeg',
+      '/usr/local/bin/ffmpeg',
+      '/opt/local/bin/ffmpeg',
+      for (final dir in (Platform.environment['PATH'] ?? '').split(':'))
+        if (dir.isNotEmpty) '$dir/ffmpeg',
+    ];
+    for (final candidate in candidates.toSet()) {
+      if (await File(candidate).exists()) return candidate;
+    }
+    return null;
+  }
+
+  static Future<File?> _generateWebmWithFfmpeg(
+    String mediaId,
+    String localPath,
+    int maxWidth, {
+    required bool highRes,
+  }) async {
+    final ffmpeg = await _findFfmpeg();
+    if (ffmpeg == null) return null;
+    final out = await cacheFileFor(mediaId, highRes: highRes);
+    await out.parent.create(recursive: true);
+    final scratch = await Directory.systemTemp.createTemp('yureru-thumb-');
+    try {
+      Uint8List? bestFrame;
+      var bestScore = double.negativeInfinity;
+      var bestTime = 0;
+      for (final seconds in const [1, 3, 6, 12]) {
+        final frame = File('${scratch.path}/frame-$seconds.jpg');
+        try {
+          final result = await Process.run(ffmpeg, [
+            '-v',
+            'error',
+            '-ss',
+            '$seconds',
+            '-i',
+            localPath,
+            '-frames:v',
+            '1',
+            '-vf',
+            'scale=$maxWidth:-2',
+            '-q:v',
+            '3',
+            '-y',
+            frame.path,
+          ]).timeout(const Duration(seconds: 12));
+          if (result.exitCode != 0 || !await frame.exists()) continue;
+          final bytes = await frame.readAsBytes();
+          final score = _frameScore(bytes);
+          if (score != null && score > bestScore) {
+            bestFrame = bytes;
+            bestScore = score;
+            bestTime = seconds * 1000;
+          }
+        } catch (_) {
+          // Some videos are shorter than a sample point; continue to others.
+        }
+      }
+      if (bestFrame == null) return null;
+      await out.writeAsBytes(bestFrame, flush: true);
+      await File('${out.path}.txt').writeAsString('$bestTime');
+      return out;
+    } catch (error) {
+      debugPrint('thumb: ffmpeg skipped $mediaId: $error');
+      return null;
+    } finally {
+      try {
+        await scratch.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
 
   static Future<File?> _generate(
     String mediaId,

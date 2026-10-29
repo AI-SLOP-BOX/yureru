@@ -16,16 +16,8 @@ class MainFlutterWindow: NSWindow {
   private var normalWindowStyleMaskBeforeCompactPlayer: NSWindow.StyleMask?
   private var normalWindowMovableByBackgroundBeforeCompactPlayer: Bool?
   private var normalWindowPreservesContentDuringLiveResizeBeforeCompactPlayer: Bool?
-  private var windowFrameBeforeAppFullscreen: NSRect?
-  private var windowStyleMaskBeforeAppFullscreen: NSWindow.StyleMask?
-  private var windowMinSizeBeforeAppFullscreen: NSSize?
-  private var windowAspectRatioBeforeAppFullscreen: NSSize?
-  private var windowShadowBeforeAppFullscreen: Bool?
-  private var windowMovableByBackgroundBeforeAppFullscreen: Bool?
-  private var windowLevelBeforeAppFullscreen: NSWindow.Level?
-  private var presentationOptionsBeforeAppFullscreen: NSApplication.PresentationOptions?
 
-  // Borderless cinema mode still needs to receive keyboard shortcuts.
+  // Fullscreen player mode still needs to receive keyboard shortcuts.
   override var canBecomeKey: Bool { true }
 
   override func awakeFromNib() {
@@ -183,67 +175,14 @@ class MainFlutterWindow: NSWindow {
     mediaPickerChannel = channel
   }
 
-  /// Use a borderless window-sized cinema mode instead of AppKit's native
-  /// full-screen Space transition. Recent macOS crash reports show an
-  /// uncaught exception in NSWindow._reallySetFrame while AppKit restores the
-  /// window after leaving its native full-screen transition.
+  /// Let AppKit manage the fullscreen transition. Resizing the Flutter window
+  /// directly with setFrame(screen.frame) can crash Flutter's macOS resize
+  /// synchronizer, and native fullscreen supplies the expected auto-hiding
+  /// red/yellow/green controls.
   @objc override func toggleFullScreen(_ sender: Any?) {
     // PiP uses its own saved window state and cannot be nested with cinema mode.
     guard normalWindowFrameBeforeCompactPlayer == nil else { return }
-
-    if let originalFrame = windowFrameBeforeAppFullscreen {
-      restoreAppFullscreen(frame: originalFrame)
-    } else {
-      enterAppFullscreen()
-    }
-  }
-
-  private func enterAppFullscreen() {
-    guard let screen = screen ?? NSScreen.main else { return }
-
-    windowFrameBeforeAppFullscreen = frame
-    windowStyleMaskBeforeAppFullscreen = styleMask
-    windowMinSizeBeforeAppFullscreen = minSize
-    windowAspectRatioBeforeAppFullscreen = contentAspectRatio
-    windowShadowBeforeAppFullscreen = hasShadow
-    windowMovableByBackgroundBeforeAppFullscreen = isMovableByWindowBackground
-    windowLevelBeforeAppFullscreen = level
-    presentationOptionsBeforeAppFullscreen = NSApp.presentationOptions
-
-    // A borderless window avoids AppKit's crashing full-screen exit path while
-    // letting the Flutter player occupy the entire display, including the
-    // menu-bar and Dock areas.
-    styleMask = [.borderless]
-    minSize = .zero
-    contentAspectRatio = .zero
-    hasShadow = false
-    isMovableByWindowBackground = false
-    level = .normal
-    // The app window alone cannot cover Dock windows reliably. Hide both
-    // system bars for cinema mode so Dock icons/tooltips do not sit over the
-    // bottom of the video or its ambient backdrop.
-    NSApp.presentationOptions = [.hideDock, .hideMenuBar]
-    setFrame(screen.frame, display: true, animate: false)
-  }
-
-  private func restoreAppFullscreen(frame originalFrame: NSRect) {
-    styleMask = windowStyleMaskBeforeAppFullscreen ?? [.titled, .closable, .miniaturizable, .resizable]
-    minSize = windowMinSizeBeforeAppFullscreen ?? NSSize(width: 360, height: 600)
-    contentAspectRatio = windowAspectRatioBeforeAppFullscreen ?? .zero
-    hasShadow = windowShadowBeforeAppFullscreen ?? true
-    isMovableByWindowBackground = windowMovableByBackgroundBeforeAppFullscreen ?? false
-    level = windowLevelBeforeAppFullscreen ?? .normal
-    NSApp.presentationOptions = presentationOptionsBeforeAppFullscreen ?? []
-    setFrame(originalFrame, display: true, animate: false)
-
-    windowFrameBeforeAppFullscreen = nil
-    windowStyleMaskBeforeAppFullscreen = nil
-    windowMinSizeBeforeAppFullscreen = nil
-    windowAspectRatioBeforeAppFullscreen = nil
-    windowShadowBeforeAppFullscreen = nil
-    windowMovableByBackgroundBeforeAppFullscreen = nil
-    windowLevelBeforeAppFullscreen = nil
-    presentationOptionsBeforeAppFullscreen = nil
+    super.toggleFullScreen(sender)
   }
 
   private func setCompactPlayerWindow() {

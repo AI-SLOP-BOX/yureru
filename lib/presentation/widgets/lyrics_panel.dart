@@ -12,6 +12,7 @@ import '../../domain/models.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
 import '../theme.dart';
+import 'lyrics_editor_dialog.dart';
 
 /// Lyrics content hosted inside QueuePanel, alongside the upcoming queue.
 class LyricsPanel extends ConsumerStatefulWidget {
@@ -20,13 +21,15 @@ class LyricsPanel extends ConsumerStatefulWidget {
     required this.engine,
     required this.media,
     this.immersive = false,
+    this.onEditingChanged,
   });
 
   final PlaybackEngine engine;
   final MediaItem media;
   final bool immersive;
+  final ValueChanged<bool>? onEditingChanged;
 
-  double get lineHeight => immersive ? 100 : 54;
+  double get lineHeight => immersive ? 100 : 76;
 
   @override
   ConsumerState<LyricsPanel> createState() => _LyricsPanelState();
@@ -36,6 +39,9 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
   final ScrollController _scrollController = ScrollController();
   late Future<_LyricsSource> _source;
   int _lastActive = -2;
+  bool _editing = false;
+  String _editorText = '';
+  bool _editorSynchronized = true;
 
   @override
   void initState() {
@@ -49,6 +55,7 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
     if (oldWidget.media.id != widget.media.id ||
         oldWidget.media.lyricsPath != widget.media.lyricsPath) {
       _lastActive = -2;
+      _editing = false;
       _source = _loadSource();
     }
   }
@@ -109,17 +116,45 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
     }
   }
 
-  Future<void> _clearLyrics() async {
+  Future<void> _editLyrics() async {
+    final source = await _source;
+    final initialText = await source.text;
+    if (!mounted) return;
+    setState(() {
+      _editorText = initialText;
+      _editorSynchronized =
+          source.path?.toLowerCase().endsWith('.lrc') ??
+          parseLrc(initialText).isNotEmpty;
+      _editing = true;
+    });
+    widget.onEditingChanged?.call(true);
+  }
+
+  Future<void> _saveEditedLyrics(String path) async {
     await ref
         .read(libraryProvider.notifier)
-        .updateMediaLyrics(widget.media.id, null);
-    if (mounted) {
-      setState(() {
-        _source = _loadSource();
-        _lastActive = -2;
-      });
-    }
+        .updateMediaLyrics(widget.media.id, path);
+    if (!mounted) return;
+    setState(() {
+      _source = Future.value(_LyricsSource(path: path));
+      _lastActive = -2;
+      _editing = false;
+    });
+    widget.onEditingChanged?.call(false);
   }
+
+  Widget _editor() => LyricsEditorDialog(
+    media: widget.media,
+    engine: widget.engine,
+    initialText: _editorText,
+    initialSynchronized: _editorSynchronized,
+    inline: true,
+    onCancel: () {
+      setState(() => _editing = false);
+      widget.onEditingChanged?.call(false);
+    },
+    onSaved: _saveEditedLyrics,
+  );
 
   @override
   void dispose() {
@@ -185,138 +220,138 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                     ],
                   ),
                 ),
-                if (widget.media.lyricsPath != null)
-                  IconButton(
-                    tooltip: ref.tr('remove_lyrics'),
-                    onPressed: _clearLyrics,
-                    icon: const Icon(Icons.link_off_rounded, size: 19),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                IconButton(
-                  tooltip: ref.tr('choose_lrc'),
-                  onPressed: _chooseLyrics,
-                  icon: const Icon(Icons.file_open_rounded, size: 19),
-                  visualDensity: VisualDensity.compact,
-                ),
               ],
             ),
           ),
         if (!widget.immersive) Divider(height: 1, color: themeBorder(context)),
         Expanded(
-          child: FutureBuilder<_LyricsSource>(
-            future: _source,
-            builder: (context, sourceSnapshot) {
-              if (sourceSnapshot.connectionState == ConnectionState.waiting) {
-                return const Center(
-                  child: SizedBox.square(
-                    dimension: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                );
-              }
-              final source = sourceSnapshot.data;
-              if (source == null) {
-                return _emptyLyrics(context, ref.tr('lyrics_load_error'));
-              }
-              if (source.path == null &&
-                  source.embedded?.trim().isNotEmpty != true) {
-                return _emptyLyrics(context, ref.tr('lyrics_not_found'));
-              }
-              return FutureBuilder<String>(
-                future: source.text,
-                builder: (context, lyricsSnapshot) {
-                  if (lyricsSnapshot.connectionState ==
-                      ConnectionState.waiting) {
-                    return const Center(
-                      child: SizedBox.square(
-                        dimension: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    );
-                  }
-                  final text = lyricsSnapshot.data ?? '';
-                  final lines = parseLrc(text);
-                  if (lyricsSnapshot.hasError || lines.isEmpty) {
-                    if (!lyricsSnapshot.hasError && text.trim().isNotEmpty) {
-                      return SingleChildScrollView(
-                        padding: const EdgeInsets.all(20),
-                        child: Text(
-                          text,
-                          style: TextStyle(
-                            color: textPrimary,
-                            fontSize: 14,
-                            height: 1.6,
-                          ),
+          child: _editing
+              ? _editor()
+              : FutureBuilder<_LyricsSource>(
+                  future: _source,
+                  builder: (context, sourceSnapshot) {
+                    if (sourceSnapshot.connectionState ==
+                        ConnectionState.waiting) {
+                      return const Center(
+                        child: SizedBox.square(
+                          dimension: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                       );
                     }
-                    return _emptyLyrics(
-                      context,
-                      lyricsSnapshot.hasError
-                          ? ref.tr('lyrics_load_error')
-                          : ref.tr('synced_lyrics_not_found'),
-                    );
-                  }
-                  return StreamBuilder<PlaybackSnapshot>(
-                    stream: widget.engine.snapshots,
-                    initialData: widget.engine.snapshot,
-                    builder: (context, playback) {
-                      final active = activeLyricIndex(
-                        lines,
-                        playback.data?.position ?? Duration.zero,
-                        offset: Duration(
-                          milliseconds: currentMedia.lyricsOffsetMs,
-                        ),
-                      );
-                      WidgetsBinding.instance.addPostFrameCallback(
-                        (_) => _scrollTo(active),
-                      );
-                      return ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 12,
-                        ),
-                        itemCount: lines.length,
-                        itemBuilder: (context, index) {
-                          final isActive = index == active;
-                          return SizedBox(
-                            height: widget.lineHeight,
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: AnimatedDefaultTextStyle(
-                                duration: const Duration(milliseconds: 180),
-                                style: TextStyle(
-                                  color: isActive
-                                      ? textPrimary
-                                      : textSub.withValues(
-                                          alpha: (index - active).abs() < 3
-                                              ? 0.7
-                                              : 0.42,
-                                        ),
-                                  fontSize: widget.immersive
-                                      ? (isActive ? 30 : 26)
-                                      : (isActive ? 18 : 15),
-                                  fontWeight: isActive
-                                      ? FontWeight.w700
-                                      : FontWeight.w500,
-                                ),
-                                child: Text(
-                                  lines[index].text,
-                                  maxLines: widget.immersive ? 2 : 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
+                    final source = sourceSnapshot.data;
+                    if (source == null) {
+                      return _emptyLyrics(context, ref.tr('lyrics_load_error'));
+                    }
+                    if (source.path == null &&
+                        source.embedded?.trim().isNotEmpty != true) {
+                      return _emptyLyrics(context, ref.tr('lyrics_not_found'));
+                    }
+                    return FutureBuilder<String>(
+                      future: source.text,
+                      builder: (context, lyricsSnapshot) {
+                        if (lyricsSnapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                            child: SizedBox.square(
+                              dimension: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                           );
-                        },
-                      );
-                    },
-                  );
-                },
-              );
-            },
-          ),
+                        }
+                        final text = lyricsSnapshot.data ?? '';
+                        final lines = parseLrc(text);
+                        if (lyricsSnapshot.hasError || lines.isEmpty) {
+                          if (!lyricsSnapshot.hasError &&
+                              text.trim().isNotEmpty) {
+                            return SingleChildScrollView(
+                              padding: const EdgeInsets.all(20),
+                              child: Text(
+                                text,
+                                style: TextStyle(
+                                  color: textPrimary,
+                                  fontSize: 14,
+                                  height: 1.6,
+                                ),
+                              ),
+                            );
+                          }
+                          return _emptyLyrics(
+                            context,
+                            lyricsSnapshot.hasError
+                                ? ref.tr('lyrics_load_error')
+                                : ref.tr('synced_lyrics_not_found'),
+                          );
+                        }
+                        return StreamBuilder<PlaybackSnapshot>(
+                          stream: widget.engine.snapshots,
+                          initialData: widget.engine.snapshot,
+                          builder: (context, playback) {
+                            final active = activeLyricIndex(
+                              lines,
+                              playback.data?.position ?? Duration.zero,
+                              offset: Duration(
+                                milliseconds: currentMedia.lyricsOffsetMs,
+                              ),
+                            );
+                            WidgetsBinding.instance.addPostFrameCallback(
+                              (_) => _scrollTo(active),
+                            );
+                            return ListView.builder(
+                              controller: _scrollController,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 12,
+                              ),
+                              itemCount: lines.length,
+                              itemBuilder: (context, index) {
+                                final isActive = index == active;
+                                return SizedBox(
+                                  height: widget.lineHeight,
+                                  child: InkWell(
+                                    onTap: () =>
+                                        widget.engine.seekTo(lines[index].time),
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: AnimatedDefaultTextStyle(
+                                        duration: const Duration(
+                                          milliseconds: 180,
+                                        ),
+                                        style: TextStyle(
+                                          color: isActive
+                                              ? textPrimary
+                                              : textSub.withValues(
+                                                  alpha:
+                                                      (index - active).abs() < 3
+                                                      ? 0.7
+                                                      : 0.42,
+                                                ),
+                                          fontSize: widget.immersive
+                                              ? (isActive ? 30 : 26)
+                                              : (isActive ? 18 : 15),
+                                          fontWeight: isActive
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                        ),
+                                        child: Text(
+                                          lines[index].text,
+                                          maxLines: widget.immersive ? 2 : 3,
+                                          softWrap: true,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
         ),
       ],
     );
@@ -336,27 +371,41 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
             style: TextStyle(color: themeTextSub(context), fontSize: 13),
           ),
           const SizedBox(height: 10),
-          TextButton.icon(
-            style: TextButton.styleFrom(
-              foregroundColor: widget.immersive
-                  ? Colors.white70
-                  : themeTextPrimary(context),
-              backgroundColor: widget.immersive
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.transparent,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-                side: BorderSide(
-                  color: widget.immersive
-                      ? Colors.white.withValues(alpha: 0.12)
-                      : themeBorder(context),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            children: [
+              TextButton.icon(
+                style: TextButton.styleFrom(
+                  foregroundColor: widget.immersive
+                      ? Colors.white70
+                      : themeTextPrimary(context),
+                  backgroundColor: widget.immersive
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.transparent,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 9,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    side: BorderSide(
+                      color: widget.immersive
+                          ? Colors.white.withValues(alpha: 0.12)
+                          : themeBorder(context),
+                    ),
+                  ),
                 ),
+                onPressed: _chooseLyrics,
+                icon: const Icon(Icons.file_open_rounded, size: 18),
+                label: Text(ref.tr('add_lrc')),
               ),
-            ),
-            onPressed: _chooseLyrics,
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: Text(ref.tr('add_lrc')),
+              TextButton.icon(
+                onPressed: _editLyrics,
+                icon: const Icon(Icons.edit_note_rounded, size: 18),
+                label: Text(ref.tr('lyrics_editor_create')),
+              ),
+            ],
           ),
         ],
       ),

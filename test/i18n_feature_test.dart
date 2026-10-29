@@ -21,6 +21,14 @@ void main() {
         'sleep_hours_label',
         'sleep_minutes_label',
         'lyrics_timing',
+        'image_display_priority',
+        'image_display_priority_desc',
+        'image_priority_by_screen',
+        'image_priority_artwork',
+        'image_priority_thumbnail',
+        'image_priority_home',
+        'image_priority_playlists',
+        'image_priority_albums',
         'save',
       ]) {
         final value = translate(key, language.name);
@@ -41,6 +49,14 @@ void main() {
             'ambient_frame_rate' => '更新頻度',
             'ambient_frame_rate_desc' => '高いほど滑らかですが、負荷も上がります',
             'lyrics_timing' => '歌詞のタイミング（秒）',
+            'image_display_priority' => '画像の表示優先度',
+            'image_display_priority_desc' => 'ホーム・プレイリスト・アルバムごとに優先する画像を選びます',
+            'image_priority_by_screen' => '画面ごと',
+            'image_priority_artwork' => 'ジャケット',
+            'image_priority_thumbnail' => 'サムネイル',
+            'image_priority_home' => 'ホーム',
+            'image_priority_playlists' => 'プレイリスト',
+            'image_priority_albums' => 'アルバム',
             _ => '保存',
           };
           expect(value, isNot(japanese));

@@ -44,6 +44,33 @@ void main() {
     );
   });
 
+  test('accepts copied comment timestamps and YouTube time URLs', () {
+    expect(parseLyricsTimestamp('00:11'), const Duration(seconds: 11));
+    expect(
+      parseLyricsTimestamp('00:11 lyric text'),
+      const Duration(seconds: 11),
+    );
+    expect(
+      parseLyricsTimestamp('1:02:03'),
+      const Duration(hours: 1, minutes: 2, seconds: 3),
+    );
+    expect(
+      parseLyricsTimestamp('https://youtu.be/example?t=11s'),
+      const Duration(seconds: 11),
+    );
+    expect(
+      parseLyricsTimestamp('https://www.youtube.com/watch?v=x&t=1m2s'),
+      const Duration(minutes: 1, seconds: 2),
+    );
+  });
+
+  test('parses hour timestamps in LRC files', () {
+    expect(
+      parseLrc('[1:02:03.50]line').single.time,
+      const Duration(hours: 1, minutes: 2, seconds: 3, milliseconds: 500),
+    );
+  });
+
   test('persists a per-track lyric timing adjustment', () {
     final media = MediaItem(
       id: 'track-1',

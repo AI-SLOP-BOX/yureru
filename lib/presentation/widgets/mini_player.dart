@@ -101,14 +101,24 @@ class MiniPlayer extends ConsumerWidget {
             onPressed: onExpand,
           ),
           IconButton(
-            tooltip: ref.tr(engine.snapshot.isPlaying ? 'pause' : 'play'),
-            icon: Icon(
-              engine.snapshot.isPlaying
-                  ? Icons.pause_rounded
-                  : Icons.play_arrow_rounded,
-            ),
-            onPressed: () async {
-              await ctl.toggle();
+            tooltip: ref.tr('next_video'),
+            icon: const Icon(Icons.skip_next_rounded),
+            onPressed: q.hasCurrent ? () => ctl.playNext() : null,
+          ),
+          StreamBuilder(
+            stream: engine.snapshots,
+            initialData: engine.snapshot,
+            builder: (context, snapshot) {
+              final isPlaying = (snapshot.data ?? engine.snapshot).isPlaying;
+              return IconButton(
+                tooltip: ref.tr(isPlaying ? 'pause' : 'play'),
+                icon: Icon(
+                  isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                ),
+                onPressed: () async {
+                  await ctl.toggle();
+                },
+              );
             },
           ),
         ],

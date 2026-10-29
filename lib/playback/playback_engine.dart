@@ -57,12 +57,6 @@ abstract class PlaybackEngine {
   /// Enable or disable video track (for audio-only / battery saving mode)
   Future<void> setVideoTrackEnabled(bool enabled) async {}
 
-  /// Dynamic audio gain adjustment, without changing the user's volume slider.
-  bool get supportsVolumeNormalization => false;
-  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
-    if (enabled) throw UnsupportedError('Volume normalization is unavailable');
-  }
-
   /// Reads embedded lyric metadata when the backend exposes file tags.
   Future<String?> readEmbeddedLyrics() async => null;
 

@@ -24,11 +24,9 @@ import 'package:yureru/presentation/theme.dart';
 import 'package:yureru/presentation/widgets/player_card.dart';
 import 'package:yureru/presentation/widgets/app_svg_icon.dart';
 import 'package:yureru/presentation/widgets/mini_player.dart';
-import 'package:yureru/presentation/widgets/preview_player.dart';
 import 'package:yureru/presentation/widgets/queue_panel.dart';
 import 'package:yureru/presentation/widgets/search_overlay.dart';
 import 'package:yureru/presentation/widgets/sidebar.dart';
-import 'package:yureru/presentation/widgets/thumb_image.dart';
 import 'package:yureru/presentation/widgets/top_bar.dart';
 import 'package:yureru/presentation/widgets/transport_bar.dart';
 
@@ -483,6 +481,7 @@ void main() {
     );
     final visual = find.byKey(const ValueKey('compact-player-visual'));
     final visualSizeBeforeQueue = tester.getSize(visual);
+    final visualTopBeforeQueue = tester.getTopLeft(visual).dy;
     expect(find.byIcon(Icons.queue_music_rounded), findsNothing);
     expect(nextContents, findsOneWidget);
     await tester.tap(nextContents);
@@ -490,7 +489,7 @@ void main() {
 
     expect(c.read(queueVisibleProvider), isTrue);
     expect(find.byIcon(Icons.arrow_forward_rounded), findsNothing);
-    expect(find.text('次のコンテンツ'), findsOneWidget);
+    expect(find.text('次のコンテンツ').hitTestable(), findsOneWidget);
     expect(
       find.byKey(const ValueKey('transport-next-content-button')),
       findsNothing,
@@ -502,6 +501,7 @@ void main() {
       greaterThanOrEqualTo(playerBounds.top),
     );
     expect(tester.getSize(visual), visualSizeBeforeQueue);
+    expect(tester.getTopLeft(visual).dy, visualTopBeforeQueue);
     await tester.tap(
       find
           .descendant(of: queuePanel, matching: find.byType(GestureDetector))
@@ -1168,25 +1168,6 @@ void main() {
     expect(find.byType(VideosScreen), findsOneWidget);
   });
 
-  testWidgets('home shows static preview; its play enters full player', (
-    tester,
-  ) async {
-    final c = await pumpHomeWithMedia(
-      tester,
-      MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
-    );
-    // Missing file in tests -> static preview, no live engine.
-    expect(find.text('ここから再生'), findsOneWidget);
-    expect(find.byType(HomeScreen), findsOneWidget);
-    await tester.tap(find.text('再生'));
-    await tester.pump();
-    await tester.pumpAndSettle();
-    expect(find.byType(PlayerCard), findsOneWidget);
-    expect(find.byType(HomeScreen), findsNothing);
-    expect(c.read(viewingPlayerProvider), isTrue);
-    expect(tester.takeException(), isNull);
-  });
-
   testWidgets('transport tap returns to the player', (tester) async {
     final c = await pumpHomeWithMedia(
       tester,
@@ -1259,8 +1240,10 @@ void main() {
     );
     final container = c;
     expect(container.read(playerViewModeProvider), PlayerViewMode.media);
-    // Start playback via the preview play button.
-    await tester.tap(find.text('再生'));
+    // Start playback through the queue now that the redundant home preview is gone.
+    final media = container.read(libraryProvider).media.single;
+    container.read(queueProvider.notifier).start([media.id], shuffle: false);
+    await container.read(playbackControllerProvider).openCurrent();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.byType(PlayerCard), findsOneWidget);
@@ -1329,67 +1312,6 @@ void main() {
     // Drag slop eats part of the gesture; assert direction + clamp.
     expect(after.width, greaterThan(before.width));
     expect(after.width, lessThanOrEqualTo(before.width + 100));
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('preview sits below the library content', (tester) async {
-    await pumpHomeWithMedia(
-      tester,
-      MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
-    );
-    final previewTop = tester.getTopLeft(find.byType(PreviewBar)).dy;
-    final msgTop = tester
-        .getTopLeft(find.text('プレイリストはサイドバーの＋から作成できます').first)
-        .dy;
-    expect(previewTop, greaterThan(msgTop));
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('preview follows the playing item', (tester) async {
-    tester.view.physicalSize = const Size(1440, 900);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          activeLanguageCodeProvider.overrideWithValue('ja'),
-          repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
-          engineProvider.overrideWithValue(FakePlaybackEngine()),
-        ],
-        child: MaterialApp(
-          theme: yureruTheme(),
-          darkTheme: yureruTheme(),
-          themeMode: ThemeMode.dark,
-          home: const AppShell(),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
-    final a = MediaItem(title: 'A動画', localPath: '/tmp/a.mp4');
-    final b = MediaItem(title: 'B動画', localPath: '/tmp/b.mp4');
-    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
-      a,
-      b,
-    ]);
-    await c.read(libraryProvider.notifier).load();
-    c.read(queueProvider.notifier).start([a.id, b.id], shuffle: false);
-    c.read(queueProvider.notifier).jumpTo(1);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    // Back to home while playing: preview shows the playing item, not A.
-    await tester.tap(find.text('すべての動画'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('ライブラリ'));
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: find.byType(PreviewBar), matching: find.text('B動画')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: find.byType(PreviewBar), matching: find.text('A動画')),
-      findsNothing,
-    );
     expect(tester.takeException(), isNull);
   });
 
@@ -1465,6 +1387,29 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('video row adds itself after the current queue item', (
+    tester,
+  ) async {
+    final current = MediaItem(title: '再生中', localPath: '/tmp/current.mp4');
+    final next = MediaItem(title: '次に加える', localPath: '/tmp/next.mp4');
+    final c = await pumpHomeWithMedia(tester, current);
+    final repository = c.read(repositoryProvider) as InMemoryLibraryRepository;
+    await repository.saveMedia([next]);
+    await c.read(libraryProvider.notifier).load();
+    await tester.pumpAndSettle();
+
+    c.read(videoOpenRequestProvider.notifier).state = next.id;
+    await tester.pumpAndSettle();
+    c.read(queueProvider.notifier).start([current.id], shuffle: false);
+    await tester.pump();
+
+    await tester.tap(find.byKey(ValueKey('video-play-next-${next.id}')));
+    await tester.pumpAndSettle();
+    expect(c.read(queueProvider).currentId, current.id);
+    expect(c.read(queueProvider).queue, [current.id, next.id]);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('top bar does not show a duplicate home logo', (tester) async {
     await pumpHomeWithMedia(
       tester,
@@ -1528,92 +1473,6 @@ void main() {
     },
     variant: const TargetPlatformVariant({TargetPlatform.macOS}),
   );
-
-  testWidgets('preview shows info panel with next-up while playing', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1440, 900);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          activeLanguageCodeProvider.overrideWithValue('ja'),
-          repositoryProvider.overrideWithValue(InMemoryLibraryRepository()),
-          engineProvider.overrideWithValue(FakePlaybackEngine()),
-        ],
-        child: MaterialApp(
-          theme: yureruTheme(),
-          darkTheme: yureruTheme(),
-          themeMode: ThemeMode.dark,
-          home: const AppShell(),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
-    final a = MediaItem(title: 'A動画', localPath: '/tmp/a.mp4');
-    final b = MediaItem(title: 'B動画', localPath: '/tmp/b.mp4');
-    await (c.read(repositoryProvider) as InMemoryLibraryRepository).saveMedia([
-      a,
-      b,
-    ]);
-    await c.read(libraryProvider.notifier).load();
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    // Idle: static thumbnail + 再生 button.
-    expect(
-      find.descendant(
-        of: find.byType(PreviewBar),
-        matching: find.byType(ThumbImage),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: find.byType(PreviewBar), matching: find.text('再生')),
-      findsOneWidget,
-    );
-    // Playing + back home: info for the playing item, next-up, open button.
-    // No second player: single ThumbImage, no video output involved.
-    c.read(queueProvider.notifier).start([a.id, b.id], shuffle: false);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.tap(find.text('すべての動画'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('ライブラリ'));
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: find.byType(PreviewBar), matching: find.text('現在の曲')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byType(PreviewBar),
-        matching: find.text('次の動画: B動画'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byType(PreviewBar),
-        matching: find.text('プレイヤーを開く'),
-      ),
-      findsOneWidget,
-    );
-    // Tapping next-up advances the queue without leaving browse.
-    await tester.tap(
-      find.descendant(
-        of: find.byType(PreviewBar),
-        matching: find.text('次の動画: B動画'),
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(c.read(queueProvider).currentId, b.id);
-    expect(find.byType(VideosScreen), findsNothing);
-    expect(find.byType(HomeScreen), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
 
   testWidgets('desktop sidebar can be pinned and follows its panel', (
     tester,
@@ -1692,6 +1551,24 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('phone-width search icon opens global search', (tester) async {
+    await pumpShell(tester, size: const Size(390, 844));
+    await tester.tap(find.byTooltip('全体検索'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchOverlay), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('compact search field keeps a global search action', (
+    tester,
+  ) async {
+    await pumpShell(tester, size: const Size(650, 844));
+    await tester.tap(find.byTooltip('全体検索'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchOverlay), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('home shows recently added strip', (tester) async {
     final c = await pumpHomeWithMedia(
       tester,
@@ -1704,7 +1581,7 @@ void main() {
   });
 
   // Regression: 1px bottom overflow in HomeScreen Column at short heights
-  // (CJK line metrics). Middle scrolls now; header + preview stay pinned.
+  // (CJK line metrics). The home content scrolls without a fixed preview panel.
   testWidgets('short window home with next-up does not overflow', (
     tester,
   ) async {
@@ -1740,52 +1617,8 @@ void main() {
     c.read(queueProvider.notifier).start([a.id, b.id, cc.id], shuffle: false);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    await tester.tap(find.text('すべての動画'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('ライブラリ'));
-    await tester.pumpAndSettle();
-    expect(find.byType(HomeScreen), findsOneWidget);
-    expect(find.byType(PreviewBar), findsOneWidget);
-    expect(find.text('次の動画: B動画'), findsOneWidget);
     final ex = tester.takeException();
     expect(ex, isNull, reason: 'short home overflowed: $ex');
-  });
-
-  // The exact user path: preview 再生 button with an empty queue.
-  // Player shows AND the library pill must be off (single highlight).
-  testWidgets('preview play shows player with library pill off', (
-    tester,
-  ) async {
-    final c = await pumpHomeWithMedia(
-      tester,
-      MediaItem(title: 'テスト動画', localPath: '/tmp/t.mp4'),
-    );
-    expect(c.read(viewingPlayerProvider), isFalse);
-    await tester.tap(
-      find.descendant(of: find.byType(PreviewBar), matching: find.text('再生')),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(find.byType(PlayerCard), findsOneWidget);
-    expect(c.read(viewingPlayerProvider), isTrue);
-    Material? pillOf(String label) {
-      final el = find
-          .descendant(of: find.byType(Sidebar), matching: find.text(label))
-          .evaluate()
-          .single;
-      Material? found;
-      el.visitAncestorElements((a) {
-        if (a.widget is Material) {
-          found = a.widget as Material;
-          return false;
-        }
-        return true;
-      });
-      return found;
-    }
-
-    expect(pillOf('ライブラリ')?.color, Colors.transparent);
-    expect(tester.takeException(), isNull);
   });
 
   testWidgets('blank titles do not render as 無題 in queue', (tester) async {

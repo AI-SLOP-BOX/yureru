@@ -10,79 +10,10 @@ import '../../library/media_collections.dart';
 import 'collection_browser.dart';
 import '../widgets/app_svg_icon.dart';
 import '../theme.dart';
-import '../layout_metrics.dart';
+import '../widgets/page_header.dart';
 import '../widgets/duration_text.dart';
 import '../widgets/thumb_image.dart';
-import '../widgets/preview_player.dart';
 import '../widgets/media_shelf.dart';
-
-/// Shared page header (search sits in the top bar; pages show a small title).
-class PageHeader extends StatelessWidget {
-  final String title;
-  final String? trailing;
-  final Widget? actions;
-  const PageHeader({
-    super.key,
-    required this.title,
-    this.trailing,
-    this.actions,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final inset = LayoutMetrics.horizontalInset(context);
-    final heading = Text(
-      title,
-      style: TextStyle(
-        fontSize: 24,
-        fontWeight: FontWeight.w800,
-        color: isDark ? kTextPrimary : const Color(0xFF242424),
-        letterSpacing: -0.5,
-      ),
-    );
-    final badge = trailing == null
-        ? null
-        : Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: themeCard(context),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: themeBorder(context)),
-            ),
-            child: Text(
-              trailing!,
-              style: TextStyle(
-                fontSize: 12,
-                color: themeTextSub(context),
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          );
-    return Padding(
-      padding: EdgeInsets.fromLTRB(inset, 10, inset, 14),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          if (constraints.maxWidth < 600) {
-            return Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [heading, ?badge, ?actions],
-            );
-          }
-          return Row(
-            children: [
-              heading,
-              if (badge != null) ...[const SizedBox(width: 12), badge],
-              if (actions != null) ...[const Spacer(), actions!],
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
 
 /// Library home: playlist grid (player card sits above this in the shell).
 class HomeScreen extends ConsumerStatefulWidget {
@@ -345,67 +276,86 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(color: themeBorder(context)),
                             ),
-                            child: Material(color: Colors.transparent, child: ListTile(
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 2,
-                              ),
-                              leading: ThumbImage(
-                                seed: m.id,
-                                mediaId: m.id,
-                                localPath: m.localPath,
-                                size: 44,
-                                radius: 8,
-                              ),
-                              title: Text(
-                                displayTitle(m.title),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 2,
                                 ),
-                              ),
-                              subtitle: Row(
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      artistText,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+                                leading: ThumbImage(
+                                  seed: m.id,
+                                  mediaId: m.id,
+                                  localPath: m.localPath,
+                                  imageContext: MediaImageContext.home,
+                                  size: 44,
+                                  radius: 8,
+                                ),
+                                title: Text(
+                                  displayTitle(m.title),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                subtitle: Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        artistText,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: themeTextSub(context),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '• ',
                                       style: TextStyle(
-                                        fontSize: 12,
+                                        fontSize: 11,
                                         color: themeTextSub(context),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '• ',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: themeTextSub(context),
+                                    DurationText(
+                                      mediaId: m.id,
+                                      localPath: m.localPath,
+                                      durationMs: m.durationMs,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: themeTextSub(context),
+                                      ),
                                     ),
-                                  ),
-                                  DurationText(
-                                    mediaId: m.id,
-                                    localPath: m.localPath,
-                                    durationMs: m.durationMs,
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: themeTextSub(context),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              trailing: IconButton(
-                                tooltip: ref.tr('play'),
-                                icon: const Icon(
-                                  Icons.play_circle_fill_rounded,
-                                  size: 30,
-                                  color: kAccent,
+                                  ],
                                 ),
-                                onPressed: () {
+                                trailing: IconButton(
+                                  tooltip: ref.tr('play'),
+                                  icon: const Icon(
+                                    Icons.play_circle_fill_rounded,
+                                    size: 30,
+                                    color: kAccent,
+                                  ),
+                                  onPressed: () {
+                                    showPlayerView(ref);
+                                    final order = [
+                                      for (final s in matchingSongs) s.id,
+                                    ];
+                                    ref
+                                        .read(queueProvider.notifier)
+                                        .start(order, shuffle: false);
+                                    ref
+                                        .read(queueProvider.notifier)
+                                        .jumpTo(index);
+                                    ref
+                                        .read(playbackControllerProvider)
+                                        .openCurrent();
+                                  },
+                                ),
+                                onTap: () {
                                   showPlayerView(ref);
                                   final order = [
                                     for (final s in matchingSongs) s.id,
@@ -421,20 +371,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                       .openCurrent();
                                 },
                               ),
-                              onTap: () {
-                                showPlayerView(ref);
-                                final order = [
-                                  for (final s in matchingSongs) s.id,
-                                ];
-                                ref
-                                    .read(queueProvider.notifier)
-                                    .start(order, shuffle: false);
-                                ref.read(queueProvider.notifier).jumpTo(index);
-                                ref
-                                    .read(playbackControllerProvider)
-                                    .openCurrent();
-                              },
-                            )),
+                            ),
                           );
                         }, childCount: matchingSongs.length),
                       ),
@@ -458,7 +395,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     ),
                   ),
                   SliverPadding(
-                    // PreviewBar owns its space below the scroll view.
                     padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
                     sliver: SliverGrid(
                       gridDelegate:
@@ -507,7 +443,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
           ),
         ),
-        const PreviewBar(),
       ],
     );
   }
@@ -590,6 +525,7 @@ class _PlaylistCardState extends ConsumerState<_PlaylistCard> {
                               seed: widget.playlistId,
                               mediaId: widget.thumbMediaId,
                               localPath: widget.thumbPath,
+                              imageContext: MediaImageContext.playlist,
                               radius: 0,
                               expand: true,
                             ),
@@ -668,167 +604,5 @@ class _PlaylistCardState extends ConsumerState<_PlaylistCard> {
         ),
       ),
     );
-  }
-}
-
-/// Playlists page: vertical list with counts + play/shuffle actions.
-class PlaylistsScreen extends ConsumerWidget {
-  final ValueChanged<String>? onOpenPlaylist;
-  const PlaylistsScreen({super.key, this.onOpenPlaylist});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final lib = ref.watch(libraryProvider);
-    final query = ref.watch(searchQueryProvider).trim().toLowerCase();
-    if (!lib.loaded) return const Center(child: CircularProgressIndicator());
-    final playlists = lib.playlists
-        .where((p) => query.isEmpty || p.name.toLowerCase().contains(query))
-        .toList();
-    if (playlists.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.queue_music_rounded,
-              size: 48,
-              color: themeTextSub(context),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              ref.tr('empty_playlist'),
-              textAlign: TextAlign.center,
-              style: TextStyle(color: themeTextSub(context)),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () => _createPlaylist(context, ref),
-              icon: const Icon(Icons.add_rounded),
-              label: Text(ref.tr('create_playlist')),
-            ),
-          ],
-        ),
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        PageHeader(
-          title: ref.tr('playlists'),
-          trailing: ref.playlistsCount(playlists.length),
-          actions: MediaQuery.sizeOf(context).width < 1000
-              ? IconButton.filledTonal(
-                  tooltip: ref.tr('create_playlist'),
-                  onPressed: () => _createPlaylist(context, ref),
-                  icon: const Icon(Icons.add_rounded),
-                )
-              : null,
-        ),
-        Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-            itemCount: playlists.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 4),
-            itemBuilder: (c, i) {
-              final pl = playlists[i];
-              return Container(
-                decoration: BoxDecoration(
-                  color: themeCard(context),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Material(color: Colors.transparent, child: ListTile(
-                  leading: ThumbImage(
-                    seed: pl.id,
-                    mediaId: pl.mediaIds.isEmpty
-                        ? null
-                        : lib.byId(pl.mediaIds.first)?.id,
-                    localPath: pl.mediaIds.isEmpty
-                        ? null
-                        : lib.byId(pl.mediaIds.first)?.localPath,
-                    size: 48,
-                  ),
-                  title: Text(
-                    displayTitle(pl.name),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    ref.tracksCount(pl.mediaIds.length),
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: themeTextSub(context),
-                    ),
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: ref.tr('play'),
-                        icon: const Icon(Icons.play_arrow),
-                        onPressed: pl.mediaIds.isEmpty
-                            ? null
-                            : () {
-                                showPlayerView(ref);
-                                ref
-                                    .read(playbackControllerProvider)
-                                    .startPlaylist(pl.id, shuffle: false);
-                              },
-                      ),
-                      IconButton(
-                        tooltip: ref.tr('shuffle'),
-                        icon: const Icon(Icons.shuffle, size: 20),
-                        onPressed: pl.mediaIds.isEmpty
-                            ? null
-                            : () {
-                                showPlayerView(ref);
-                                ref
-                                    .read(playbackControllerProvider)
-                                    .startPlaylist(pl.id, shuffle: true);
-                              },
-                      ),
-                    ],
-                  ),
-                  onTap: onOpenPlaylist == null
-                      ? null
-                      : () => onOpenPlaylist!(pl.id),
-                )),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-Future<void> _createPlaylist(BuildContext context, WidgetRef ref) async {
-  final controller = TextEditingController();
-  final name = await showDialog<String>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: Text(ref.tr('create_playlist')),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        textCapitalization: TextCapitalization.sentences,
-        decoration: InputDecoration(hintText: ref.tr('playlist_name')),
-        onSubmitted: (value) => Navigator.pop(dialogContext, value),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(dialogContext),
-          child: Text(ref.tr('cancel')),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(dialogContext, controller.text),
-          child: Text(ref.tr('create')),
-        ),
-      ],
-    ),
-  );
-  controller.dispose();
-  if (name != null && name.trim().isNotEmpty) {
-    await ref.read(libraryProvider.notifier).createPlaylist(name.trim());
   }
 }

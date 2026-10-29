@@ -17,6 +17,7 @@ import '../i18n.dart';
 import '../layout_metrics.dart';
 import '../theme.dart';
 import 'queue_panel.dart';
+import 'semantics_safe_slider.dart';
 import 'app_svg_icon.dart';
 import 'favorite_button.dart';
 import 'sleep_timer_button.dart';
@@ -2675,31 +2676,43 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                             // A touch-friendly entry point to the queue/lyrics
                             // sheet. QueuePanel already provides tabs for
                             // switching between next contents and lyrics.
-                            if (!lockQueueOpen && !showQueueSheet)
-                              Center(
-                                child: TextButton.icon(
-                                  key: const ValueKey(
-                                    'compact-next-content-button',
-                                  ),
-                                  onPressed: () {
-                                    ref
-                                            .read(lyricsPanelProvider.notifier)
-                                            .state =
-                                        false;
-                                    ref
-                                            .read(queueVisibleProvider.notifier)
-                                            .state =
-                                        true;
-                                    setState(() => _queueSheetExpanded = false);
-                                  },
-                                  icon: const Icon(
-                                    Icons.keyboard_arrow_up_rounded,
-                                    size: 20,
-                                  ),
-                                  label: Text(ref.tr('next_contents')),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: textSub,
-                                    visualDensity: VisualDensity.compact,
+                            if (!lockQueueOpen)
+                              Visibility(
+                                visible: !showQueueSheet,
+                                maintainState: true,
+                                maintainAnimation: true,
+                                maintainSize: true,
+                                child: Center(
+                                  child: TextButton.icon(
+                                    key: const ValueKey(
+                                      'compact-next-content-button',
+                                    ),
+                                    onPressed: () {
+                                      ref
+                                              .read(
+                                                lyricsPanelProvider.notifier,
+                                              )
+                                              .state =
+                                          false;
+                                      ref
+                                              .read(
+                                                queueVisibleProvider.notifier,
+                                              )
+                                              .state =
+                                          true;
+                                      setState(
+                                        () => _queueSheetExpanded = false,
+                                      );
+                                    },
+                                    icon: const Icon(
+                                      Icons.keyboard_arrow_up_rounded,
+                                      size: 20,
+                                    ),
+                                    label: Text(ref.tr('next_contents')),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: textSub,
+                                      visualDensity: VisualDensity.compact,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -2984,88 +2997,90 @@ class _FloatingTimelineState extends ConsumerState<_FloatingTimeline> {
                               overlayRadius: 10,
                             ),
                           ),
-                          child: Slider(
-                            value: dur.inMilliseconds == 0
-                                ? 0
-                                : displayPos.inMilliseconds
-                                      .clamp(0, dur.inMilliseconds)
+                          child: semanticsSafeSlider(
+                            Slider(
+                              value: dur.inMilliseconds == 0
+                                  ? 0
+                                  : displayPos.inMilliseconds
+                                        .clamp(0, dur.inMilliseconds)
+                                        .toDouble(),
+                              max:
+                                  (dur.inMilliseconds <= 0
+                                          ? 1
+                                          : dur.inMilliseconds)
                                       .toDouble(),
-                            max:
-                                (dur.inMilliseconds <= 0
-                                        ? 1
-                                        : dur.inMilliseconds)
-                                    .toDouble(),
-                            onChangeStart: (v) {
-                              widget.onHoverActivity();
-                              _seekSettleTimer?.cancel();
-                              _seekGeneration++;
-                              _pendingSeekMs = null;
-                              _seekCommandReturned = false;
-                              setState(() {
-                                _isDragging = true;
-                                _draggedMs = v;
-                              });
-                            },
-                            onChanged: (v) {
-                              widget.onHoverActivity();
-                              setState(() {
-                                _draggedMs = v;
-                                if (dur.inMilliseconds > 0) {
-                                  _hoverPixelX =
-                                      (v / dur.inMilliseconds) *
-                                          constraints.maxWidth +
-                                      timeLabelWidth;
-                                }
-                              });
-                            },
-                            onChangeEnd: (v) async {
-                              widget.onHoverActivity();
-                              final generation = ++_seekGeneration;
-                              final targetMs = v.toDouble();
-                              setState(() {
-                                _draggedMs = targetMs;
-                                _pendingSeekMs = targetMs;
-                                _seekCommandReturned = false;
-                                _isDragging = true;
-                              });
-                              try {
-                                await ctl.seekTo(
-                                  Duration(milliseconds: targetMs.toInt()),
-                                );
-                              } catch (_) {
-                                // Keep the requested thumb position visible briefly
-                                // even when the engine reports a seek failure.
-                              }
-                              if (!mounted || generation != _seekGeneration) {
-                                return;
-                              }
-                              _seekCommandReturned = true;
-                              if ((engine.snapshot.position.inMilliseconds -
-                                          targetMs)
-                                      .abs() <=
-                                  250) {
+                              onChangeStart: (v) {
+                                widget.onHoverActivity();
                                 _seekSettleTimer?.cancel();
+                                _seekGeneration++;
                                 _pendingSeekMs = null;
                                 _seekCommandReturned = false;
-                                setState(() => _isDragging = false);
-                                return;
-                              }
-                              _seekSettleTimer?.cancel();
-                              _seekSettleTimer = Timer(
-                                const Duration(milliseconds: 900),
-                                () {
-                                  if (!mounted ||
-                                      generation != _seekGeneration) {
-                                    return;
+                                setState(() {
+                                  _isDragging = true;
+                                  _draggedMs = v;
+                                });
+                              },
+                              onChanged: (v) {
+                                widget.onHoverActivity();
+                                setState(() {
+                                  _draggedMs = v;
+                                  if (dur.inMilliseconds > 0) {
+                                    _hoverPixelX =
+                                        (v / dur.inMilliseconds) *
+                                            constraints.maxWidth +
+                                        timeLabelWidth;
                                   }
-                                  setState(() {
-                                    _pendingSeekMs = null;
-                                    _seekCommandReturned = false;
-                                    _isDragging = false;
-                                  });
-                                },
-                              );
-                            },
+                                });
+                              },
+                              onChangeEnd: (v) async {
+                                widget.onHoverActivity();
+                                final generation = ++_seekGeneration;
+                                final targetMs = v.toDouble();
+                                setState(() {
+                                  _draggedMs = targetMs;
+                                  _pendingSeekMs = targetMs;
+                                  _seekCommandReturned = false;
+                                  _isDragging = true;
+                                });
+                                try {
+                                  await ctl.seekTo(
+                                    Duration(milliseconds: targetMs.toInt()),
+                                  );
+                                } catch (_) {
+                                  // Keep the requested thumb position visible briefly
+                                  // even when the engine reports a seek failure.
+                                }
+                                if (!mounted || generation != _seekGeneration) {
+                                  return;
+                                }
+                                _seekCommandReturned = true;
+                                if ((engine.snapshot.position.inMilliseconds -
+                                            targetMs)
+                                        .abs() <=
+                                    250) {
+                                  _seekSettleTimer?.cancel();
+                                  _pendingSeekMs = null;
+                                  _seekCommandReturned = false;
+                                  setState(() => _isDragging = false);
+                                  return;
+                                }
+                                _seekSettleTimer?.cancel();
+                                _seekSettleTimer = Timer(
+                                  const Duration(milliseconds: 900),
+                                  () {
+                                    if (!mounted ||
+                                        generation != _seekGeneration) {
+                                      return;
+                                    }
+                                    setState(() {
+                                      _pendingSeekMs = null;
+                                      _seekCommandReturned = false;
+                                      _isDragging = false;
+                                    });
+                                  },
+                                );
+                              },
+                            ),
                           ),
                         ),
                       );
@@ -3167,12 +3182,14 @@ class _ExpandableVolumeState extends ConsumerState<_ExpandableVolume> {
                             overlayRadius: 8,
                           ),
                         ),
-                        child: Slider(
-                          value: volume.clamp(0.0, 1.0),
-                          onChanged: (v) {
-                            widget.onHoverActivity();
-                            unawaited(playback.setVolume(v));
-                          },
+                        child: semanticsSafeSlider(
+                          Slider(
+                            value: volume.clamp(0.0, 1.0),
+                            onChanged: (v) {
+                              widget.onHoverActivity();
+                              unawaited(playback.setVolume(v));
+                            },
+                          ),
                         ),
                       )
                     : const SizedBox.shrink(),
@@ -3405,33 +3422,36 @@ class _MobileTimelineState extends State<_MobileTimeline> {
             overlayColor: primaryControlColor.withValues(alpha: 0.15),
             overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
           ),
-          child: Slider(
-            value: dur.inMilliseconds == 0
-                ? 0
-                : displayPos.inMilliseconds
-                      .clamp(0, dur.inMilliseconds)
-                      .toDouble(),
-            max: (dur.inMilliseconds <= 0 ? 1 : dur.inMilliseconds).toDouble(),
-            onChangeStart: (v) {
-              setState(() {
-                _isDragging = true;
-                _draggedMs = v;
-              });
-            },
-            onChanged: (v) {
-              setState(() {
-                _draggedMs = v;
-              });
-            },
-            onChangeEnd: (v) async {
-              _draggedMs = v;
-              await widget.ctl.seekTo(Duration(milliseconds: v.toInt()));
-              if (mounted) {
+          child: semanticsSafeSlider(
+            Slider(
+              value: dur.inMilliseconds == 0
+                  ? 0
+                  : displayPos.inMilliseconds
+                        .clamp(0, dur.inMilliseconds)
+                        .toDouble(),
+              max: (dur.inMilliseconds <= 0 ? 1 : dur.inMilliseconds)
+                  .toDouble(),
+              onChangeStart: (v) {
                 setState(() {
-                  _isDragging = false;
+                  _isDragging = true;
+                  _draggedMs = v;
                 });
-              }
-            },
+              },
+              onChanged: (v) {
+                setState(() {
+                  _draggedMs = v;
+                });
+              },
+              onChangeEnd: (v) async {
+                _draggedMs = v;
+                await widget.ctl.seekTo(Duration(milliseconds: v.toInt()));
+                if (mounted) {
+                  setState(() {
+                    _isDragging = false;
+                  });
+                }
+              },
+            ),
           ),
         ),
         Padding(

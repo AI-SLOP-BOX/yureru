@@ -27,13 +27,15 @@ void main() {
     });
 
     test(
-      'WebM thumbnail skips the crash-prone mpv screenshot command',
+      'WebM thumbnail avoids the crash-prone native screenshot command',
       () async {
         final binding = TestWidgetsFlutterBinding.ensureInitialized();
         final messenger = binding.defaultBinaryMessenger;
         messenger.setMockMethodCallHandler(
           const MethodChannel('plugins.flutter.io/path_provider'),
-          (call) async => call.method == 'getTemporaryDirectory'
+          (call) async =>
+              call.method == 'getTemporaryDirectory' ||
+                  call.method == 'getApplicationSupportDirectory'
               ? Directory.systemTemp.path
               : null,
         );
@@ -75,7 +77,8 @@ void main() {
       messenger.setMockMethodCallHandler(
         const MethodChannel('plugins.flutter.io/path_provider'),
         (call) async {
-          if (call.method == 'getTemporaryDirectory') {
+          if (call.method == 'getTemporaryDirectory' ||
+              call.method == 'getApplicationSupportDirectory') {
             return Directory.systemTemp.path;
           }
           return null;
@@ -187,7 +190,8 @@ void main() {
       messenger.setMockMethodCallHandler(
         const MethodChannel('plugins.flutter.io/path_provider'),
         (call) async {
-          if (call.method == 'getTemporaryDirectory') {
+          if (call.method == 'getTemporaryDirectory' ||
+              call.method == 'getApplicationSupportDirectory') {
             return Directory.systemTemp.path;
           }
           return null;

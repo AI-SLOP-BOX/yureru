@@ -10,7 +10,8 @@ import '../../platform/keyboard_shortcuts.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/app_svg_icon.dart';
-import 'home_screen.dart';
+import '../widgets/page_header.dart';
+import '../widgets/semantics_safe_slider.dart';
 import 'imported_media_screen.dart';
 import 'settings_library_screen.dart';
 
@@ -26,6 +27,100 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // with the category controls when they want a focused section.
   String? _section;
   bool _ambientExpanded = false;
+  final ScrollController _mobileCategoryController = ScrollController();
+  final GlobalKey _categoryViewportKey = GlobalKey();
+  final Map<String, GlobalKey> _categoryKeys = {};
+  List<String> _categoryOrder = const [];
+  int _pendingCategorySteps = 0;
+  bool _isScrollingCategories = false;
+  bool _canScrollCategoriesRight = false;
+  bool _canScrollCategoriesLeft = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _mobileCategoryController.addListener(_updateCategoryScrollAffordance);
+  }
+
+  @override
+  void dispose() {
+    _mobileCategoryController
+      ..removeListener(_updateCategoryScrollAffordance)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _updateCategoryScrollAffordance() {
+    if (!_mobileCategoryController.hasClients) return;
+    final position = _mobileCategoryController.position;
+    final canScrollRight = position.extentAfter > 2;
+    final canScrollLeft = position.extentBefore > 2;
+    if ((canScrollRight != _canScrollCategoriesRight ||
+            canScrollLeft != _canScrollCategoriesLeft) &&
+        mounted) {
+      setState(() {
+        _canScrollCategoriesRight = canScrollRight;
+        _canScrollCategoriesLeft = canScrollLeft;
+      });
+    }
+  }
+
+  Future<void> _scrollCategories(bool forward) async {
+    _pendingCategorySteps += forward ? 1 : -1;
+    if (_isScrollingCategories) return;
+    _isScrollingCategories = true;
+    try {
+      while (_pendingCategorySteps != 0 && mounted) {
+        final step = _pendingCategorySteps.sign;
+        _pendingCategorySteps -= step;
+        await _scrollOneCategory(step > 0);
+      }
+    } finally {
+      _isScrollingCategories = false;
+    }
+  }
+
+  Future<void> _scrollOneCategory(bool forward) async {
+    if (!_mobileCategoryController.hasClients) return;
+    final viewport = _categoryViewportKey.currentContext?.findRenderObject();
+    if (viewport is! RenderBox || !viewport.hasSize) return;
+    final viewportLeft = viewport.localToGlobal(Offset.zero).dx;
+    final items = <({int index, double left, double right})>[];
+    for (var index = 0; index < _categoryOrder.length; index++) {
+      final renderObject = _categoryKeys[_categoryOrder[index]]?.currentContext
+          ?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.hasSize) continue;
+      final left = renderObject.localToGlobal(Offset.zero).dx;
+      items.add((
+        index: index,
+        left: left,
+        right: left + renderObject.size.width,
+      ));
+    }
+    final anchor = items.indexWhere((item) => item.right > viewportLeft + 1);
+    if (anchor < 0) return;
+    final targetIndex = forward ? anchor + 1 : anchor - 1;
+    if (targetIndex < 0 || targetIndex >= _categoryOrder.length) return;
+    ({int index, double left, double right})? targetItem;
+    for (final item in items) {
+      if (item.index == targetIndex) {
+        targetItem = item;
+        break;
+      }
+    }
+    if (targetItem == null) return;
+    final position = _mobileCategoryController.position;
+    final target = (position.pixels + targetItem.left - viewportLeft).clamp(
+      0.0,
+      position.maxScrollExtent,
+    );
+    if ((target - position.pixels).abs() < 1) return;
+    await _mobileCategoryController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
 
   Future<void> _editShortcut(AppShortcutAction action) async {
     await showDialog<void>(
@@ -102,11 +197,46 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final ambientGeometry = ref.watch(ambientGeometryProvider);
     final ambientFrameRate = ref.watch(ambientFrameRateProvider);
     final themeMode = ref.watch(themeModeProvider);
+    final imagePriorities = ref.watch(mediaImagePriorityProvider);
     final language = ref.watch(languageProvider);
-    final normalization = ref.watch(audioSettingsProvider);
-    final supportsNormalization = ref
-        .watch(engineProvider)
-        .supportsVolumeNormalization;
+    Widget imagePrioritySelector(String title, MediaImageContext screen) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(title, style: Theme.of(context).textTheme.labelLarge),
+            ),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<MediaImagePriority>(
+                showSelectedIcon: false,
+                segments: [
+                  ButtonSegment(
+                    value: MediaImagePriority.artworkFirst,
+                    label: Text(ref.tr('image_priority_artwork')),
+                  ),
+                  ButtonSegment(
+                    value: MediaImagePriority.thumbnailFirst,
+                    label: Text(ref.tr('image_priority_thumbnail')),
+                  ),
+                ],
+                selected: {
+                  imagePriorities[screen] ??
+                      defaultMediaImagePriorities[screen]!,
+                },
+                onSelectionChanged: (selection) => ref
+                    .read(mediaImagePriorityProvider.notifier)
+                    .setPriority(screen, selection.first),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     final groups = <_SettingsGroup>[
       _SettingsGroup(
         id: 'settings_import',
@@ -218,6 +348,48 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         .read(themeModeProvider.notifier)
                         .setThemeMode(selection.first),
                   ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.image_outlined, size: 20),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            ref.tr('image_display_priority'),
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          Text(
+                            ref.tr('image_display_priority_desc'),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                imagePrioritySelector(
+                  ref.tr('image_priority_home'),
+                  MediaImageContext.home,
+                ),
+                imagePrioritySelector(
+                  ref.tr('image_priority_playlists'),
+                  MediaImageContext.playlist,
+                ),
+                imagePrioritySelector(
+                  ref.tr('image_priority_albums'),
+                  MediaImageContext.album,
                 ),
               ],
             ),
@@ -383,32 +555,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ],
       ),
       _SettingsGroup(
-        id: 'settings_audio',
-        icon: 'volume_normalization',
-        description: ref.tr('settings_audio_hint'),
-        title: ref.tr('settings_audio'),
-        children: [
-          SwitchListTile(
-            key: const ValueKey('volume-normalization'),
-            secondary: const AppSvgIcon('volume_normalization'),
-            title: Text(ref.tr('volume_normalization')),
-            subtitle: Text(
-              ref.tr(
-                !supportsNormalization
-                    ? 'normalization_unsupported'
-                    : normalization.hasError
-                    ? 'normalization_failed'
-                    : 'normalization_desc',
-              ),
-            ),
-            value: normalization.valueOrNull ?? false,
-            onChanged: supportsNormalization && !normalization.isLoading
-                ? ref.read(audioSettingsProvider.notifier).setEnabled
-                : null,
-          ),
-        ],
-      ),
-      _SettingsGroup(
         id: 'settings_library',
         icon: 'settings_folder',
         description: ref.tr('settings_library_hint'),
@@ -529,10 +675,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final visible = groups.where(
       (group) => _section == null || group.id == _section,
     );
+    _categoryOrder = ['__settings_all__', for (final group in groups) group.id];
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 900;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _updateCategoryScrollAffordance();
+        });
         final content = Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
@@ -610,13 +760,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           );
         }
 
-        Widget mobileSectionChip(String? id, String title) => ChoiceChip(
-          key: ValueKey('settings-category-${id ?? 'all'}'),
-          labelPadding: const EdgeInsets.symmetric(horizontal: 4),
-          label: Text(title),
-          selected: _section == id,
-          showCheckmark: false,
-          onSelected: (_) => selectSection(id),
+        Widget mobileSectionChip(String? id, String title) => KeyedSubtree(
+          key: _categoryKeys.putIfAbsent(
+            id ?? '__settings_all__',
+            GlobalKey.new,
+          ),
+          child: ChoiceChip(
+            key: ValueKey('settings-category-${id ?? 'all'}'),
+            labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+            label: Text(title),
+            selected: _section == id,
+            showCheckmark: false,
+            onSelected: (_) => selectSection(id),
+          ),
         );
 
         return Column(
@@ -656,20 +812,57 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     )
                   : Column(
                       children: [
-                        SizedBox(
-                          height: 48,
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Row(
-                              children: [
-                                mobileSectionChip(null, ref.tr('settings_all')),
-                                for (final group in groups) ...[
-                                  const SizedBox(width: 8),
-                                  mobileSectionChip(group.id, group.title),
-                                ],
-                              ],
-                            ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 8, 8),
+                          child: Row(
+                            children: [
+                              if (_canScrollCategoriesLeft)
+                                IconButton(
+                                  key: const ValueKey(
+                                    'settings-category-scroll-left',
+                                  ),
+                                  tooltip: '←',
+                                  visualDensity: VisualDensity.compact,
+                                  icon: const Icon(Icons.arrow_back_rounded),
+                                  onPressed: () => _scrollCategories(false),
+                                )
+                              else
+                                const SizedBox(width: 40),
+                              Expanded(
+                                child: SingleChildScrollView(
+                                  key: _categoryViewportKey,
+                                  controller: _mobileCategoryController,
+                                  scrollDirection: Axis.horizontal,
+                                  physics: const BouncingScrollPhysics(),
+                                  child: Row(
+                                    children: [
+                                      mobileSectionChip(
+                                        null,
+                                        ref.tr('settings_all'),
+                                      ),
+                                      for (final group in groups) ...[
+                                        const SizedBox(width: 8),
+                                        mobileSectionChip(
+                                          group.id,
+                                          group.title,
+                                        ),
+                                      ],
+                                      const SizedBox(width: 12),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (_canScrollCategoriesRight)
+                                IconButton(
+                                  key: const ValueKey(
+                                    'settings-category-scroll-right',
+                                  ),
+                                  tooltip: '→',
+                                  visualDensity: VisualDensity.compact,
+                                  icon: const Icon(Icons.arrow_forward_rounded),
+                                  onPressed: () => _scrollCategories(true),
+                                ),
+                            ],
                           ),
                         ),
                         Expanded(child: content),
@@ -723,14 +916,16 @@ class _AmbientSettingSlider extends StatelessWidget {
             ),
           ],
         ),
-        Slider(
-          value: value,
-          min: min,
-          max: max,
-          divisions: 10,
-          label: '${(value * 100).round()}%',
-          onChanged: enabled ? onChanged : null,
-          onChangeEnd: enabled ? (_) => onCommit() : null,
+        semanticsSafeSlider(
+          Slider(
+            value: value,
+            min: min,
+            max: max,
+            divisions: 10,
+            label: '${(value * 100).round()}%',
+            onChanged: enabled ? onChanged : null,
+            onChangeEnd: enabled ? (_) => onCommit() : null,
+          ),
         ),
       ],
     ),

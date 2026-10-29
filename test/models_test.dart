@@ -31,6 +31,7 @@ void main() {
       sourceFolderId: 'folder',
       sourcePath: '/source.mp3',
       artworkPath: '/art.jpg',
+      thumbnailPath: '/thumb.jpg',
       lyricsPath: '/lyrics.lrc',
       lyricsOffsetMs: 50,
     );
@@ -46,6 +47,7 @@ void main() {
       sourceFolderId: null,
       sourcePath: null,
       artworkPath: null,
+      thumbnailPath: null,
       lyricsPath: null,
       lyricsOffsetMs: 0,
     );
@@ -56,10 +58,13 @@ void main() {
       'sourceFolderId': null,
       'sourcePath': null,
       'artworkPath': null,
+      'thumbnailPath': null,
       'lyricsPath': null,
       'lyricsOffsetMs': 0,
     });
     expect(item.artist, 'Artist');
+    expect(item.preferredImagePath, '/art.jpg');
+    expect(item.copyWith(artworkPath: null).preferredImagePath, '/thumb.jpg');
   });
 
   test(

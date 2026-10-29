@@ -22,6 +22,8 @@ class ThumbImage extends ConsumerStatefulWidget {
   /// When true, fills the parent instead of using [size] (e.g. card hero).
   final bool expand;
   final bool highRes;
+  final bool useArtwork;
+  final MediaImageContext? imageContext;
 
   const ThumbImage({
     super.key,
@@ -32,6 +34,8 @@ class ThumbImage extends ConsumerStatefulWidget {
     this.radius = 8,
     this.expand = false,
     this.highRes = false,
+    this.useArtwork = true,
+    this.imageContext,
   });
 
   @override
@@ -76,12 +80,23 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
   @override
   Widget build(BuildContext context) {
     final f = _future;
-    final artworkPath = widget.mediaId == null
+    final priorities = ref.watch(mediaImagePriorityProvider);
+    final priority = widget.imageContext == null
+        ? null
+        : priorities[widget.imageContext!];
+    final preferArtwork = priority == null
+        ? widget.useArtwork
+        : priority == MediaImagePriority.artworkFirst;
+    final imagePath = widget.mediaId == null
         ? null
         : ref.watch(
-            libraryProvider.select(
-              (lib) => lib.byId(widget.mediaId!)?.artworkPath,
-            ),
+            libraryProvider.select((lib) {
+              final media = lib.byId(widget.mediaId!);
+              if (media == null) return null;
+              return preferArtwork
+                  ? media.artworkPath ?? media.thumbnailPath
+                  : media.thumbnailPath;
+            }),
           );
     final fallback = ThumbBox(
       seed: widget.seed,
@@ -89,12 +104,9 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
       radius: widget.radius,
       expand: widget.expand,
     );
-    if (f == null) {
-      return fallback;
-    }
-    if (artworkPath != null) {
+    if (imagePath != null) {
       final art = Image.file(
-        File(artworkPath),
+        File(imagePath),
         fit: BoxFit.cover,
         errorBuilder: (_, _, _) => fallback,
       );
@@ -104,6 +116,9 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
             ? SizedBox.expand(child: art)
             : SizedBox(width: widget.size, height: widget.size, child: art),
       );
+    }
+    if (f == null) {
+      return fallback;
     }
     return FutureBuilder<File?>(
       future: f,

@@ -86,7 +86,6 @@ const Map<String, String> ptFeature = {
       "Intensidade, alcance, profundidade e frequência",
   "settings_all": "Tudo",
   "settings_display_hint": "Tema e iluminação de fundo",
-  "settings_audio_hint": "Volume de reprodução mais uniforme",
   "settings_library_hint": "Importações, informações e histórico",
   "settings_app_hint": "Idioma e informações do app",
   'videos_manual_hint': "Mantenha uma faixa pressionada para reordenar",
@@ -161,13 +160,6 @@ const Map<String, String> ptFeature = {
   'favorite_requires_save':
       'Salve na biblioteca antes de adicionar aos favoritos',
 
-  'settings_audio': 'Áudio',
-  'volume_normalization': 'Reduzir diferenças de volume',
-  'normalization_desc':
-      'Ajusta o volume automaticamente. A dinâmica musical também pode mudar.',
-  'normalization_unsupported': 'Indisponível neste mecanismo de reprodução.',
-  'normalization_failed': 'Não foi possível aplicar o ajuste. Tente novamente.',
-
   'volume': 'Volume',
   'immersive': 'Modo imersivo',
   'exit_immersive': 'Sair do modo imersivo',
@@ -190,12 +182,24 @@ const Map<String, String> ptFeature = {
   'lyrics_timing_hint': '+ atrasa e − adianta a letra. Exemplo: −1.25',
   'artwork': 'Imagem',
   'choose_artwork': 'Escolher imagem',
+  'image_priority_hint':
+      'A capa é exibida quando definida; caso contrário, usa-se a miniatura.',
   'clear_artwork': 'Remover imagem selecionada',
   'cancel': 'Cancelar',
   'save': 'Salvar',
   'invalid_lyrics_timing':
       'Informe segundos ou minutos:segundos para sincronizar a letra',
   'artwork_save_error': 'Não foi possível salvar a imagem: {error}',
+  'image_display_priority': 'Prioridade da imagem',
+  'image_display_priority_desc':
+      'Escolha qual imagem priorizar em todo o aplicativo',
+  'image_priority_by_screen': 'Por tela',
+  'image_priority_artwork': 'Capa',
+  'image_priority_thumbnail': 'Miniatura',
+  'image_priority_home': 'Início',
+  'image_priority_playlists': 'Playlists',
+  'image_priority_albums': 'Álbuns',
+
   'settings_display': 'Exibição',
   'theme': 'Tema',
   'theme_desc': 'Claro, escuro ou seguir o sistema',
@@ -255,6 +259,7 @@ const Map<String, String> ptScreen = {
   'add_queue': 'Adicionar à fila',
   'add_playlist': 'Adicionar à playlist',
   'change_thumbnail': 'Alterar miniatura',
+  'thumbnail_label': 'Miniatura',
   'delete_from_library': 'Remover da biblioteca',
   'menu': 'Menu',
   'remove_from_queue': 'Remover da fila',

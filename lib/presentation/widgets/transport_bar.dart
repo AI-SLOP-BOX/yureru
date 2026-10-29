@@ -10,6 +10,7 @@ import '../../playback/playback_controller.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import 'playback_options.dart';
+import 'semantics_safe_slider.dart';
 import 'frosted_panel.dart';
 import 'transport_icon.dart';
 import 'thumb_image.dart';
@@ -38,6 +39,56 @@ class TransportBar extends ConsumerStatefulWidget {
 
 class _TransportBarState extends ConsumerState<TransportBar> {
   bool _volumeHover = false;
+
+  Future<void> _playNextWithFeedback(
+    WidgetRef ref,
+    PlaybackController controller,
+  ) async {
+    final queue = ref.read(queueProvider);
+    if (!queue.hasCurrent) return;
+    final nextIndex = (queue.index + 1) % queue.queue.length;
+    final nextId = queue.queue[nextIndex];
+    await controller.playNext();
+    if (!mounted) return;
+    final media = ref.read(libraryProvider).byId(nextId);
+    if (media == null) return;
+    final compactWidth = MediaQuery.sizeOf(context).width >= 400 ? 340.0 : null;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          width: compactWidth,
+          margin: compactWidth == null
+              ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)
+              : null,
+          duration: const Duration(milliseconds: 1200),
+          elevation: 4,
+          backgroundColor: themeCard(context),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          content: Row(
+            children: [
+              Icon(
+                Icons.skip_next_rounded,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${ref.tr('next_video')}: ${displayTitle(media.title)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: themeTextPrimary(context)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -386,7 +437,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
             color: has ? arrowIconColor : disabledIconColor,
           ),
           color: has ? arrowIconColor : disabledIconColor,
-          onPressed: has ? () => ctl.playNext() : null,
+          onPressed: has ? () => _playNextWithFeedback(ref, ctl) : null,
         ),
         PlaybackRepeatButton(
           activeColor: arrowIconColor,
@@ -444,9 +495,11 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                         : Colors.black12,
                     thumbColor: isDark ? kTextPrimary : const Color(0xFF2B2B2B),
                   ),
-                  child: Slider(
-                    value: volume.clamp(0.0, 1.0),
-                    onChanged: (v) => unawaited(playback.setVolume(v)),
+                  child: semanticsSafeSlider(
+                    Slider(
+                      value: volume.clamp(0.0, 1.0),
+                      onChanged: (v) => unawaited(playback.setVolume(v)),
+                    ),
                   ),
                 ),
               ),
@@ -680,43 +733,45 @@ class _TimelineBarState extends ConsumerState<_TimelineBar> {
                     }.contains(event.logicalKey)
                     ? KeyEventResult.handled
                     : KeyEventResult.ignored,
-                child: Slider(
-                  // While browsing, arrows belong to the library/video list.
-                  // The persistent seekbar must not become the next focus
-                  // target at the end of a list and consume those keys.
-                  value: dur.inMilliseconds == 0
-                      ? 0
-                      : displayPos.inMilliseconds
-                            .clamp(0, dur.inMilliseconds)
-                            .toDouble(),
-                  max: (dur.inMilliseconds <= 0 ? 1 : dur.inMilliseconds)
-                      .toDouble(),
-                  onChangeStart: has
-                      ? (v) {
-                          setState(() {
-                            _isDragging = true;
-                            _draggedMs = v;
-                          });
-                        }
-                      : null,
-                  onChanged: has
-                      ? (v) {
-                          setState(() {
-                            _draggedMs = v;
-                          });
-                        }
-                      : null,
-                  onChangeEnd: has
-                      ? (v) async {
-                          _draggedMs = v;
-                          await ctl.seekTo(Duration(milliseconds: v.toInt()));
-                          if (mounted) {
+                child: semanticsSafeSlider(
+                  Slider(
+                    // While browsing, arrows belong to the library/video list.
+                    // The persistent seekbar must not become the next focus
+                    // target at the end of a list and consume those keys.
+                    value: dur.inMilliseconds == 0
+                        ? 0
+                        : displayPos.inMilliseconds
+                              .clamp(0, dur.inMilliseconds)
+                              .toDouble(),
+                    max: (dur.inMilliseconds <= 0 ? 1 : dur.inMilliseconds)
+                        .toDouble(),
+                    onChangeStart: has
+                        ? (v) {
                             setState(() {
-                              _isDragging = false;
+                              _isDragging = true;
+                              _draggedMs = v;
                             });
                           }
-                        }
-                      : null,
+                        : null,
+                    onChanged: has
+                        ? (v) {
+                            setState(() {
+                              _draggedMs = v;
+                            });
+                          }
+                        : null,
+                    onChangeEnd: has
+                        ? (v) async {
+                            _draggedMs = v;
+                            await ctl.seekTo(Duration(milliseconds: v.toInt()));
+                            if (mounted) {
+                              setState(() {
+                                _isDragging = false;
+                              });
+                            }
+                          }
+                        : null,
+                  ),
                 ),
               ),
             ),

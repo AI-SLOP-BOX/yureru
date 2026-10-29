@@ -109,14 +109,6 @@ class FakePlaybackEngine implements PlaybackEngine {
 
   @override
   double get volume => vol;
-  bool normalizationEnabled = false;
-  @override
-  bool get supportsVolumeNormalization => true;
-  @override
-  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
-    normalizationEnabled = enabled;
-  }
-
   bool videoTrackEnabled = true;
   @override
   Future<void> setVideoTrackEnabled(bool enabled) async {

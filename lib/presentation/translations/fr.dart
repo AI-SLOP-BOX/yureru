@@ -87,7 +87,6 @@ const Map<String, String> frFeature = {
       "Intensité, étendue, profondeur et fréquence",
   "settings_all": "Tout",
   "settings_display_hint": "Thème et éclairage de fond",
-  "settings_audio_hint": "Un volume d’écoute plus uniforme",
   "settings_library_hint": "Imports, informations et historique",
   "settings_app_hint": "Langue et informations de l’application",
   'videos_manual_hint': "Maintenez un morceau appuyé pour le déplacer",
@@ -164,13 +163,6 @@ const Map<String, String> frFeature = {
   'favorite_requires_save':
       'Enregistrez dans la bibliothèque avant de mettre en favori',
 
-  'settings_audio': 'Audio',
-  'volume_normalization': 'Réduire les écarts de volume',
-  'normalization_desc':
-      'Ajuste automatiquement le volume. La dynamique musicale peut aussi changer.',
-  'normalization_unsupported': 'Indisponible avec ce moteur de lecture.',
-  'normalization_failed': 'Impossible de traiter le son. Réessayez.',
-
   'volume': 'Volume',
   'immersive': 'Mode immersif',
   'exit_immersive': 'Quitter le mode immersif',
@@ -193,12 +185,24 @@ const Map<String, String> frFeature = {
   'lyrics_timing_hint': '+ retarde et − avance les paroles. Exemple : −1.25',
   'artwork': 'Image',
   'choose_artwork': 'Choisir une image',
+  'image_priority_hint':
+      'La pochette est affichée si elle existe, sinon la miniature.',
   'clear_artwork': 'Supprimer l’image sélectionnée',
   'cancel': 'Annuler',
   'save': 'Enregistrer',
   'invalid_lyrics_timing':
       'Saisissez des secondes ou minutes:secondes pour le décalage',
   'artwork_save_error': 'Impossible d’enregistrer l’image : {error}',
+  'image_display_priority': "Priorité de l’image",
+  'image_display_priority_desc':
+      'Choisissez quelle image privilégier dans toute l’application',
+  'image_priority_by_screen': 'Selon l’écran',
+  'image_priority_artwork': 'Pochette',
+  'image_priority_thumbnail': 'Miniature',
+  'image_priority_home': 'Accueil',
+  'image_priority_playlists': 'Listes de lecture',
+  'image_priority_albums': 'Albums',
+
   'settings_display': 'Affichage',
   'theme': 'Thème',
   'theme_desc': 'Clair, sombre ou selon le système',
@@ -258,6 +262,7 @@ const Map<String, String> frScreen = {
   'add_queue': 'Ajouter à la file',
   'add_playlist': 'Ajouter à la playlist',
   'change_thumbnail': 'Modifier la miniature',
+  'thumbnail_label': 'Miniature',
   'delete_from_library': 'Retirer de la bibliothèque',
   'menu': 'Menu',
   'remove_from_queue': 'Retirer de la file',

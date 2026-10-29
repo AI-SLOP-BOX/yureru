@@ -222,6 +222,18 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     }
   }
 
+  Future<void> updateMediaThumbnail(String id, String? path) async {
+    final current = state.byId(id);
+    if (current == null || current.thumbnailPath == path) return;
+    await _updateMedia(id, (item) => item.copyWith(thumbnailPath: path));
+    final oldPath = current.thumbnailPath;
+    if (oldPath != null && oldPath.contains('yureru_thumbnails')) {
+      try {
+        await File(oldPath).delete();
+      } catch (_) {}
+    }
+  }
+
   Future<void> updateMediaLyrics(String id, String? path) async {
     final current = state.byId(id);
     if (current == null || current.lyricsPath == path) return;
@@ -258,6 +270,12 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       if (art != null && art.contains('yureru_artwork')) {
         try {
           await File(art).delete();
+        } catch (_) {}
+      }
+      final thumbnail = r.thumbnailPath;
+      if (thumbnail != null && thumbnail.contains('yureru_thumbnails')) {
+        try {
+          await File(thumbnail).delete();
         } catch (_) {}
       }
     }

@@ -19,22 +19,6 @@ class _StreamingEngine extends FakePlaybackEngine {
 }
 
 void main() {
-  test('iOS normalization uses the mpv fallback when enabled', () async {
-    final backend = FakePlaybackEngine();
-    final engine = IosPlaybackEngine(fallbackFactory: () => backend);
-
-    expect(engine.supportsVolumeNormalization, isTrue);
-    await engine.setVolumeNormalizationEnabled(true);
-    await engine.load(
-      const PlaybackSource(mediaId: 'audio', uri: '/test/audio.webm'),
-    );
-    expect(backend.normalizationEnabled, isTrue);
-
-    await engine.setVolumeNormalizationEnabled(false);
-    expect(backend.normalizationEnabled, isFalse);
-    await engine.dispose();
-  });
-
   test(
     'existing iOS subscribers receive fallback updates across loads',
     () async {

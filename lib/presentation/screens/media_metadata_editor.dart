@@ -9,6 +9,7 @@ import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../i18n.dart';
 import '../theme.dart';
+import '../widgets/lyrics_editor_dialog.dart';
 import '../widgets/metadata_fields.dart';
 
 Future<void> showMediaMetadataEditor(
@@ -36,6 +37,9 @@ Future<void> showMediaMetadataEditor(
   );
   String? selectedArtworkPath;
   var clearArtwork = false;
+  String? selectedThumbnailPath;
+  var clearThumbnail = false;
+  var editLyricsAfterClose = false;
   DialogRoute<bool>? dialogRoute;
   try {
     dialogRoute = DialogRoute<bool>(
@@ -138,74 +142,142 @@ Future<void> showMediaMetadataEditor(
                       tr('lyrics_timing_hint'),
                       style: TextStyle(color: subtle, fontSize: 11),
                     ),
-                    const SizedBox(height: 18),
-                    Text(
-                      tr('artwork'),
-                      style: TextStyle(
-                        color: subtle,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                    if (media.lyricsPath != null) ...[
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            editLyricsAfterClose = true;
+                            Navigator.pop(dialogContext, false);
+                          },
+                          icon: const Icon(Icons.edit_note_rounded),
+                          label: Text(tr('lyrics_editor_title')),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
+                    ],
+                    const SizedBox(height: 18),
                     StatefulBuilder(
                       builder: (context, setDialogState) {
-                        final previewPath = clearArtwork
-                            ? null
-                            : (selectedArtworkPath ?? media.artworkPath);
-                        return Row(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: SizedBox(
-                                width: 56,
-                                height: 56,
-                                child: previewPath == null
-                                    ? const ColoredBox(
-                                        color: Color(0x22000000),
-                                        child: Icon(Icons.music_note_rounded),
-                                      )
-                                    : Image.file(
-                                        File(previewPath),
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, _, _) => const Icon(
-                                          Icons.broken_image_outlined,
-                                        ),
-                                      ),
+                        Widget imageSelector({
+                          required String label,
+                          required String? existingPath,
+                          required String? selectedPath,
+                          required bool cleared,
+                          required IconData icon,
+                          required ValueChanged<String> onChoose,
+                          required VoidCallback onClear,
+                        }) {
+                          final previewPath = cleared
+                              ? null
+                              : (selectedPath ?? existingPath);
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                label,
+                                style: TextStyle(
+                                  color: subtle,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            OutlinedButton.icon(
-                              icon: const Icon(Icons.image_outlined),
-                              label: Text(tr('choose_artwork')),
-                              onPressed: () async {
-                                final result = await FilePicker.platform
-                                    .pickFiles(
-                                      type: FileType.image,
-                                      allowMultiple: false,
-                                      withData: false,
-                                    );
-                                final path = result?.files.single.path;
-                                if (path != null) {
-                                  setDialogState(() {
-                                    selectedArtworkPath = path;
-                                    clearArtwork = false;
-                                  });
-                                }
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: SizedBox(
+                                      width: 56,
+                                      height: 56,
+                                      child: previewPath == null
+                                          ? ColoredBox(
+                                              color: const Color(0x22000000),
+                                              child: Icon(icon),
+                                            )
+                                          : Image.file(
+                                              File(previewPath),
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (_, _, _) =>
+                                                  const Icon(
+                                                    Icons.broken_image_outlined,
+                                                  ),
+                                            ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  OutlinedButton.icon(
+                                    icon: Icon(icon),
+                                    label: Text(tr('choose_artwork')),
+                                    onPressed: () async {
+                                      final result = await FilePicker.platform
+                                          .pickFiles(
+                                            type: FileType.image,
+                                            allowMultiple: false,
+                                            withData: false,
+                                          );
+                                      final path = result?.files.single.path;
+                                      if (path != null) {
+                                        setDialogState(() => onChoose(path));
+                                      }
+                                    },
+                                  ),
+                                  if (previewPath != null)
+                                    IconButton(
+                                      tooltip: tr('clear_artwork'),
+                                      icon: const Icon(
+                                        Icons.delete_outline_rounded,
+                                      ),
+                                      onPressed: () => setDialogState(onClear),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          );
+                        }
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            imageSelector(
+                              label: tr('artwork'),
+                              existingPath: media.artworkPath,
+                              selectedPath: selectedArtworkPath,
+                              cleared: clearArtwork,
+                              icon: Icons.album_outlined,
+                              onChoose: (path) {
+                                selectedArtworkPath = path;
+                                clearArtwork = false;
+                              },
+                              onClear: () {
+                                selectedArtworkPath = null;
+                                clearArtwork = true;
                               },
                             ),
-                            if (previewPath != null)
-                              IconButton(
-                                tooltip: tr('clear_artwork'),
-                                icon: const Icon(Icons.delete_outline_rounded),
-                                onPressed: () => setDialogState(() {
-                                  selectedArtworkPath = null;
-                                  clearArtwork = true;
-                                }),
-                              ),
+                            const SizedBox(height: 16),
+                            imageSelector(
+                              label: tr('thumbnail_label'),
+                              existingPath: media.thumbnailPath,
+                              selectedPath: selectedThumbnailPath,
+                              cleared: clearThumbnail,
+                              icon: Icons.image_outlined,
+                              onChoose: (path) {
+                                selectedThumbnailPath = path;
+                                clearThumbnail = false;
+                              },
+                              onClear: () {
+                                selectedThumbnailPath = null;
+                                clearThumbnail = true;
+                              },
+                            ),
                           ],
                         );
                       },
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      tr('image_priority_hint'),
+                      style: TextStyle(color: subtle, fontSize: 11),
                     ),
                     const SizedBox(height: 24),
                     Row(
@@ -288,6 +360,11 @@ Future<void> showMediaMetadataEditor(
       context,
       rootNavigator: true,
     ).push(dialogRoute);
+    if (editLyricsAfterClose) {
+      await dialogRoute.completed;
+      if (context.mounted) await _showLyricsEditor(context, ref, media);
+      return;
+    }
     if (save != true || !context.mounted) return;
     final offsetMs = _parseLyricsOffset(lyricsOffsetController.text);
     if (offsetMs == null) {
@@ -353,6 +430,34 @@ Future<void> showMediaMetadataEditor(
     await ref
         .read(libraryProvider.notifier)
         .updateMediaArtwork(media.id, artworkPath);
+    String? thumbnailPath = media.thumbnailPath;
+    if (selectedThumbnailPath != null) {
+      try {
+        final dir = await getApplicationSupportDirectory();
+        final thumbnailDir = Directory('${dir.path}/yureru_thumbnails');
+        await thumbnailDir.create(recursive: true);
+        final ext = selectedThumbnailPath!.split('.').last.toLowerCase();
+        final destination =
+            '${thumbnailDir.path}/${media.id}_${DateTime.now().microsecondsSinceEpoch}.$ext';
+        await File(selectedThumbnailPath!).copy(destination);
+        thumbnailPath = destination;
+      } catch (error) {
+        if (context.mounted) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                tr('thumbnail_change_failed').replaceAll('{error}', '$error'),
+              ),
+            ),
+          );
+        }
+      }
+    } else if (clearThumbnail) {
+      thumbnailPath = null;
+    }
+    await ref
+        .read(libraryProvider.notifier)
+        .updateMediaThumbnail(media.id, thumbnailPath);
     await ref
         .read(libraryProvider.notifier)
         .updateMediaLyricsOffset(media.id, offsetMs);
@@ -367,6 +472,34 @@ Future<void> showMediaMetadataEditor(
     discController.dispose();
     lyricsOffsetController.dispose();
   }
+}
+
+Future<void> _showLyricsEditor(
+  BuildContext context,
+  WidgetRef ref,
+  MediaItem media,
+) async {
+  final path = media.lyricsPath;
+  if (path == null) return;
+  String initialText = '';
+  try {
+    initialText = await File(path).readAsString();
+  } catch (_) {
+    // Keep the editor available so the user can replace a missing lyrics file.
+  }
+  if (!context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (_) => LyricsEditorDialog(
+      media: media,
+      engine: ref.read(engineProvider),
+      initialText: initialText,
+      initialSynchronized: path.toLowerCase().endsWith('.lrc'),
+      onSaved: (newPath) => ref
+          .read(libraryProvider.notifier)
+          .updateMediaLyrics(media.id, newPath),
+    ),
+  );
 }
 
 String _formatLyricsOffset(int milliseconds) =>

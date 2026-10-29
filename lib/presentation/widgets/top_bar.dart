@@ -344,16 +344,13 @@ class _TopBarState extends ConsumerState<TopBar> {
                 // Center Search Area: either collapsed icon or prominent search pill
                 if (collapseSearchField) ...[
                   IconButton(
-                    tooltip: ref.tr('search'),
+                    tooltip: ref.tr('global_search_tip'),
                     icon: Icon(
                       Icons.search_rounded,
                       size: 22,
                       color: iconColor,
                     ),
-                    onPressed: () {
-                      setState(() => _showExpandedSearchOnVeryCompact = true);
-                      _searchFocusNode.requestFocus();
-                    },
+                    onPressed: widget.onOpenSearch,
                   ),
                   const Spacer(),
                 ] else ...[
@@ -481,7 +478,20 @@ class _TopBarState extends ConsumerState<TopBar> {
                                           );
                                         }
                                         if (isCompact) {
-                                          return const SizedBox.shrink();
+                                          return IconButton(
+                                            tooltip: ref.tr(
+                                              'global_search_tip',
+                                            ),
+                                            splashRadius: 18,
+                                            icon: Icon(
+                                              Icons.manage_search_rounded,
+                                              size: 17,
+                                              color: isDark
+                                                  ? kTextSub
+                                                  : Colors.black54,
+                                            ),
+                                            onPressed: widget.onOpenSearch,
+                                          );
                                         }
                                         return Padding(
                                           padding: const EdgeInsets.only(

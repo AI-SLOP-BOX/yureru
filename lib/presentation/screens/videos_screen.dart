@@ -14,8 +14,8 @@ import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/duration_text.dart';
 import '../widgets/app_svg_icon.dart';
+import '../widgets/page_header.dart';
 import '../widgets/thumb_image.dart';
-import 'home_screen.dart';
 
 bool _sharesCreator(String? mediaCredit, String selectedCredit) {
   final selectedNames = splitCreatorNames(
@@ -440,6 +440,7 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
         },
         onEnqueue: () => ref.read(queueProvider.notifier).append(m.id),
         onChangeThumbnail: () => _changeThumbnail(context, ref, m),
+        onChangeArtwork: () => _changeArtwork(context, ref, m),
         onDelete: () => _confirmDelete(context, ref, m),
       ),
     );
@@ -454,7 +455,20 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
     BuildContext context,
     WidgetRef ref,
     MediaItem media,
-  ) async {
+  ) => _chooseAndSaveImage(context, ref, media, artwork: false);
+
+  Future<void> _changeArtwork(
+    BuildContext context,
+    WidgetRef ref,
+    MediaItem media,
+  ) => _chooseAndSaveImage(context, ref, media, artwork: true);
+
+  Future<void> _chooseAndSaveImage(
+    BuildContext context,
+    WidgetRef ref,
+    MediaItem media, {
+    required bool artwork,
+  }) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
       allowMultiple: false,
@@ -464,17 +478,25 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
     if (sourcePath == null) return;
     try {
       final dir = await getApplicationSupportDirectory();
-      final artworkDir = Directory('${dir.path}/yureru_artwork');
-      await artworkDir.create(recursive: true);
+      final imageDir = Directory(
+        '${dir.path}/${artwork ? 'yureru_artwork' : 'yureru_thumbnails'}',
+      );
+      await imageDir.create(recursive: true);
       final extension = sourcePath.contains('.')
           ? sourcePath.split('.').last.toLowerCase()
           : 'png';
       final destination =
-          '${artworkDir.path}/${media.id}_${DateTime.now().microsecondsSinceEpoch}.$extension';
+          '${imageDir.path}/${media.id}_${DateTime.now().microsecondsSinceEpoch}.$extension';
       await File(sourcePath).copy(destination);
-      await ref
-          .read(libraryProvider.notifier)
-          .updateMediaArtwork(media.id, destination);
+      if (artwork) {
+        await ref
+            .read(libraryProvider.notifier)
+            .updateMediaArtwork(media.id, destination);
+      } else {
+        await ref
+            .read(libraryProvider.notifier)
+            .updateMediaThumbnail(media.id, destination);
+      }
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -569,6 +591,7 @@ class _TrackRow extends ConsumerStatefulWidget {
   final VoidCallback onPlayNext;
   final VoidCallback onEnqueue;
   final VoidCallback onChangeThumbnail;
+  final VoidCallback onChangeArtwork;
   final VoidCallback onDelete;
 
   const _TrackRow({
@@ -581,6 +604,7 @@ class _TrackRow extends ConsumerStatefulWidget {
     required this.onPlayNext,
     required this.onEnqueue,
     required this.onChangeThumbnail,
+    required this.onChangeArtwork,
     required this.onDelete,
     this.reorderable = false,
   });
@@ -796,6 +820,24 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                           color: isDark ? kTextMuted : Colors.black38,
                         ),
                       ),
+                    IconButton(
+                      key: ValueKey('video-play-next-${widget.media.id}'),
+                      tooltip: ref.tr('add_next'),
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(
+                        minWidth: 36,
+                        minHeight: 36,
+                      ),
+                      padding: EdgeInsets.zero,
+                      icon: Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 20,
+                        color: _hover
+                            ? (isDark ? Colors.white : Colors.black87)
+                            : themeTextSub(context),
+                      ),
+                      onPressed: widget.onPlayNext,
+                    ),
                     // Action menu
                     PopupMenuButton<String>(
                       tooltip: ref.tr('menu'),
@@ -813,9 +855,6 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                                 .read(libraryProvider.notifier)
                                 .toggleFavorite(widget.media.id);
                             break;
-                          case 'playNext':
-                            widget.onPlayNext();
-                            break;
                           case 'enqueue':
                             widget.onEnqueue();
                             break;
@@ -824,6 +863,9 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                             break;
                           case 'changeThumbnail':
                             widget.onChangeThumbnail();
+                            break;
+                          case 'changeArtwork':
+                            widget.onChangeArtwork();
                             break;
                           case 'delete':
                             widget.onDelete();
@@ -853,16 +895,6 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                           ),
                         ),
                         PopupMenuItem(
-                          value: 'playNext',
-                          child: Row(
-                            children: [
-                              AppSvgIcon('play_next', size: 20),
-                              SizedBox(width: 10),
-                              Text(ref.tr('add_next')),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
                           value: 'enqueue',
                           child: Row(
                             children: [
@@ -887,9 +919,19 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                           value: 'changeThumbnail',
                           child: Row(
                             children: [
-                              AppSvgIcon('artwork', size: 20),
+                              const Icon(Icons.image_outlined, size: 20),
                               SizedBox(width: 10),
                               Text(ref.tr('change_thumbnail')),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'changeArtwork',
+                          child: Row(
+                            children: [
+                              AppSvgIcon('artwork', size: 20),
+                              SizedBox(width: 10),
+                              Text(ref.tr('artwork')),
                             ],
                           ),
                         ),

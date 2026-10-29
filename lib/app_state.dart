@@ -11,7 +11,6 @@ import 'ambient/ambient_frame_notifier.dart';
 import 'data/store.dart';
 import 'data/importer.dart';
 import 'playback/playback_engine.dart';
-import 'playback/audio_settings.dart';
 import 'playback/media_kit_engine.dart';
 import 'playback/ios_playback_engine.dart';
 
@@ -27,11 +26,6 @@ final importerProvider = Provider((_) => VideoImporter());
 final engineProvider = Provider<PlaybackEngine>(
   (_) => Platform.isIOS ? IosPlaybackEngine() : MediaKitPlaybackEngine(),
 );
-final audioSettingsProvider =
-    StateNotifierProvider<AudioSettingsNotifier, AsyncValue<bool>>(
-      (ref) => AudioSettingsNotifier(ref.watch(engineProvider)),
-    );
-
 final volumeProvider = StateProvider<double>(
   (ref) => ref.read(engineProvider).volume,
 );
@@ -337,6 +331,27 @@ final videosSortProvider = StateProvider<VideosSort>(
   (_) => VideosSort.newestFirst,
 );
 
+/// Playlist collection order. Manual preserves the saved library order.
+enum PlaylistsSort { recentlyPlayed, newestFirst, oldestFirst, name, manual }
+
+final playlistsSortProvider = StateProvider<PlaylistsSort>(
+  (_) => PlaylistsSort.manual,
+);
+
+/// Track order shown inside an individual playlist.
+enum PlaylistContentSort {
+  playlistOrder,
+  recentlyPlayed,
+  newestFirst,
+  oldestFirst,
+  name,
+  creator,
+}
+
+final playlistContentSortProvider = StateProvider<PlaylistContentSort>(
+  (_) => PlaylistContentSort.playlistOrder,
+);
+
 /// Session-only view filter; favorite marks themselves are persisted on media.
 final favoritesOnlyProvider = StateProvider<bool>((_) => false);
 
@@ -410,6 +425,58 @@ final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((
 ) {
   return ThemeModeNotifier();
 });
+
+enum MediaImageContext { home, playlist, album }
+
+enum MediaImagePriority { artworkFirst, thumbnailFirst }
+
+const defaultMediaImagePriorities = <MediaImageContext, MediaImagePriority>{
+  MediaImageContext.home: MediaImagePriority.thumbnailFirst,
+  MediaImageContext.playlist: MediaImagePriority.thumbnailFirst,
+  MediaImageContext.album: MediaImagePriority.artworkFirst,
+};
+
+class MediaImagePriorityNotifier
+    extends StateNotifier<Map<MediaImageContext, MediaImagePriority>> {
+  static const _keyPrefix = 'yureru_media_image_priority_';
+
+  MediaImagePriorityNotifier() : super(defaultMediaImagePriorities) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final next = Map<MediaImageContext, MediaImagePriority>.of(state);
+      for (final context in MediaImageContext.values) {
+        final saved = prefs.getString('$_keyPrefix${context.name}');
+        for (final priority in MediaImagePriority.values) {
+          if (priority.name == saved) next[context] = priority;
+        }
+      }
+      state = next;
+    } catch (_) {}
+  }
+
+  Future<void> setPriority(
+    MediaImageContext context,
+    MediaImagePriority priority,
+  ) async {
+    state = {...state, context: priority};
+    try {
+      await (await SharedPreferences.getInstance()).setString(
+        '$_keyPrefix${context.name}',
+        priority.name,
+      );
+    } catch (_) {}
+  }
+}
+
+final mediaImagePriorityProvider =
+    StateNotifierProvider<
+      MediaImagePriorityNotifier,
+      Map<MediaImageContext, MediaImagePriority>
+    >((_) => MediaImagePriorityNotifier());
 
 /// Video bounds in normalized window coordinates for aligning ambient color
 /// continuation with the actual rendered player size and position.

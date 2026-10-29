@@ -133,6 +133,25 @@ void main() {
   );
 
   test(
+    'thumbnail is used as system artwork when jacket art is absent',
+    () async {
+      final session = create(FakePlaybackEngine(), [], []);
+      addTearDown(session.dispose);
+      update(
+        session,
+        media: MediaItem(
+          id: 'thumbnail-only',
+          title: 'Thumbnail only',
+          localPath: '/track.mp4',
+          thumbnailPath: '/thumb.jpg',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(calls.single.arguments, containsPair('artworkPath', '/thumb.jpg'));
+    },
+  );
+
+  test(
     'OS actions use the existing controller callbacks and clamp seek requests',
     () async {
       final engine = FakePlaybackEngine();

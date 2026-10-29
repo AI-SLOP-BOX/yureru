@@ -30,6 +30,12 @@ class MediaItem {
   /// User-selected artwork, stored in the app's support directory.
   final String? artworkPath;
 
+  /// User-selected thumbnail, stored separately from jacket artwork.
+  final String? thumbnailPath;
+
+  /// Jackets take precedence, then custom thumbnails, then extracted frames.
+  String? get preferredImagePath => artworkPath ?? thumbnailPath;
+
   /// User-selected lyrics file (.lrc or plain text), if available.
   final String? lyricsPath;
 
@@ -53,6 +59,7 @@ class MediaItem {
     this.sourceFolderId,
     this.sourcePath,
     this.artworkPath,
+    this.thumbnailPath,
     this.lyricsPath,
     this.lyricsOffsetMs = 0,
   }) : id = id ?? _uuid.v4(),
@@ -75,6 +82,7 @@ class MediaItem {
     Object? sourceFolderId = _unchanged,
     Object? sourcePath = _unchanged,
     Object? artworkPath = _unchanged,
+    Object? thumbnailPath = _unchanged,
     Object? lyricsPath = _unchanged,
     int? lyricsOffsetMs,
   }) => MediaItem(
@@ -110,6 +118,9 @@ class MediaItem {
     artworkPath: identical(artworkPath, _unchanged)
         ? this.artworkPath
         : artworkPath as String?,
+    thumbnailPath: identical(thumbnailPath, _unchanged)
+        ? this.thumbnailPath
+        : thumbnailPath as String?,
     lyricsPath: identical(lyricsPath, _unchanged)
         ? this.lyricsPath
         : lyricsPath as String?,
@@ -137,6 +148,7 @@ class MediaItem {
     sourceFolderId: j['sourceFolderId'] as String?,
     sourcePath: j['sourcePath'] as String?,
     artworkPath: j['artworkPath'] as String?,
+    thumbnailPath: j['thumbnailPath'] as String?,
     lyricsPath: j['lyricsPath'] as String?,
     lyricsOffsetMs: (j['lyricsOffsetMs'] as num?)?.toInt() ?? 0,
   );
@@ -158,6 +170,7 @@ class MediaItem {
     'sourceFolderId': sourceFolderId,
     'sourcePath': sourcePath,
     'artworkPath': artworkPath,
+    'thumbnailPath': thumbnailPath,
     'lyricsPath': lyricsPath,
     'lyricsOffsetMs': lyricsOffsetMs,
   };

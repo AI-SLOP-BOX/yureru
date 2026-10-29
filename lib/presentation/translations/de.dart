@@ -88,7 +88,6 @@ const Map<String, String> deFeature = {
       "Stärke, Ausdehnung, Tiefe und Aktualisierung",
   "settings_all": "Alle",
   "settings_display_hint": "Design und Hintergrundbeleuchtung",
-  "settings_audio_hint": "Gleichmäßigere Wiedergabelautstärke",
   "settings_library_hint": "Importe, Titelinformationen und Verlauf",
   "settings_app_hint": "Sprache und App-Informationen",
   'videos_manual_hint': "Titel zum Umsortieren gedrückt halten",
@@ -163,14 +162,6 @@ const Map<String, String> deFeature = {
       'Noch keine Favoriten. Über das Titelmenü oder den Player hinzufügen.',
   'favorite_requires_save': 'Vor dem Favorisieren in der Mediathek speichern',
 
-  'settings_audio': 'Audio',
-  'volume_normalization': 'Lautstärkeunterschiede verringern',
-  'normalization_desc':
-      'Passt die Lautstärke automatisch an. Die musikalische Dynamik kann sich ändern.',
-  'normalization_unsupported': 'Mit dieser Wiedergabe-Engine nicht verfügbar.',
-  'normalization_failed':
-      'Audioverarbeitung fehlgeschlagen. Bitte erneut versuchen.',
-
   'volume': 'Lautstärke',
   'immersive': 'Immersiver Modus',
   'exit_immersive': 'Immersiven Modus verlassen',
@@ -194,11 +185,23 @@ const Map<String, String> deFeature = {
       '+ verzögert, − zieht den Liedtext vor. Beispiel: −1.25',
   'artwork': 'Cover',
   'choose_artwork': 'Bild auswählen',
+  'image_priority_hint':
+      'Wenn ein Cover festgelegt ist, wird es angezeigt, sonst das Vorschaubild.',
   'clear_artwork': 'Ausgewähltes Bild entfernen',
   'cancel': 'Abbrechen',
   'save': 'Speichern',
   'invalid_lyrics_timing': 'Versatz in Sekunden oder Minuten:Sekunden eingeben',
   'artwork_save_error': 'Bild konnte nicht gespeichert werden: {error}',
+  'image_display_priority': 'Bildpriorität',
+  'image_display_priority_desc':
+      'Lege fest, welches Bild in der gesamten App bevorzugt wird',
+  'image_priority_by_screen': 'Je nach Ansicht',
+  'image_priority_artwork': 'Cover',
+  'image_priority_thumbnail': 'Vorschaubild',
+  'image_priority_home': 'Startseite',
+  'image_priority_playlists': 'Wiedergabelisten',
+  'image_priority_albums': 'Alben',
+
   'settings_display': 'Anzeige',
   'theme': 'Design',
   'theme_desc': 'Hell, dunkel oder Systemeinstellung',
@@ -258,6 +261,7 @@ const Map<String, String> deScreen = {
   'add_queue': 'Zur Warteschlange hinzufügen',
   'add_playlist': 'Zur Playlist hinzufügen',
   'change_thumbnail': 'Vorschaubild ändern',
+  'thumbnail_label': 'Vorschaubild',
   'delete_from_library': 'Aus Mediathek entfernen',
   'menu': 'Menü',
   'remove_from_queue': 'Aus Warteschlange entfernen',

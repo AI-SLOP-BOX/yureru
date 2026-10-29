@@ -51,7 +51,7 @@ class SystemMediaSession {
         'mediaId': media!.id,
         'title': media.title,
         'artist': media.artist ?? '',
-        'artworkPath': media.artworkPath,
+        'artworkPath': media.preferredImagePath,
         'durationMs': snapshot.duration.inMilliseconds.clamp(0, 1 << 53),
         'positionMs': position,
         'playing': snapshot.isPlaying,

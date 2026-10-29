@@ -152,8 +152,6 @@ class PlaybackController {
     if (_loadedId == id && engine.snapshot.initialized) return;
     if (!_openingIds.add(id)) return;
     try {
-      // Restore audio processing before the first frame of a new source.
-      await ref.read(audioSettingsProvider.notifier).ready;
       // Push rate first so engine.load() opens with the right speed.
       await engine.setPlaybackRate(q.speed);
       // Remember where the outgoing track stopped before switching.
@@ -219,7 +217,6 @@ class PlaybackController {
       await engine.pause();
       unawaited(_saveNow());
     } else {
-      await ref.read(audioSettingsProvider.notifier).ready;
       await engine.play();
       await _recordPlayback(_loadedId ?? ref.read(queueProvider).currentId);
     }
@@ -277,7 +274,6 @@ class PlaybackController {
       final m = lib.byId(id);
       if (m == null) return;
       final start = await _savedStart(id, m.durationMs);
-      await ref.read(audioSettingsProvider.notifier).ready;
       await engine.setPlaybackRate(q.speed);
       await engine.load(
         PlaybackSource(mediaId: id, uri: m.localPath, start: start),

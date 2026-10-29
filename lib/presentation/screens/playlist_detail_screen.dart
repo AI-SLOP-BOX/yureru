@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
+import '../../library/media_order.dart';
 import '../../playback/playback_controller.dart';
 import '../i18n.dart';
 import '../layout_metrics.dart';
@@ -30,88 +31,60 @@ class PlaylistDetailScreen extends ConsumerStatefulWidget {
 
 class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   static const double _desktopContentMaxWidth = 1440;
-  bool _sortByCreator = false;
 
-  Widget _sortSelector({required bool isDark}) {
-    final options = [
-      (
-        value: false,
-        label: ref.tr('playlist_order'),
-        icon: Icons.playlist_play_rounded,
-        tooltip: ref.tr('playlist_order'),
-      ),
-      (
-        value: true,
-        label: ref.tr('metadata_artist'),
-        icon: Icons.person_outline_rounded,
-        tooltip: ref.tr('creator_order'),
-      ),
-    ];
-    final selectedFill = isDark
-        ? Colors.white.withValues(alpha: 0.14)
-        : Colors.black.withValues(alpha: 0.08);
+  String _sortLabel(PlaylistContentSort sort) => ref.tr(switch (sort) {
+    PlaylistContentSort.playlistOrder => 'playlist_order',
+    PlaylistContentSort.recentlyPlayed => 'recently_played_order',
+    PlaylistContentSort.newestFirst => 'newest_first',
+    PlaylistContentSort.oldestFirst => 'oldest_first',
+    PlaylistContentSort.name => 'name_order',
+    PlaylistContentSort.creator => 'creator_order',
+  });
+
+  Widget _sortSelector({
+    required bool isDark,
+    required PlaylistContentSort sort,
+  }) {
     final quietFill = isDark
         ? Colors.white.withValues(alpha: 0.055)
         : Colors.black.withValues(alpha: 0.035);
-
-    return DecoratedBox(
+    const options = PlaylistContentSort.values;
+    return PopupMenuButton<PlaylistContentSort>(
       key: const ValueKey('playlist-sort-selector'),
-      decoration: BoxDecoration(
-        color: quietFill,
-        borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: themeBorder(context).withValues(alpha: 0.55)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(3),
+      tooltip: ref.tr('sort'),
+      initialValue: sort,
+      onSelected: (value) =>
+          ref.read(playlistContentSortProvider.notifier).state = value,
+      itemBuilder: (_) => [
+        for (final value in options)
+          CheckedPopupMenuItem(
+            value: value,
+            checked: value == sort,
+            child: Text(_sortLabel(value)),
+          ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: quietFill,
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(
+            color: themeBorder(context).withValues(alpha: 0.55),
+          ),
+        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            for (final option in options)
-              SizedBox(
-                width: option.value ? 88 : 132,
-                child: Tooltip(
-                  message: option.tooltip,
-                  child: Material(
-                    color: _sortByCreator == option.value
-                        ? selectedFill
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(10),
-                    child: InkWell(
-                      key: ValueKey('playlist-sort-${option.value}'),
-                      borderRadius: BorderRadius.circular(10),
-                      onTap: () =>
-                          setState(() => _sortByCreator = option.value),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 7,
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(option.icon, size: 16),
-                            const SizedBox(width: 5),
-                            Flexible(
-                              child: Text(
-                                option.label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: _sortByCreator == option.value
-                                      ? FontWeight.w700
-                                      : FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+            const Icon(Icons.sort_rounded, size: 18),
+            const SizedBox(width: 7),
+            Text(
+              _sortLabel(sort),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(width: 6),
+            const Icon(Icons.expand_more_rounded, size: 18),
           ],
         ),
       ),
@@ -129,6 +102,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   Widget build(BuildContext context) {
     final lib = ref.watch(libraryProvider);
     final currentId = ref.watch(queueProvider.select((q) => q.currentId));
+    final sort = ref.watch(playlistContentSortProvider);
     final pl = lib.playlistById(widget.playlistId);
     if (pl == null) {
       return Center(
@@ -170,23 +144,56 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                     return titleMatch || artistMatch;
                   }).toList())
             .toList();
-    if (_sortByCreator) {
-      filteredMediaIds.sort((a, b) {
-        final aMedia = lib.byId(a);
-        final bMedia = lib.byId(b);
-        final aCreator = aMedia?.artist?.trim() ?? '';
-        final bCreator = bMedia?.artist?.trim() ?? '';
-        if (aCreator.isEmpty != bCreator.isEmpty) {
-          return aCreator.isEmpty ? 1 : -1;
-        }
-        final creatorOrder = aCreator.toLowerCase().compareTo(
-          bCreator.toLowerCase(),
-        );
-        if (creatorOrder != 0) return creatorOrder;
-        return (aMedia?.title ?? '').toLowerCase().compareTo(
-          (bMedia?.title ?? '').toLowerCase(),
-        );
-      });
+    switch (sort) {
+      case PlaylistContentSort.playlistOrder:
+        break;
+      case PlaylistContentSort.recentlyPlayed:
+        filteredMediaIds.sort((a, b) {
+          final aMedia = lib.byId(a);
+          final bMedia = lib.byId(b);
+          if (aMedia == null) return bMedia == null ? 0 : 1;
+          if (bMedia == null) return -1;
+          return compareRecentlyPlayed(aMedia, bMedia);
+        });
+      case PlaylistContentSort.newestFirst:
+        filteredMediaIds.sort((a, b) {
+          final aMedia = lib.byId(a);
+          final bMedia = lib.byId(b);
+          if (aMedia == null) return bMedia == null ? 0 : 1;
+          if (bMedia == null) return -1;
+          return bMedia.createdAt.compareTo(aMedia.createdAt);
+        });
+      case PlaylistContentSort.oldestFirst:
+        filteredMediaIds.sort((a, b) {
+          final aMedia = lib.byId(a);
+          final bMedia = lib.byId(b);
+          if (aMedia == null) return bMedia == null ? 0 : 1;
+          if (bMedia == null) return -1;
+          return aMedia.createdAt.compareTo(bMedia.createdAt);
+        });
+      case PlaylistContentSort.name:
+        filteredMediaIds.sort((a, b) {
+          final aTitle = lib.byId(a)?.title ?? '';
+          final bTitle = lib.byId(b)?.title ?? '';
+          return aTitle.toLowerCase().compareTo(bTitle.toLowerCase());
+        });
+      case PlaylistContentSort.creator:
+        filteredMediaIds.sort((a, b) {
+          final aMedia = lib.byId(a);
+          final bMedia = lib.byId(b);
+          final aCreator = aMedia?.artist?.trim() ?? '';
+          final bCreator = bMedia?.artist?.trim() ?? '';
+          if (aCreator.isEmpty != bCreator.isEmpty) {
+            return aCreator.isEmpty ? 1 : -1;
+          }
+          final creatorOrder = aCreator.toLowerCase().compareTo(
+            bCreator.toLowerCase(),
+          );
+          if (creatorOrder != 0) return creatorOrder;
+          return (aMedia?.title ?? '').toLowerCase().compareTo(
+            (bMedia?.title ?? '').toLowerCase(),
+          );
+        });
     }
 
     return Column(
@@ -206,6 +213,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           seed: pl.id,
                           mediaId: first!.id,
                           localPath: first.localPath,
+                          imageContext: MediaImageContext.playlist,
                           size: artworkSize,
                           expand: true,
                         ),
@@ -280,6 +288,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                               seed: pl.id,
                               mediaId: first?.id,
                               localPath: first?.localPath,
+                              imageContext: MediaImageContext.playlist,
                               size: artworkSize,
                               radius: 16,
                               expand: true,
@@ -418,7 +427,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
-                            children: [_sortSelector(isDark: isDark)],
+                            children: [
+                              _sortSelector(isDark: isDark, sort: sort),
+                            ],
                           ),
                         ),
                       ),
@@ -441,7 +452,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
-                children: [_sortSelector(isDark: isDark)],
+                children: [_sortSelector(isDark: isDark, sort: sort)],
               ),
             ),
           ),
@@ -479,7 +490,10 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               : ReorderableListView(
                   buildDefaultDragHandles: false,
                   onReorder: (from, to) {
-                    if (_sortByCreator || query.isNotEmpty) return;
+                    if (sort != PlaylistContentSort.playlistOrder ||
+                        query.isNotEmpty) {
+                      return;
+                    }
                     if (to > from) to--;
                     ref
                         .read(libraryProvider.notifier)
@@ -564,6 +578,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                         seed: m.id,
                                         mediaId: m.id,
                                         localPath: m.localPath,
+                                        imageContext:
+                                            MediaImageContext.playlist,
                                         size: 48,
                                       ),
                                     ],
@@ -590,14 +606,37 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    m.id == currentId
-                                        ? const SizedBox(width: 48)
-                                        : IconButton(
-                                            tooltip: ref.tr('play'),
-                                            icon: const Icon(Icons.play_arrow),
-                                            onPressed: playFromHere,
-                                          ),
-                                    if (!_sortByCreator && query.isEmpty)
+                                    IconButton(
+                                      key: ValueKey(
+                                        'playlist-play-next-${m.id}',
+                                      ),
+                                      tooltip: ref.tr('add_next'),
+                                      icon: const Icon(
+                                        Icons.arrow_forward_rounded,
+                                      ),
+                                      onPressed: m.id == currentId
+                                          ? null
+                                          : () {
+                                              ref
+                                                  .read(queueProvider.notifier)
+                                                  .playNext(m.id);
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    '${displayTitle(m.title)} — ${ref.tr('add_next')}',
+                                                  ),
+                                                  duration: const Duration(
+                                                    seconds: 2,
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                    ),
+                                    if (sort ==
+                                            PlaylistContentSort.playlistOrder &&
+                                        query.isEmpty)
                                       Tooltip(
                                         message: ref.tr('drag_to_reorder'),
                                         child: SizedBox(
@@ -628,7 +667,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                             child: row,
                           ),
                         );
-                        if (!_sortByCreator && query.isEmpty) {
+                        if (sort == PlaylistContentSort.playlistOrder &&
+                            query.isEmpty) {
                           return ReorderableDelayedDragStartListener(
                             key: ValueKey('playlist-row-${m.id}'),
                             index: i,
@@ -710,6 +750,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                       seed: cand.id,
                                       mediaId: cand.id,
                                       localPath: cand.localPath,
+                                      imageContext: MediaImageContext.playlist,
                                       size: 40,
                                     ),
                                     title: Text(
@@ -831,6 +872,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
       child: PopupMenuButton<String>(
         tooltip: ref.tr('menu'),
         offset: const Offset(0, 50),
+        popUpAnimationStyle: AnimationStyle.noAnimation,
         child: Material(
           color: isDark ? const Color(0xFF242424) : const Color(0xFFE4E4E4),
           shape: const CircleBorder(),

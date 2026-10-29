@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import '../app_state.dart';
+import '../data/thumbnails.dart';
 import '../data/session.dart';
+import '../domain/models.dart';
 import '../platform/system_media_provider.dart';
 import '../platform/keyboard_shortcuts.dart';
 import 'i18n.dart';
@@ -16,6 +18,7 @@ import 'theme.dart';
 import 'screens/home_screen.dart';
 import 'screens/immersive_player_screen.dart';
 import 'screens/playlist_detail_screen.dart';
+import 'screens/playlists_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/videos_screen.dart';
 import 'widgets/mini_player.dart';
@@ -58,10 +61,19 @@ class _AppShellState extends ConsumerState<AppShell>
   Timer? _desktopSidebarHideTimer;
   Timer? _desktopQueueHideTimer;
   PlaybackController? _playbackController;
+  ProviderSubscription<LibraryState>? _thumbnailLibrarySubscription;
+  final Set<String> _thumbnailGenerationAttempted = <String>{};
 
   @override
   void initState() {
     super.initState();
+    _thumbnailLibrarySubscription = ref.listenManual<LibraryState>(
+      libraryProvider,
+      (_, next) {
+        if (next.loaded) _scheduleMissingThumbnails(next.media);
+      },
+      fireImmediately: true,
+    );
     _playbackController = ref.read(playbackControllerProvider);
     ref.read(systemMediaSessionProvider);
     HardwareKeyboard.instance.addHandler(_handleGlobalKeyboardEvent);
@@ -109,12 +121,6 @@ class _AppShellState extends ConsumerState<AppShell>
           setState(() => nav = Nav.settings);
         }
       }
-      // Apply the saved audio-leveling preference before restoring a queued
-      // track; otherwise the first playback after launch bypasses it until
-      // the user opens Settings. Do this after first-launch navigation so the
-      // initial screen does not wait on audio-engine setup.
-      await ref.read(audioSettingsProvider.notifier).ready;
-      if (!mounted) return;
       await ref.read(playbackControllerProvider).restoreSession();
     });
   }
@@ -130,6 +136,7 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   void dispose() {
+    _thumbnailLibrarySubscription?.close();
     _desktopSidebarHideTimer?.cancel();
     _desktopQueueHideTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyboardEvent);
@@ -139,6 +146,35 @@ class _AppShellState extends ConsumerState<AppShell>
     _pipChannel.setMethodCallHandler(null);
     _nativeMenuChannel.setMethodCallHandler(null);
     super.dispose();
+  }
+
+  void _scheduleMissingThumbnails(List<MediaItem> media) {
+    final missing = media
+        .where((item) {
+          final path = item.localPath;
+          return !item.isTemporary &&
+              item.thumbnailPath == null &&
+              !path.startsWith('http://') &&
+              !path.startsWith('https://') &&
+              _thumbnailGenerationAttempted.add(item.id);
+        })
+        .toList(growable: false);
+    if (missing.isNotEmpty) unawaited(_generateMissingThumbnails(missing));
+  }
+
+  Future<void> _generateMissingThumbnails(List<MediaItem> media) async {
+    for (final item in media) {
+      if (!mounted) return;
+      try {
+        await ThumbnailService.forMedia(
+          mediaId: item.id,
+          localPath: item.localPath,
+        );
+      } catch (_) {
+        // A missing, unsupported, or temporarily unavailable file keeps the
+        // normal placeholder; one failure must not stop the rest of the scan.
+      }
+    }
   }
 
   bool _handleGlobalKeyboardEvent(KeyEvent event) {
