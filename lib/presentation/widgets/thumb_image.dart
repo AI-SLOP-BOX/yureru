@@ -85,7 +85,7 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
   Widget build(BuildContext context) {
     final f = _future;
     final priorities = ref.watch(mediaImagePriorityProvider);
-    final imagePath = widget.mediaId == null
+    final imagePaths = widget.mediaId == null
         ? null
         : ref.watch(
             libraryProvider.select((lib) {
@@ -97,7 +97,10 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
               // The player's explicit image mode means show the jacket even
               // when Home is configured to prefer video thumbnails.
               if (widget.forceArtwork) {
-                return media.artworkPath ?? media.thumbnailPath;
+                return (
+                  media.artworkPath ?? media.thumbnailPath,
+                  media.artworkPath == null ? null : media.thumbnailPath,
+                );
               }
               // Unscoped surfaces (player chrome, search, queue, etc.) follow
               // the Home preference. Historically they bypassed settings and
@@ -110,11 +113,16 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
               );
               final preferArtwork =
                   effectivePriority == MediaImagePriority.artworkFirst;
-              return preferArtwork
-                  ? media.artworkPath ?? media.thumbnailPath
-                  : media.thumbnailPath;
+              return (
+                preferArtwork
+                    ? media.artworkPath ?? media.thumbnailPath
+                    : media.thumbnailPath,
+                null,
+              );
             }),
           );
+    final imagePath = imagePaths?.$1;
+    final secondaryImagePath = imagePaths?.$2;
     final fallback = ThumbBox(
       seed: widget.seed,
       size: widget.size,
@@ -125,7 +133,18 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
       final art = Image.file(
         File(imagePath),
         fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => fallback,
+        errorBuilder: (_, _, _) {
+          if (widget.forceArtwork &&
+              secondaryImagePath != null &&
+              secondaryImagePath != imagePath) {
+            return Image.file(
+              File(secondaryImagePath),
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => fallback,
+            );
+          }
+          return fallback;
+        },
       );
       return ClipRRect(
         borderRadius: BorderRadius.circular(widget.radius),
