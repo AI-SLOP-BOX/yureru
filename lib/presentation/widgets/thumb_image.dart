@@ -83,9 +83,6 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
   Widget build(BuildContext context) {
     final f = _future;
     final priorities = ref.watch(mediaImagePriorityProvider);
-    final priority = widget.imageContext == null
-        ? null
-        : priorities[widget.imageContext!];
     final imagePath = widget.mediaId == null
         ? null
         : ref.watch(
@@ -93,16 +90,17 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
               final playlistChoice = widget.playlistId == null
                   ? null
                   : lib.playlistById(widget.playlistId!)?.imagePriority;
-              final effectivePriority = playlistChoice == null
-                  ? priority
-                  : MediaImagePriority.values.firstWhere(
-                      (value) => value.name == playlistChoice,
-                      orElse: () =>
-                          priority ?? MediaImagePriority.thumbnailFirst,
-                    );
-              final preferArtwork = effectivePriority == null
-                  ? widget.useArtwork
-                  : effectivePriority == MediaImagePriority.artworkFirst;
+              // Unscoped surfaces (player chrome, search, queue, etc.) follow
+              // the Home preference. Historically they bypassed settings and
+              // showed jacket art by default.
+              final effectivePriority = effectiveMediaImagePriority(
+                priorities: priorities,
+                imageContext: widget.imageContext,
+                playlistPriority: playlistChoice,
+                useArtwork: widget.useArtwork,
+              );
+              final preferArtwork =
+                  effectivePriority == MediaImagePriority.artworkFirst;
               final media = lib.byId(widget.mediaId!);
               if (media == null) return null;
               return preferArtwork

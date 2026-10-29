@@ -54,6 +54,7 @@ class MiniPlayer extends ConsumerWidget {
                               seed: media.id,
                               mediaId: media.id,
                               localPath: media.localPath,
+                              imageContext: MediaImageContext.home,
                               size: 48,
                               radius: 0,
                             ),

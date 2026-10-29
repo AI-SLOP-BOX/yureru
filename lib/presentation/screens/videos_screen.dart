@@ -713,6 +713,7 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                               seed: widget.media.title,
                               mediaId: widget.media.id,
                               localPath: widget.media.localPath,
+                              imageContext: MediaImageContext.home,
                             ),
                             if (widget.playing)
                               Container(

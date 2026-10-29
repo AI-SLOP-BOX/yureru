@@ -296,6 +296,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                             seed: media.id,
                             mediaId: media.id,
                             localPath: media.localPath,
+                            imageContext: MediaImageContext.home,
                             size: 48,
                             radius: 0,
                           ),

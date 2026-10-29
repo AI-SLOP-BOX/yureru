@@ -243,6 +243,8 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                           localPath: pl.mediaIds.isEmpty
                               ? null
                               : lib.byId(pl.mediaIds.first)?.localPath,
+                          imageContext: MediaImageContext.playlist,
+                          playlistId: pl.id,
                           size: 40,
                         ),
                         title: Text(
@@ -313,6 +315,7 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                           seed: m.id,
                           mediaId: m.id,
                           localPath: m.localPath,
+                          imageContext: MediaImageContext.home,
                           size: 40,
                           radius: 8,
                         ),

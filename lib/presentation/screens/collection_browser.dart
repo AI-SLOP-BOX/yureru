@@ -235,7 +235,7 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
                 localPath: cover.localPath,
                 imageContext: widget.kind == CollectionKind.albums
                     ? MediaImageContext.album
-                    : null,
+                    : MediaImageContext.home,
                 size: 72,
                 radius: 12,
               ),
@@ -341,7 +341,7 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
               localPath: media.localPath,
               imageContext: widget.kind == CollectionKind.albums
                   ? MediaImageContext.album
-                  : null,
+                  : MediaImageContext.home,
             ),
       title: Row(
         children: [
@@ -556,7 +556,7 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
                         localPath: cover.localPath,
                         imageContext: widget.kind == CollectionKind.albums
                             ? MediaImageContext.album
-                            : null,
+                            : MediaImageContext.home,
                         expand: true,
                       ),
                     ),

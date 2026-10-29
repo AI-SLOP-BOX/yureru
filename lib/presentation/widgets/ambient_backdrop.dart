@@ -59,6 +59,7 @@ class AmbientRoomGlowCanvas extends ConsumerWidget {
                 seed: media.id,
                 mediaId: media.id,
                 localPath: media.localPath,
+                useArtwork: false,
                 radius: 0,
                 expand: true,
                 highRes: true,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../layout_metrics.dart';
 import '../theme.dart';
@@ -176,6 +177,7 @@ class _MediaShelfCardState extends State<_MediaShelfCard> {
                         seed: m.id,
                         mediaId: m.id,
                         localPath: m.localPath,
+                        imageContext: MediaImageContext.home,
                         radius: 10,
                         expand: true,
                       ),

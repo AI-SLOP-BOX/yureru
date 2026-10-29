@@ -464,6 +464,7 @@ class _PlaylistItem extends StatelessWidget {
                       seed: seed,
                       mediaId: thumbMediaId,
                       localPath: thumbPath,
+                      imageContext: MediaImageContext.home,
                       size: 38,
                       radius: 6,
                     ),

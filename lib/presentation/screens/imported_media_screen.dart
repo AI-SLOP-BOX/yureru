@@ -171,6 +171,7 @@ class _ImportedMediaScreenState extends ConsumerState<ImportedMediaScreen> {
                               seed: m.id,
                               mediaId: m.id,
                               localPath: m.localPath,
+                              imageContext: MediaImageContext.home,
                               size: 40,
                               radius: 8,
                             ),

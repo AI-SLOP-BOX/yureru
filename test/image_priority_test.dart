@@ -4,6 +4,38 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yureru/app_state.dart';
 
 void main() {
+  test('unscoped media surfaces inherit the home image priority', () {
+    expect(
+      effectiveMediaImagePriority(priorities: defaultMediaImagePriorities),
+      MediaImagePriority.thumbnailFirst,
+    );
+  });
+
+  test(
+    'playlist overrides win, while thumbnail-only surfaces stay thumbnails',
+    () {
+      final priorities = {
+        ...defaultMediaImagePriorities,
+        MediaImageContext.home: MediaImagePriority.thumbnailFirst,
+      };
+      expect(
+        effectiveMediaImagePriority(
+          priorities: priorities,
+          playlistPriority: MediaImagePriority.artworkFirst.name,
+        ),
+        MediaImagePriority.artworkFirst,
+      );
+      expect(
+        effectiveMediaImagePriority(
+          priorities: priorities,
+          playlistPriority: MediaImagePriority.artworkFirst.name,
+          useArtwork: false,
+        ),
+        MediaImagePriority.thumbnailFirst,
+      );
+    },
+  );
+
   test('image priorities are saved independently by screen', () async {
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer();

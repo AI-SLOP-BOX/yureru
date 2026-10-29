@@ -436,6 +436,22 @@ const defaultMediaImagePriorities = <MediaImageContext, MediaImagePriority>{
   MediaImageContext.album: MediaImagePriority.artworkFirst,
 };
 
+MediaImagePriority effectiveMediaImagePriority({
+  required Map<MediaImageContext, MediaImagePriority> priorities,
+  MediaImageContext? imageContext,
+  String? playlistPriority,
+  bool useArtwork = true,
+}) {
+  if (!useArtwork) return MediaImagePriority.thumbnailFirst;
+  if (playlistPriority != null) {
+    for (final priority in MediaImagePriority.values) {
+      if (priority.name == playlistPriority) return priority;
+    }
+  }
+  return priorities[imageContext ?? MediaImageContext.home] ??
+      defaultMediaImagePriorities[MediaImageContext.home]!;
+}
+
 class MediaImagePriorityNotifier
     extends StateNotifier<Map<MediaImageContext, MediaImagePriority>> {
   static const _keyPrefix = 'yureru_media_image_priority_';
