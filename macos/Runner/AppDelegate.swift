@@ -1,18 +1,19 @@
 import Cocoa
 import FlutterMacOS
+import Darwin
 
 @main
 class AppDelegate: FlutterAppDelegate {
-  @IBAction func showPreferences(_ sender: Any?) {
-    (mainFlutterWindow as? MainFlutterWindow)?.openSettingsFromMenu()
+  override init() {
+    // The bundled playback/video stack can receive SIGPIPE when a native
+    // media pipe closes during startup. Treat it as a recoverable EPIPE so
+    // macOS does not terminate the entire app before the window appears.
+    Darwin.signal(SIGPIPE, SIG_IGN)
+    super.init()
   }
 
-  override func applicationDidFinishLaunching(_ notification: Notification) {
-    if let iconPath = Bundle.main.path(forResource: "AppIcon", ofType: "icns"),
-       let iconImage = NSImage(contentsOfFile: iconPath) {
-      NSApplication.shared.applicationIconImage = iconImage
-    }
-    super.applicationDidFinishLaunching(notification)
+  @IBAction func showPreferences(_ sender: Any?) {
+    (mainFlutterWindow as? MainFlutterWindow)?.openSettingsFromMenu()
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

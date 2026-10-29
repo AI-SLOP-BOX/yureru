@@ -47,6 +47,8 @@ class MainFlutterWindow: NSWindow {
     systemMediaControls = SystemMediaControls(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
+    makeKeyAndOrderFront(nil)
+    NSApplication.shared.activate(ignoringOtherApps: true)
 
     // Flutter engine startup can shrink the window once during initialization;
     // re-assert the desktop-layout size after that settles.
