@@ -86,7 +86,9 @@ class ThumbnailService {
     int maxWidth = 320,
     bool highRes = false,
   }) {
-    if (localPath.startsWith('http://') || localPath.startsWith('https://')) {
+    if (localPath.startsWith('http://') ||
+        localPath.startsWith('https://') ||
+        !isVideoPath(localPath)) {
       return Future.value(null);
     }
     final key = highRes ? '$mediaId@hi' : mediaId;
@@ -129,11 +131,9 @@ class ThumbnailService {
         }
       }
       if (Platform.isMacOS && _isWebm(localPath)) {
-        // mpv's screenshot-raw command aborts inside libmpv on this macOS
-        // build. If ffmpeg is installed, extract frames in a child process
-        // instead so imported WebM files can still get persistent thumbnails.
+        // Avoid the crash-prone mpv screenshot path for WebM on macOS.
         return _throttled(
-          () => _generateWebmWithFfmpeg(
+          () => _generateWithFfmpeg(
             mediaId,
             localPath,
             maxWidth,
@@ -141,9 +141,24 @@ class ThumbnailService {
           ),
         );
       }
-      return _throttled(
-        () => _generate(mediaId, localPath, maxWidth, highRes: highRes),
-      );
+      return _throttled(() async {
+        final native = await _generate(
+          mediaId,
+          localPath,
+          maxWidth,
+          highRes: highRes,
+        );
+        // AVFoundation does not decode every container/codec in the library
+        // (notably some MKV, AVI and MPEG variants). Recover with ffmpeg when
+        // the native extractor cannot produce a frame.
+        if (native != null || !Platform.isMacOS) return native;
+        return _generateWithFfmpeg(
+          mediaId,
+          localPath,
+          maxWidth,
+          highRes: highRes,
+        );
+      });
     } catch (e) {
       debugPrint('thumb: skipped $mediaId: $e');
       return null;
@@ -167,7 +182,7 @@ class ThumbnailService {
     return null;
   }
 
-  static Future<File?> _generateWebmWithFfmpeg(
+  static Future<File?> _generateWithFfmpeg(
     String mediaId,
     String localPath,
     int maxWidth, {
@@ -182,14 +197,15 @@ class ThumbnailService {
       Uint8List? bestFrame;
       var bestScore = double.negativeInfinity;
       var bestTime = 0;
-      for (final seconds in const [1, 3, 6, 12]) {
-        final frame = File('${scratch.path}/frame-$seconds.jpg');
+      for (final seconds in const [0, 0.5, 1, 2, 4, 8, 12]) {
+        final label = seconds.toString().replaceAll('.', '_');
+        final frame = File('${scratch.path}/frame-$label.jpg');
         try {
           final result = await Process.run(ffmpeg, [
             '-v',
             'error',
             '-ss',
-            '$seconds',
+            seconds.toString(),
             '-i',
             localPath,
             '-frames:v',
@@ -207,7 +223,7 @@ class ThumbnailService {
           if (score != null && score > bestScore) {
             bestFrame = bytes;
             bestScore = score;
-            bestTime = seconds * 1000;
+            bestTime = (seconds * 1000).round();
           }
         } catch (_) {
           // Some videos are shorter than a sample point; continue to others.

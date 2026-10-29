@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import '../app_state.dart';
 import '../data/thumbnails.dart';
+import '../data/importer.dart' show isVideoPath;
 import '../data/session.dart';
 import '../domain/models.dart';
 import '../platform/system_media_provider.dart';
@@ -153,6 +154,7 @@ class _AppShellState extends ConsumerState<AppShell>
         .where((item) {
           final path = item.localPath;
           return !item.isTemporary &&
+              isVideoPath(path) &&
               item.thumbnailPath == null &&
               !path.startsWith('http://') &&
               !path.startsWith('https://') &&

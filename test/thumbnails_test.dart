@@ -16,6 +16,15 @@ void main() {
         isNull,
       );
     });
+    test('audio files are excluded from thumbnail extraction', () async {
+      expect(
+        await ThumbnailService.forMedia(
+          mediaId: 'audio-no-thumb',
+          localPath: '/tmp/yureru-audio.wav',
+        ),
+        isNull,
+      );
+    });
     test('missing file -> null without throwing', () async {
       expect(
         await ThumbnailService.forMedia(
