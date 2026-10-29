@@ -998,6 +998,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                       seed: media.id,
                                       mediaId: media.id,
                                       localPath: media.localPath,
+                                      forceArtwork: true,
                                       radius: 0,
                                       expand: true,
                                       highRes: true,
@@ -1836,6 +1837,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                         seed: media.id,
                         mediaId: media.id,
                         localPath: media.localPath,
+                        forceArtwork: true,
                         expand: true,
                         highRes: true,
                       ),
@@ -2498,6 +2500,8 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                                     media.id,
                                                                 localPath: media
                                                                     .localPath,
+                                                                forceArtwork:
+                                                                    true,
                                                                 expand: true,
                                                                 highRes: true,
                                                               ),

@@ -23,6 +23,7 @@ class ThumbImage extends ConsumerStatefulWidget {
   final bool expand;
   final bool highRes;
   final bool useArtwork;
+  final bool forceArtwork;
   final MediaImageContext? imageContext;
   final String? playlistId;
 
@@ -36,6 +37,7 @@ class ThumbImage extends ConsumerStatefulWidget {
     this.expand = false,
     this.highRes = false,
     this.useArtwork = true,
+    this.forceArtwork = false,
     this.imageContext,
     this.playlistId,
   });
@@ -92,6 +94,11 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
                   : lib.playlistById(widget.playlistId!)?.imagePriority;
               final media = lib.byId(widget.mediaId!);
               if (media == null) return null;
+              // The player's explicit image mode means show the jacket even
+              // when Home is configured to prefer video thumbnails.
+              if (widget.forceArtwork) {
+                return media.artworkPath ?? media.thumbnailPath;
+              }
               // Unscoped surfaces (player chrome, search, queue, etc.) follow
               // the Home preference. Historically they bypassed settings and
               // showed jacket art by default.
