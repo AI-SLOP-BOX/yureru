@@ -352,49 +352,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
             ),
           ),
-          const Divider(height: 1, indent: 16, endIndent: 16),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.image_outlined, size: 20),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            ref.tr('image_display_priority'),
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          Text(
-                            ref.tr('image_display_priority_desc'),
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                imagePrioritySelector(
-                  ref.tr('image_priority_home'),
-                  MediaImageContext.home,
-                ),
-                imagePrioritySelector(
-                  ref.tr('image_priority_playlists'),
-                  MediaImageContext.playlist,
-                ),
-                imagePrioritySelector(
-                  ref.tr('image_priority_albums'),
-                  MediaImageContext.album,
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, indent: 16, endIndent: 16),
           SwitchListTile(
             secondary: const AppSvgIcon('settings_ambient'),
             title: Text(ref.tr('ambient_light')),
@@ -521,6 +478,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+      _SettingsGroup(
+        id: 'settings_image_priority',
+        icon: 'settings_tune',
+        description: ref.tr('image_display_priority_desc'),
+        title: ref.tr('image_display_priority'),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                imagePrioritySelector(
+                  ref.tr('image_priority_home'),
+                  MediaImageContext.home,
+                ),
+                imagePrioritySelector(
+                  ref.tr('image_priority_playlists'),
+                  MediaImageContext.playlist,
+                ),
+                imagePrioritySelector(
+                  ref.tr('image_priority_albums'),
+                  MediaImageContext.album,
+                ),
+              ],
+            ),
           ),
         ],
       ),

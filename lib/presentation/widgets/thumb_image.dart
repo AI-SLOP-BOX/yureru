@@ -98,7 +98,6 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
               final effectivePriority = effectiveMediaImagePriority(
                 priorities: priorities,
                 imageContext: widget.imageContext,
-                mediaPriority: media.imagePriority,
                 playlistPriority: playlistChoice,
                 useArtwork: widget.useArtwork,
               );

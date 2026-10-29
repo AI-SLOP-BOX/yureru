@@ -126,6 +126,25 @@ void main() {
         await tester.tap(displayCategory);
         await tester.pumpAndSettle();
         expect(find.text('テーマ'), findsOneWidget);
+
+        final imagePriorityCategory = size.width >= 900
+            ? find.byKey(
+                const ValueKey('settings-category-settings_image_priority'),
+              )
+            : find.widgetWithText(ChoiceChip, '画像の表示優先度');
+        await tester.ensureVisible(imagePriorityCategory);
+        await tester.tap(imagePriorityCategory);
+        await tester.pumpAndSettle();
+        expect(find.text('ホーム'), findsOneWidget);
+        expect(find.text('プレイリスト'), findsOneWidget);
+        expect(find.text('アルバム'), findsOneWidget);
+
+        await tester.tap(find.text('サムネイル').first);
+        await tester.pumpAndSettle();
+        expect(
+          container.read(mediaImagePriorityProvider)[MediaImageContext.home],
+          MediaImagePriority.thumbnailFirst,
+        );
         expect(tester.takeException(), isNull);
       },
     );

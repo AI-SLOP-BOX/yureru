@@ -32,7 +32,6 @@ void main() {
       sourcePath: '/source.mp3',
       artworkPath: '/art.jpg',
       thumbnailPath: '/thumb.jpg',
-      imagePriority: 'thumbnailFirst',
       lyricsPath: '/lyrics.lrc',
       lyricsOffsetMs: 50,
     );
@@ -64,11 +63,7 @@ void main() {
       'lyricsOffsetMs': 0,
     });
     expect(item.artist, 'Artist');
-    expect(item.preferredImagePath, '/thumb.jpg');
-    expect(
-      item.copyWith(imagePriority: 'artworkFirst').preferredImagePath,
-      '/art.jpg',
-    );
+    expect(item.preferredImagePath, '/art.jpg');
     expect(item.copyWith(artworkPath: null).preferredImagePath, '/thumb.jpg');
   });
 

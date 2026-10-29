@@ -439,17 +439,13 @@ const defaultMediaImagePriorities = <MediaImageContext, MediaImagePriority>{
 MediaImagePriority effectiveMediaImagePriority({
   required Map<MediaImageContext, MediaImagePriority> priorities,
   MediaImageContext? imageContext,
-  String? mediaPriority,
   String? playlistPriority,
   bool useArtwork = true,
 }) {
   if (!useArtwork) return MediaImagePriority.thumbnailFirst;
-  // A playlist's explicit choice applies to all of its rows. A per-media
-  // choice applies everywhere else, while null falls through to the screen.
-  for (final override in [playlistPriority, mediaPriority]) {
-    if (override == null) continue;
+  if (playlistPriority != null) {
     for (final priority in MediaImagePriority.values) {
-      if (priority.name == override) return priority;
+      if (priority.name == playlistPriority) return priority;
     }
   }
   return priorities[imageContext ?? MediaImageContext.home] ??
