@@ -527,6 +527,9 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
             style: FilledButton.styleFrom(backgroundColor: kAccent),
             onPressed: () async {
               Navigator.pop(context);
+              await ref
+                  .read(playbackControllerProvider)
+                  .handleMediaRemoved(media.id);
               await ref.read(libraryProvider.notifier).removeMedia(media.id);
             },
             child: Text(ref.tr('delete')),
