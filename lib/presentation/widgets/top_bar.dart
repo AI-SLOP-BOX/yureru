@@ -344,13 +344,21 @@ class _TopBarState extends ConsumerState<TopBar> {
                 // Center Search Area: either collapsed icon or prominent search pill
                 if (collapseSearchField) ...[
                   IconButton(
-                    tooltip: ref.tr('global_search_tip'),
+                    tooltip: ref.tr('search_library'),
                     icon: Icon(
                       Icons.search_rounded,
                       size: 22,
                       color: iconColor,
                     ),
-                    onPressed: widget.onOpenSearch,
+                    onPressed: () {
+                      // On narrow screens this is the in-page search field's
+                      // collapsed state. Expand it first; the dedicated
+                      // search icon inside the field still opens global search.
+                      setState(() => _showExpandedSearchOnVeryCompact = true);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) _searchFocusNode.requestFocus();
+                      });
+                    },
                   ),
                   const Spacer(),
                 ] else ...[
