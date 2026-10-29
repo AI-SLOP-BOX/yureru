@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
+import '../../data/thumbnails.dart';
 import '../../platform/keyboard_shortcuts.dart';
 import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
@@ -77,6 +78,33 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   double _dragAccumulatedDelta = 0.0;
   Duration _dragStartPos = Duration.zero;
   bool _queueSheetExpanded = false;
+  String? _visualAspectRatioKey;
+  double? _visualAspectRatio;
+
+  void _requestVisualAspectRatio(MediaItem media, PlayerViewMode mode) {
+    final preferArtwork = mode == PlayerViewMode.image;
+    final key =
+        '${media.id}:${mode.name}:${media.artworkPath}:${media.thumbnailPath}';
+    if (_visualAspectRatioKey == key) return;
+    _visualAspectRatioKey = key;
+    _visualAspectRatio = null;
+    unawaited(
+      ThumbnailService.aspectRatioForMedia(
+            mediaId: media.id,
+            localPath: media.localPath,
+            artworkPath: media.artworkPath,
+            thumbnailPath: media.thumbnailPath,
+            preferArtwork: preferArtwork,
+          )
+          .then((ratio) {
+            if (!mounted || _visualAspectRatioKey != key || ratio == null) {
+              return;
+            }
+            setState(() => _visualAspectRatio = ratio);
+          })
+          .catchError((_) {}),
+    );
+  }
 
   void _reportAmbientVideoBounds() {
     _ambientBoundsNeeded = true;
@@ -570,6 +598,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final snap = engine.snapshot;
     final media = q.currentId == null ? null : lib.byId(q.currentId!);
     if (media == null) return const SizedBox.shrink();
+    _requestVisualAspectRatio(media, mode);
     final reportedAspectRatio = engine.videoAspectRatio;
     final hasValidVideoAspectRatio =
         reportedAspectRatio != null &&
@@ -578,6 +607,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final videoAspectRatio = hasValidVideoAspectRatio
         ? reportedAspectRatio
         : (16 / 9);
+    final visualAspectRatio = _visualAspectRatio ?? videoAspectRatio;
     final videoLayoutWidth = screenWidth;
     // The player lives inside the center pane, which is already narrower than
     // the window when the sidebar and queue are open. Keep the desktop layout
@@ -799,7 +829,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                     child: SizedBox(
                                       width: videoLayoutWidth,
                                       height:
-                                          videoLayoutWidth / videoAspectRatio,
+                                          videoLayoutWidth / visualAspectRatio,
                                       child: Stack(
                                         clipBehavior: Clip.none,
                                         children: [
@@ -921,9 +951,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                         : Center(
                             key: const ValueKey('player-mode-image'),
                             child: AspectRatio(
-                              // Keep artwork in the exact frame used by video;
-                              // BoxFit.cover crops the sleeve to fill that frame.
-                              aspectRatio: videoAspectRatio,
+                              // Artwork sets its own frame. When the image
+                              // loads this becomes its natural aspect ratio.
+                              aspectRatio: visualAspectRatio,
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: themeCard(context),
@@ -1798,7 +1828,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                   )
                 : Center(
                     child: AspectRatio(
-                      aspectRatio: engine.videoAspectRatio ?? (16 / 9),
+                      aspectRatio:
+                          _visualAspectRatio ??
+                          engine.videoAspectRatio ??
+                          (16 / 9),
                       child: ThumbImage(
                         seed: media.id,
                         mediaId: media.id,
@@ -2315,16 +2348,19 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                       final safePadding = MediaQuery.paddingOf(
                                         context,
                                       );
-                                      // Keep the video frame unchanged when
-                                      // swapping to a cropped artwork image.
+                                      // Match media mode to the thumbnail's
+                                      // dimensions and artwork mode to the
+                                      // artwork image's dimensions.
                                       final reportedRatio =
                                           engine.videoAspectRatio;
-                                      final aspectRatio =
+                                      final fallbackRatio =
                                           reportedRatio != null &&
                                               reportedRatio.isFinite &&
                                               reportedRatio > 0
                                           ? reportedRatio
                                           : 16 / 9;
+                                      final aspectRatio =
+                                          _visualAspectRatio ?? fallbackRatio;
                                       final maxVisualHeight =
                                           constraints.maxHeight * 0.48;
                                       final maxVisualWidth =

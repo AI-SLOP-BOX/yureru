@@ -14,6 +14,7 @@ import 'importer.dart';
 /// and callers fall back to the gradient placeholder.
 class ThumbnailService {
   static final Map<String, Future<File?>> _inflight = {};
+  static final Map<String, Future<double?>> _aspectRatios = {};
 
   /// At most this many concurrent native generations. AVFoundation seeks
   /// contend with mpv decode for hardware; unbounded bursts during list
@@ -78,6 +79,40 @@ class ThumbnailService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Returns the displayed image's natural aspect ratio. Artwork keeps its
+  /// own dimensions; video mode can use the extracted thumbnail dimensions.
+  static Future<double?> aspectRatioForMedia({
+    required String mediaId,
+    required String localPath,
+    String? artworkPath,
+    String? thumbnailPath,
+    required bool preferArtwork,
+  }) async {
+    if (preferArtwork && artworkPath != null) {
+      final ratio = await _aspectRatioForPath(artworkPath);
+      if (ratio != null) return ratio;
+    }
+    if (thumbnailPath != null) {
+      final ratio = await _aspectRatioForPath(thumbnailPath);
+      if (ratio != null) return ratio;
+    }
+    final thumbnail = await forMedia(mediaId: mediaId, localPath: localPath);
+    return thumbnail == null ? null : _aspectRatioForPath(thumbnail.path);
+  }
+
+  static Future<double?> _aspectRatioForPath(String path) {
+    return _aspectRatios.putIfAbsent(path, () async {
+      try {
+        final bytes = await File(path).readAsBytes();
+        final decoded = img.decodeImage(bytes);
+        if (decoded == null || decoded.height == 0) return null;
+        return decoded.width / decoded.height;
+      } catch (_) {
+        return null;
+      }
+    });
   }
 
   static Future<File?> forMedia({

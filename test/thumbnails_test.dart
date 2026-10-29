@@ -2,11 +2,46 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:yureru/data/importer.dart';
 import 'package:yureru/data/thumbnails.dart';
 
 void main() {
   group('ThumbnailService.forMedia', () {
+    test('visual frame ratio follows artwork or thumbnail image', () async {
+      final directory = await Directory.systemTemp.createTemp('yureru-ratio-');
+      addTearDown(() => directory.delete(recursive: true));
+      final artwork = File('${directory.path}/artwork.png');
+      final thumbnail = File('${directory.path}/thumbnail.png');
+      await artwork.writeAsBytes(
+        img.encodePng(img.Image(width: 240, height: 120)),
+      );
+      await thumbnail.writeAsBytes(
+        img.encodePng(img.Image(width: 320, height: 180)),
+      );
+
+      expect(
+        await ThumbnailService.aspectRatioForMedia(
+          mediaId: 'ratio-art',
+          localPath: '/tmp/not-needed.mp4',
+          artworkPath: artwork.path,
+          thumbnailPath: thumbnail.path,
+          preferArtwork: true,
+        ),
+        2.0,
+      );
+      expect(
+        await ThumbnailService.aspectRatioForMedia(
+          mediaId: 'ratio-thumb',
+          localPath: '/tmp/not-needed.mp4',
+          artworkPath: artwork.path,
+          thumbnailPath: thumbnail.path,
+          preferArtwork: false,
+        ),
+        320 / 180,
+      );
+    });
+
     test('network uri -> null without native call', () async {
       expect(
         await ThumbnailService.forMedia(
