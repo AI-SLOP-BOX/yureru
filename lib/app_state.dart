@@ -444,7 +444,9 @@ MediaImagePriority effectiveMediaImagePriority({
   bool useArtwork = true,
 }) {
   if (!useArtwork) return MediaImagePriority.thumbnailFirst;
-  for (final override in [mediaPriority, playlistPriority]) {
+  // A playlist's explicit choice applies to all of its rows. A per-media
+  // choice applies everywhere else, while null falls through to the screen.
+  for (final override in [playlistPriority, mediaPriority]) {
     if (override == null) continue;
     for (final priority in MediaImagePriority.values) {
       if (priority.name == override) return priority;

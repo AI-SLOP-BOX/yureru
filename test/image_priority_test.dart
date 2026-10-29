@@ -36,7 +36,7 @@ void main() {
     },
   );
 
-  test('media priority overrides playlist and screen priorities', () {
+  test('playlist priority overrides media and screen priorities', () {
     expect(
       effectiveMediaImagePriority(
         priorities: defaultMediaImagePriorities,
@@ -44,7 +44,15 @@ void main() {
         playlistPriority: MediaImagePriority.artworkFirst.name,
         mediaPriority: MediaImagePriority.thumbnailFirst.name,
       ),
-      MediaImagePriority.thumbnailFirst,
+      MediaImagePriority.artworkFirst,
+    );
+    expect(
+      effectiveMediaImagePriority(
+        priorities: defaultMediaImagePriorities,
+        imageContext: MediaImageContext.home,
+        mediaPriority: MediaImagePriority.artworkFirst.name,
+      ),
+      MediaImagePriority.artworkFirst,
     );
   });
 
