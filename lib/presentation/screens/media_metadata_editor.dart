@@ -434,23 +434,6 @@ Future<void> showMediaMetadataEditor(
     }
     String? nullableText(TextEditingController controller) =>
         controller.text.trim().isEmpty ? null : controller.text.trim();
-    await ref
-        .read(libraryProvider.notifier)
-        .updateMediaAlbum(
-          media.id,
-          album: nullableText(albumController),
-          albumArtist: nullableText(albumArtistController),
-          trackNumber: number,
-          discNumber: int.tryParse(discController.text.trim()),
-        );
-    final artist = artistController.text.trim();
-    await ref
-        .read(libraryProvider.notifier)
-        .updateMediaMetadata(
-          media.id,
-          title: titleController.text.trim(),
-          artist: artist.isEmpty ? null : artist,
-        );
 
     String? artworkPath = media.artworkPath;
     if (selectedArtworkPath != null) {
@@ -477,9 +460,6 @@ Future<void> showMediaMetadataEditor(
     } else if (clearArtwork) {
       artworkPath = null;
     }
-    await ref
-        .read(libraryProvider.notifier)
-        .updateMediaArtwork(media.id, artworkPath);
     String? thumbnailPath = media.thumbnailPath;
     if (selectedThumbnailPath != null) {
       try {
@@ -507,10 +487,18 @@ Future<void> showMediaMetadataEditor(
     }
     await ref
         .read(libraryProvider.notifier)
-        .updateMediaThumbnail(media.id, thumbnailPath);
-    await ref
-        .read(libraryProvider.notifier)
-        .updateMediaLyricsOffset(media.id, offsetMs);
+        .updateMediaDetails(
+          media.id,
+          title: titleController.text.trim(),
+          artist: nullableText(artistController),
+          album: nullableText(albumController),
+          albumArtist: nullableText(albumArtistController),
+          trackNumber: number,
+          discNumber: int.tryParse(discController.text.trim()),
+          artworkPath: artworkPath,
+          thumbnailPath: thumbnailPath,
+          lyricsOffsetMs: offsetMs,
+        );
   } finally {
     // The route remains mounted while its closing animation runs.
     if (dialogRoute != null) await dialogRoute.completed;

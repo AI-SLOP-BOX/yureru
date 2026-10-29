@@ -146,6 +146,55 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     required String? artist,
   }) => _updateMedia(id, (item) => item.copyWith(title: title, artist: artist));
 
+  /// Saves the full media details form in one state/persistence update so
+  /// playback progress or another metadata change cannot interleave between
+  /// separate title, album and artwork writes.
+  Future<void> updateMediaDetails(
+    String id, {
+    required String title,
+    required String? artist,
+    required String? album,
+    required String? albumArtist,
+    required int? trackNumber,
+    required int? discNumber,
+    required String? artworkPath,
+    required String? thumbnailPath,
+    required int lyricsOffsetMs,
+  }) async {
+    final current = state.byId(id);
+    if (current == null) return;
+    await _updateMedia(
+      id,
+      (item) => item.copyWith(
+        title: title,
+        artist: artist,
+        album: album,
+        albumArtist: albumArtist,
+        trackNumber: trackNumber,
+        discNumber: discNumber,
+        artworkPath: artworkPath,
+        thumbnailPath: thumbnailPath,
+        lyricsOffsetMs: lyricsOffsetMs,
+      ),
+    );
+    await _deleteManagedImageIfReplaced(current.artworkPath, artworkPath);
+    await _deleteManagedImageIfReplaced(current.thumbnailPath, thumbnailPath);
+  }
+
+  Future<void> _deleteManagedImageIfReplaced(
+    String? oldPath,
+    String? newPath,
+  ) async {
+    if (oldPath == null || oldPath == newPath) return;
+    if (!oldPath.contains('yureru_artwork') &&
+        !oldPath.contains('yureru_thumbnails')) {
+      return;
+    }
+    try {
+      await File(oldPath).delete();
+    } catch (_) {}
+  }
+
   /// One save for the complete selection. Session-only media is never edited.
   Future<void> updateMediaMetadataBatch(
     Iterable<String> ids,

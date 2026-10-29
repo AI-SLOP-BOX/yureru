@@ -191,4 +191,37 @@ void main() {
       expect(library.state.byId(saved.id)!.artist, 'Artist');
     },
   );
+
+  test(
+    'media details update title and related fields in one saved item',
+    () async {
+      final repo = InMemoryLibraryRepository();
+      final library = LibraryNotifier(repo);
+      addTearDown(library.dispose);
+      final media = _media('details');
+      await library.addMedia([media]);
+
+      await library.updateMediaDetails(
+        media.id,
+        title: 'New title',
+        artist: 'New artist',
+        album: 'New album',
+        albumArtist: 'Album artist',
+        trackNumber: 3,
+        discNumber: 2,
+        artworkPath: media.artworkPath,
+        thumbnailPath: '/thumb/details.jpg',
+        lyricsOffsetMs: 1250,
+      );
+
+      final updated = library.state.byId(media.id)!;
+      expect(updated.title, 'New title');
+      expect(updated.artist, 'New artist');
+      expect(updated.album, 'New album');
+      expect(updated.trackNumber, 3);
+      expect(updated.thumbnailPath, '/thumb/details.jpg');
+      await library.load();
+      expect(library.state.byId(media.id)!.title, 'New title');
+    },
+  );
 }

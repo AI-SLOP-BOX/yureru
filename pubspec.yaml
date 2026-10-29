@@ -1,7 +1,7 @@
 name: yureru
 description: "Local videos, enjoyed like a music player."
 publish_to: 'none'
-version: 1.0.9+82
+version: 1.0.9+83
 environment:
   sdk: ^3.11.4
 dependencies:
