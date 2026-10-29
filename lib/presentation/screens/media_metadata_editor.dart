@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../app_state.dart';
 import '../../domain/models.dart';
+import '../../playback/playback_controller.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/lyrics_editor_dialog.dart';
@@ -40,6 +41,7 @@ Future<void> showMediaMetadataEditor(
   String? selectedThumbnailPath;
   var clearThumbnail = false;
   var editLyricsAfterClose = false;
+  var deleteMediaAfterClose = false;
   DialogRoute<bool>? dialogRoute;
   try {
     dialogRoute = DialogRoute<bool>(
@@ -281,8 +283,49 @@ Future<void> showMediaMetadataEditor(
                     ),
                     const SizedBox(height: 24),
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
                       children: [
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.redAccent,
+                          ),
+                          icon: const Icon(Icons.delete_outline_rounded),
+                          label: Text(tr('delete_from_library_short')),
+                          onPressed: () async {
+                            final confirmed = await showDialog<bool>(
+                              context: dialogContext,
+                              builder: (confirmContext) => AlertDialog(
+                                title: Text(tr('delete_from_library')),
+                                content: Text(
+                                  tr(
+                                    'remove_media_confirm',
+                                  ).replaceAll('{title}', media.title),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(confirmContext, false),
+                                    child: Text(tr('cancel')),
+                                  ),
+                                  FilledButton(
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: Colors.redAccent,
+                                    ),
+                                    onPressed: () =>
+                                        Navigator.pop(confirmContext, true),
+                                    child: Text(tr('delete')),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirmed == true) {
+                              deleteMediaAfterClose = true;
+                              if (dialogContext.mounted) {
+                                Navigator.pop(dialogContext, false);
+                              }
+                            }
+                          },
+                        ),
+                        const Spacer(),
                         TextButton(
                           style: TextButton.styleFrom(
                             foregroundColor: subtle,
@@ -360,6 +403,13 @@ Future<void> showMediaMetadataEditor(
       context,
       rootNavigator: true,
     ).push(dialogRoute);
+    if (deleteMediaAfterClose) {
+      await dialogRoute.completed;
+      if (!context.mounted) return;
+      await ref.read(playbackControllerProvider).handleMediaRemoved(media.id);
+      await ref.read(libraryProvider.notifier).removeMedia(media.id);
+      return;
+    }
     if (editLyricsAfterClose) {
       await dialogRoute.completed;
       if (context.mounted) await _showLyricsEditor(context, ref, media);

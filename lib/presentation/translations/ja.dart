@@ -255,7 +255,8 @@ const Map<String, String> jaScreen = {
   'lyrics': '歌詞',
   'playlist_not_found': 'プレイリストが見つかりません',
   'delete': '削除',
-  'remove_media_confirm': '「{title}」をライブラリから削除しますか？\n（ファイルは削除されません）',
+  'remove_media_confirm':
+      '「{title}」をアプリのライブラリから削除しますか？\n（元の場所にある動画ファイルは削除されません）',
   'added_to_playlist': '「{name}」に追加しました',
   'add_next': '次に再生',
   'add_queue': 'キューに追加',

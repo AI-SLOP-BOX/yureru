@@ -267,7 +267,7 @@ const Map<String, String> enScreen = {
   'add_next': 'Play next',
   'delete': 'Delete',
   'remove_media_confirm':
-      'Remove “{title}” from your library?\n(The file itself will not be deleted.)',
+      'Remove “{title}” from your app library?\n(The original video file will not be deleted.)',
   'added_to_playlist': 'Added to “{name}”',
   'add_queue': 'Add to queue',
   'add_playlist': 'Add to playlist',
