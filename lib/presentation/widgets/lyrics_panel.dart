@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -21,15 +22,15 @@ class LyricsPanel extends ConsumerStatefulWidget {
     required this.engine,
     required this.media,
     this.immersive = false,
+    this.viewMode = PlayerViewMode.media,
     this.onEditingChanged,
   });
 
   final PlaybackEngine engine;
   final MediaItem media;
   final bool immersive;
+  final PlayerViewMode viewMode;
   final ValueChanged<bool>? onEditingChanged;
-
-  double get lineHeight => immersive ? 100 : 76;
 
   @override
   ConsumerState<LyricsPanel> createState() => _LyricsPanelState();
@@ -42,26 +43,79 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
   bool _editing = false;
   String _editorText = '';
   bool _editorSynchronized = true;
+  PlayerViewMode? _editorViewMode;
+  List<String> _translationLines = const [];
+  bool _showTranslation = false;
+  bool _editorRequestScheduled = false;
 
   @override
   void initState() {
     super.initState();
     _source = _loadSource();
+    unawaited(_loadTranslationLines());
   }
 
   @override
   void didUpdateWidget(LyricsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.media.id != widget.media.id ||
-        oldWidget.media.lyricsPath != widget.media.lyricsPath) {
+    if (oldWidget.media.translatedLyricsPath !=
+        widget.media.translatedLyricsPath) {
+      _showTranslation = false;
+      _translationLines = const [];
+      unawaited(_loadTranslationLines());
+    }
+    if (oldWidget.media.id != widget.media.id) {
       _lastActive = -2;
       _editing = false;
+      _editorRequestScheduled = false;
+      _editorViewMode = null;
+      _source = _loadSource();
+    } else if (oldWidget.viewMode != widget.viewMode) {
+      _lastActive = -2;
+      // Keep an active editor bound to the view it started editing. Switching
+      // the player view must not discard the in-progress lyrics draft.
+      if (!_editing) _source = _loadSource();
+    } else if (!_editing &&
+        oldWidget.media.lyricsPathForView(
+              artwork: oldWidget.viewMode == PlayerViewMode.image,
+            ) !=
+            widget.media.lyricsPathForView(
+              artwork: widget.viewMode == PlayerViewMode.image,
+            )) {
+      _lastActive = -2;
       _source = _loadSource();
     }
   }
 
+  Future<void> _loadTranslationLines() async {
+    final path = widget.media.translatedLyricsPath;
+    if (path == null) return;
+    try {
+      final text = await File(path).readAsString();
+      final lines = path.toLowerCase().endsWith('.lrc')
+          ? parseLrc(text).map((line) => line.text).toList()
+          : text
+                .split(RegExp(r'\r?\n'))
+                .where((line) => line.isNotEmpty)
+                .toList();
+      if (!mounted || widget.media.translatedLyricsPath != path) return;
+      setState(() => _translationLines = lines);
+    } catch (_) {
+      if (mounted && widget.media.translatedLyricsPath == path) {
+        setState(() => _translationLines = const []);
+      }
+    }
+  }
+
+  void _toggleTranslation() {
+    if (_translationLines.isEmpty) return;
+    setState(() => _showTranslation = !_showTranslation);
+  }
+
   Future<_LyricsSource> _loadSource() async {
-    var path = widget.media.lyricsPath;
+    var path = widget.media.lyricsPathForView(
+      artwork: widget.viewMode == PlayerViewMode.image,
+    );
     if (path != null && !await File(path).exists()) path = null;
     if (path == null) {
       final sibling = widget.media.localPath.replaceFirst(
@@ -102,7 +156,11 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
       await File(sourcePath).copy(destination);
       await ref
           .read(libraryProvider.notifier)
-          .updateMediaLyrics(widget.media.id, destination);
+          .updateMediaLyricsForView(
+            widget.media.id,
+            artwork: widget.viewMode == PlayerViewMode.image,
+            path: destination,
+          );
       if (!mounted) return;
       setState(() {
         _source = Future.value(_LyricsSource(path: destination));
@@ -116,15 +174,17 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
     }
   }
 
-  Future<void> _editLyrics() async {
+  Future<void> _editLyrics({bool forceSynchronized = false}) async {
     final source = await _source;
     final initialText = await source.text;
     if (!mounted) return;
     setState(() {
       _editorText = initialText;
       _editorSynchronized =
-          source.path?.toLowerCase().endsWith('.lrc') ??
-          parseLrc(initialText).isNotEmpty;
+          forceSynchronized ||
+          (source.path?.toLowerCase().endsWith('.lrc') ??
+              parseLrc(initialText).isNotEmpty);
+      _editorViewMode = widget.viewMode;
       _editing = true;
     });
     widget.onEditingChanged?.call(true);
@@ -133,14 +193,26 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
   Future<void> _saveEditedLyrics(String path) async {
     await ref
         .read(libraryProvider.notifier)
-        .updateMediaLyrics(widget.media.id, path);
+        .updateMediaLyricsForView(
+          widget.media.id,
+          artwork: _editorViewMode == PlayerViewMode.image,
+          path: path,
+        );
     if (!mounted) return;
     setState(() {
-      _source = Future.value(_LyricsSource(path: path));
+      _source = _loadSource();
       _lastActive = -2;
       _editing = false;
+      _editorViewMode = null;
     });
     widget.onEditingChanged?.call(false);
+  }
+
+  Future<void> _markNoLyrics() async {
+    await ref
+        .read(libraryProvider.notifier)
+        .setLyricsButtonHidden(widget.media.id, true);
+    ref.read(lyricsPanelProvider.notifier).state = false;
   }
 
   Widget _editor() => LyricsEditorDialog(
@@ -148,12 +220,27 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
     engine: widget.engine,
     initialText: _editorText,
     initialSynchronized: _editorSynchronized,
+    viewMode: _editorViewMode ?? widget.viewMode,
     inline: true,
     onCancel: () {
-      setState(() => _editing = false);
+      setState(() {
+        _editing = false;
+        _editorViewMode = null;
+        _source = _loadSource();
+      });
       widget.onEditingChanged?.call(false);
     },
     onSaved: _saveEditedLyrics,
+    onDraftSaved: (path) => ref
+        .read(libraryProvider.notifier)
+        .updateMediaLyricsForView(
+          widget.media.id,
+          artwork: _editorViewMode == PlayerViewMode.image,
+          path: path,
+        ),
+    onFinalized: () => ref
+        .read(libraryProvider.notifier)
+        .setLyricsEditingFinalized(widget.media.id, true),
   );
 
   @override
@@ -162,13 +249,18 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
     super.dispose();
   }
 
+  double get _lineHeight {
+    if (widget.immersive) return 100;
+    return MediaQuery.sizeOf(context).width < 600 ? 88 : 76;
+  }
+
   void _scrollTo(int active) {
     if (active < 0 || active == _lastActive || !_scrollController.hasClients) {
       return;
     }
     _lastActive = active;
     final target =
-        (active * widget.lineHeight -
+        (active * _lineHeight -
                 (widget.immersive
                     ? _scrollController.position.viewportDimension * 0.3
                     : 0))
@@ -183,11 +275,27 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final requestedEditorId = ref.watch(lyricsEditorRequestProvider);
+    if (requestedEditorId == widget.media.id &&
+        !_editing &&
+        !_editorRequestScheduled) {
+      _editorRequestScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _editorRequestScheduled = false;
+        if (!mounted ||
+            ref.read(lyricsEditorRequestProvider) != widget.media.id) {
+          return;
+        }
+        ref.read(lyricsEditorRequestProvider.notifier).state = null;
+        unawaited(_editLyrics(forceSynchronized: true));
+      });
+    }
     final currentMedia =
         ref.watch(libraryProvider).byId(widget.media.id) ?? widget.media;
     final title = displayTitle(widget.media.title);
     final textPrimary = themeTextPrimary(context);
     final textSub = themeTextSub(context);
+    final phoneLayout = MediaQuery.sizeOf(context).width < 600;
     return Column(
       children: [
         if (!widget.immersive)
@@ -220,10 +328,66 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                     ],
                   ),
                 ),
+                if (currentMedia.translatedLyricsPath != null &&
+                    _translationLines.isNotEmpty)
+                  IconButton(
+                    tooltip: ref.tr(
+                      _showTranslation
+                          ? 'show_original_lyrics'
+                          : 'show_translation_lyrics',
+                    ),
+                    onPressed: _toggleTranslation,
+                    visualDensity: VisualDensity.compact,
+                    color: _showTranslation
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                    icon: const Icon(Icons.translate_rounded),
+                  ),
+                if (!currentMedia.lyricsEditingFinalized)
+                  IconButton(
+                    tooltip: ref.tr('lyrics_editor_title'),
+                    onPressed: _editLyrics,
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.edit_note_rounded),
+                  ),
               ],
             ),
           ),
         if (!widget.immersive) Divider(height: 1, color: themeBorder(context)),
+        if (widget.immersive &&
+            ((currentMedia.translatedLyricsPath != null &&
+                    _translationLines.isNotEmpty) ||
+                !currentMedia.lyricsEditingFinalized))
+          Align(
+            alignment: Alignment.centerRight,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (currentMedia.translatedLyricsPath != null &&
+                    _translationLines.isNotEmpty)
+                  IconButton(
+                    tooltip: ref.tr(
+                      _showTranslation
+                          ? 'show_original_lyrics'
+                          : 'show_translation_lyrics',
+                    ),
+                    onPressed: _toggleTranslation,
+                    visualDensity: VisualDensity.compact,
+                    color: _showTranslation
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                    icon: const Icon(Icons.translate_rounded),
+                  ),
+                if (!currentMedia.lyricsEditingFinalized)
+                  IconButton(
+                    tooltip: ref.tr('lyrics_editor_title'),
+                    onPressed: _editLyrics,
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.edit_note_rounded),
+                  ),
+              ],
+            ),
+          ),
         Expanded(
           child: _editing
               ? _editor()
@@ -245,7 +409,11 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                     }
                     if (source.path == null &&
                         source.embedded?.trim().isNotEmpty != true) {
-                      return _emptyLyrics(context, ref.tr('lyrics_not_found'));
+                      return _emptyLyrics(
+                        context,
+                        ref.tr('lyrics_not_found'),
+                        allowHide: true,
+                      );
                     }
                     return FutureBuilder<String>(
                       future: source.text,
@@ -260,17 +428,33 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                           );
                         }
                         final text = lyricsSnapshot.data ?? '';
-                        final lines = parseLrc(text);
+                        final lines = parseLrc(
+                          text,
+                        ).where((line) => line.text.trim().isNotEmpty).toList();
                         if (lyricsSnapshot.hasError || lines.isEmpty) {
+                          final plainText = text
+                              .replaceAll(
+                                RegExp(
+                                  r'^\s*\[(?:x-xx|-:--)\]\s*',
+                                  caseSensitive: false,
+                                  multiLine: true,
+                                ),
+                                '',
+                              )
+                              .trim();
                           if (!lyricsSnapshot.hasError &&
-                              text.trim().isNotEmpty) {
+                              plainText.isNotEmpty) {
                             return SingleChildScrollView(
                               padding: const EdgeInsets.all(20),
                               child: Text(
-                                text,
+                                _showTranslation && _translationLines.isNotEmpty
+                                    ? _translationLines.join('\n')
+                                    : plainText,
                                 style: TextStyle(
                                   color: textPrimary,
-                                  fontSize: 14,
+                                  fontSize: widget.immersive
+                                      ? 30
+                                      : (phoneLayout ? 20 : 16),
                                   height: 1.6,
                                 ),
                               ),
@@ -281,6 +465,7 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                             lyricsSnapshot.hasError
                                 ? ref.tr('lyrics_load_error')
                                 : ref.tr('synced_lyrics_not_found'),
+                            allowHide: !lyricsSnapshot.hasError,
                           );
                         }
                         return StreamBuilder<PlaybackSnapshot>(
@@ -291,7 +476,10 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                               lines,
                               playback.data?.position ?? Duration.zero,
                               offset: Duration(
-                                milliseconds: currentMedia.lyricsOffsetMs,
+                                milliseconds: currentMedia.lyricsOffsetForView(
+                                  artwork:
+                                      widget.viewMode == PlayerViewMode.image,
+                                ),
                               ),
                             );
                             WidgetsBinding.instance.addPostFrameCallback(
@@ -307,13 +495,24 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                               itemBuilder: (context, index) {
                                 final isActive = index == active;
                                 return SizedBox(
-                                  height: widget.lineHeight,
-                                  child: InkWell(
-                                    onTap: () =>
-                                        widget.engine.seekTo(lines[index].time),
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Align(
-                                      alignment: Alignment.centerLeft,
+                                  height: _lineHeight,
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: InkWell(
+                                      onTap: () => widget.engine.seekTo(
+                                        playbackPositionForLyric(
+                                          lines[index].time,
+                                          offset: Duration(
+                                            milliseconds: currentMedia
+                                                .lyricsOffsetForView(
+                                                  artwork:
+                                                      widget.viewMode ==
+                                                      PlayerViewMode.image,
+                                                ),
+                                          ),
+                                        ),
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
                                       child: AnimatedDefaultTextStyle(
                                         duration: const Duration(
                                           milliseconds: 180,
@@ -329,13 +528,19 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                                                 ),
                                           fontSize: widget.immersive
                                               ? (isActive ? 30 : 26)
+                                              : phoneLayout
+                                              ? (isActive ? 22 : 18)
                                               : (isActive ? 18 : 15),
                                           fontWeight: isActive
                                               ? FontWeight.w700
                                               : FontWeight.w500,
                                         ),
                                         child: Text(
-                                          lines[index].text,
+                                          _showTranslation &&
+                                                  index <
+                                                      _translationLines.length
+                                              ? _translationLines[index]
+                                              : lines[index].text,
                                           maxLines: widget.immersive ? 2 : 3,
                                           softWrap: true,
                                           overflow: TextOverflow.ellipsis,
@@ -357,7 +562,11 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
     );
   }
 
-  Widget _emptyLyrics(BuildContext context, String message) => Center(
+  Widget _emptyLyrics(
+    BuildContext context,
+    String message, {
+    bool allowHide = false,
+  }) => Center(
     child: Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -405,6 +614,12 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                 icon: const Icon(Icons.edit_note_rounded, size: 18),
                 label: Text(ref.tr('lyrics_editor_create')),
               ),
+              if (allowHide)
+                TextButton.icon(
+                  onPressed: _markNoLyrics,
+                  icon: const Icon(Icons.hide_source_outlined, size: 18),
+                  label: Text(ref.tr('lyrics_mark_missing')),
+                ),
             ],
           ),
         ],

@@ -1,4 +1,9 @@
 PODS:
+  - ffmpeg_kit_flutter_new_full (8.1.2):
+    - ffmpeg_kit_flutter_new_full/full (= 8.1.2)
+    - FlutterMacOS
+  - ffmpeg_kit_flutter_new_full/full (8.1.2):
+    - FlutterMacOS
   - file_picker (0.0.1):
     - FlutterMacOS
   - FlutterMacOS (1.0.0)
@@ -24,6 +29,7 @@ PODS:
     - FlutterMacOS
 
 DEPENDENCIES:
+  - ffmpeg_kit_flutter_new_full (from `Flutter/ephemeral/.symlinks/plugins/ffmpeg_kit_flutter_new_full/macos`)
   - file_picker (from `Flutter/ephemeral/.symlinks/plugins/file_picker/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
   - media_kit_libs_macos_video (from `Flutter/ephemeral/.symlinks/plugins/media_kit_libs_macos_video/macos`)
@@ -37,6 +43,8 @@ DEPENDENCIES:
   - window_manager (from `Flutter/ephemeral/.symlinks/plugins/window_manager/macos`)
 
 EXTERNAL SOURCES:
+  ffmpeg_kit_flutter_new_full:
+    :path: Flutter/ephemeral/.symlinks/plugins/ffmpeg_kit_flutter_new_full/macos
   file_picker:
     :path: Flutter/ephemeral/.symlinks/plugins/file_picker/macos
   FlutterMacOS:
@@ -61,6 +69,7 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/window_manager/macos
 
 SPEC CHECKSUMS:
+  ffmpeg_kit_flutter_new_full: 5faa0619bb1ab839471baa5a4252a5d07e8ba8f8
   file_picker: 7584aae6fa07a041af2b36a2655122d42f578c1a
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
   media_kit_libs_macos_video: 85a23e549b5f480e72cae3e5634b5514bc692f65

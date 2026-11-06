@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../app_state.dart';
 import '../data/session.dart';
+import '../domain/models.dart';
 import 'playback_engine.dart';
 import 'sleep_timer_provider.dart';
 
@@ -17,6 +18,7 @@ class PlaybackController {
 
   /// Media id currently loaded in the engine (for position bookkeeping).
   String? _loadedId;
+  String? _loadedSourceUri;
   final Set<String> _openingIds = {};
 
   PlaybackController(this.ref) {
@@ -152,20 +154,38 @@ class PlaybackController {
     if (_loadedId == id && engine.snapshot.initialized) return;
     if (!_openingIds.add(id)) return;
     try {
+      await ref.read(audioSettingsProvider.notifier).ready;
       // Push rate first so engine.load() opens with the right speed.
       await engine.setPlaybackRate(q.speed);
+      await engine.setVideoTrackEnabled(
+        ref.read(playerViewModeProvider) == PlayerViewMode.media,
+      );
       // Remember where the outgoing track stopped before switching.
       if (_loadedId != null && _loadedId != id) await _saveNow();
-      final start = await _savedStart(id, m.durationMs);
+      final sourceMedia = _sourceMediaForView(m);
+      final start = await _savedStart(id, sourceMedia.durationMs);
       await ref.read(sessionStoreProvider).markActiveMedia(id);
       try {
         await engine.load(
-          PlaybackSource(mediaId: id, uri: m.localPath, start: start),
+          PlaybackSource(mediaId: id, uri: sourceMedia.localPath, start: start),
           autoplay: true,
         );
         _loadedId = id;
+        _loadedSourceUri = sourceMedia.localPath;
         await _recordPlayback(id);
       } catch (_) {
+        if (sourceMedia.localPath != m.localPath) {
+          try {
+            await engine.load(
+              PlaybackSource(mediaId: id, uri: m.localPath, start: start),
+              autoplay: true,
+            );
+            _loadedId = id;
+            _loadedSourceUri = m.localPath;
+            await _recordPlayback(id);
+            return;
+          } catch (_) {}
+        }
         // Missing/unreadable file: drop and move on instead of hanging.
         ref.read(queueProvider.notifier).removeId(id);
         final next = ref.read(queueProvider);
@@ -175,6 +195,63 @@ class PlaybackController {
       }
     } finally {
       _openingIds.remove(id);
+    }
+  }
+
+  MediaItem _sourceMediaForView(MediaItem media) {
+    if (ref.read(playerViewModeProvider) != PlayerViewMode.image) return media;
+    final sourceId = media.artworkAudioMediaId;
+    if (sourceId != null) {
+      return ref.read(libraryProvider).byId(sourceId) ?? media;
+    }
+    final sourcePath = media.artworkAudioPath;
+    if (sourcePath != null) {
+      return media.copyWith(localPath: sourcePath, durationMs: null);
+    }
+    return media;
+  }
+
+  /// Swap only the underlying audio when the user changes video/jacket mode.
+  /// The queue and displayed media item remain the same.
+  Future<void> syncCurrentViewSource() async {
+    final queue = ref.read(queueProvider);
+    final media = queue.currentId == null
+        ? null
+        : ref.read(libraryProvider).byId(queue.currentId!);
+    if (media == null) return;
+    final sourceMedia = _sourceMediaForView(media);
+    final useVideoTrack =
+        ref.read(playerViewModeProvider) == PlayerViewMode.media;
+    final snapshot = engine.snapshot;
+    await engine.setVideoTrackEnabled(useVideoTrack);
+    if (_loadedId == media.id && _loadedSourceUri == sourceMedia.localPath) {
+      return;
+    }
+    var start = snapshot.position;
+    final maxMs = sourceMedia.durationMs;
+    if (maxMs != null && start.inMilliseconds >= maxMs) {
+      start = Duration(milliseconds: maxMs > 500 ? maxMs - 500 : 0);
+    }
+    await engine.setPlaybackRate(queue.speed);
+    try {
+      await engine.load(
+        PlaybackSource(
+          mediaId: media.id,
+          uri: sourceMedia.localPath,
+          start: start,
+        ),
+        autoplay: snapshot.isPlaying,
+      );
+      _loadedId = media.id;
+      _loadedSourceUri = sourceMedia.localPath;
+    } catch (_) {
+      if (sourceMedia.localPath == media.localPath) return;
+      await engine.load(
+        PlaybackSource(mediaId: media.id, uri: media.localPath, start: start),
+        autoplay: snapshot.isPlaying,
+      );
+      _loadedId = media.id;
+      _loadedSourceUri = media.localPath;
     }
   }
 
@@ -218,14 +295,19 @@ class PlaybackController {
       unawaited(_saveNow());
     } else {
       await engine.play();
-      await _recordPlayback(_loadedId ?? ref.read(queueProvider).currentId);
+      await _recordPlayback(
+        _loadedId ?? ref.read(queueProvider).currentId,
+        countAsPlay: false,
+      );
     }
   }
 
-  Future<void> _recordPlayback(String? id) async {
+  Future<void> _recordPlayback(String? id, {bool countAsPlay = true}) async {
     if (id == null) return;
     try {
-      await ref.read(libraryProvider.notifier).recordPlayback(id);
+      await ref
+          .read(libraryProvider.notifier)
+          .recordPlayback(id, countAsPlay: countAsPlay);
     } catch (_) {
       // History storage must never make a playable source get skipped.
     }
@@ -274,6 +356,7 @@ class PlaybackController {
       final m = lib.byId(id);
       if (m == null) return;
       final start = await _savedStart(id, m.durationMs);
+      await ref.read(audioSettingsProvider.notifier).ready;
       await engine.setPlaybackRate(q.speed);
       await engine.load(
         PlaybackSource(mediaId: id, uri: m.localPath, start: start),

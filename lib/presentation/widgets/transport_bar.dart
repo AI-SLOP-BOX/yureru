@@ -14,6 +14,7 @@ import 'semantics_safe_slider.dart';
 import 'frosted_panel.dart';
 import 'transport_icon.dart';
 import 'thumb_image.dart';
+import 'pip_video_surface.dart';
 
 const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -48,8 +49,10 @@ class _TransportBarState extends ConsumerState<TransportBar> {
     if (!queue.hasCurrent) return;
     final nextIndex = (queue.index + 1) % queue.queue.length;
     final nextId = queue.queue[nextIndex];
+    final isArtworkMode =
+        ref.read(playerViewModeProvider) == PlayerViewMode.image;
     await controller.playNext();
-    if (!mounted) return;
+    if (!mounted || isArtworkMode) return;
     final media = ref.read(libraryProvider).byId(nextId);
     if (media == null) return;
     final compactWidth = MediaQuery.sizeOf(context).width >= 400 ? 340.0 : null;
@@ -289,7 +292,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                             child: SizedBox(
                               width: 160,
                               height: 90,
-                              child: engine.buildVideoView(),
+                              child: PipVideoSurface(engine: engine),
                             ),
                           )
                         : ThumbImage(

@@ -12,6 +12,7 @@ import '../../platform/window_utils.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
 import '../theme.dart';
+import 'picture_in_picture_button.dart';
 
 /// Top bar: logo-home + global search + window/panel icon actions.
 class TopBar extends ConsumerStatefulWidget {
@@ -105,32 +106,6 @@ class _TopBarState extends ConsumerState<TopBar> {
         ref.read(searchQueryProvider.notifier).state = v;
       }
     });
-  }
-
-  Future<void> _enterPictureInPicture() async {
-    final engine = ref.read(engineProvider);
-    final pipNotifier = ref.read(pictureInPictureProvider.notifier);
-    final isCompactDesktop =
-        defaultTargetPlatform == TargetPlatform.macOS ||
-        defaultTargetPlatform == TargetPlatform.windows ||
-        defaultTargetPlatform == TargetPlatform.linux;
-    if (isCompactDesktop) {
-      // Swap to the PiP-only video surface before changing the native window
-      // size. Otherwise the first entry briefly compresses the entire app UI.
-      pipNotifier.state = true;
-      await WidgetsBinding.instance.endOfFrame;
-    }
-    final started = await enterPictureInPictureWindow(engine: engine);
-    if (!started && isCompactDesktop) {
-      pipNotifier.state = false;
-    } else if (started && defaultTargetPlatform != TargetPlatform.iOS) {
-      pipNotifier.state = true;
-    }
-    if (!started && mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(ref.tr('pip_unavailable'))));
-    }
   }
 
   void _onSearchSubmitted(String v) {
@@ -612,19 +587,11 @@ class _TopBarState extends ConsumerState<TopBar> {
                       initialData: ref.read(engineProvider).snapshot,
                       builder: (context, _) {
                         final engine = ref.read(engineProvider);
-                        final platformCanStart =
-                            defaultTargetPlatform != TargetPlatform.iOS ||
-                            engine.supportsPictureInPicture;
-                        return IconButton(
-                          tooltip: ref.tr('pip'),
-                          icon: Icon(
-                            Icons.picture_in_picture_alt_rounded,
-                            size: 21,
-                            color: iconColor,
-                          ),
-                          onPressed: canPictureInPicture && platformCanStart
-                              ? _enterPictureInPicture
-                              : null,
+                        return PictureInPictureButton(
+                          engine: engine,
+                          iconSize: 21,
+                          color: iconColor,
+                          enabled: canPictureInPicture,
                         );
                       },
                     ),
@@ -670,9 +637,7 @@ class _TopBarState extends ConsumerState<TopBar> {
           ),
         );
 
-        final chromeSurface = widget.ambient
-            ? themePanel(context).withValues(alpha: 0.45)
-            : themePanel(context);
+        final chromeSurface = themePanel(context);
         final header = Stack(
           clipBehavior: Clip.none,
           children: [
@@ -685,7 +650,25 @@ class _TopBarState extends ConsumerState<TopBar> {
                   ? ClipRect(
                       child: BackdropFilter(
                         filter: ui.ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                        child: ColoredBox(color: chromeSurface),
+                        // Keep the ambient tint identical in both themes.
+                        // A theme-colored panel created a visible horizontal
+                        // seam: dark mode heavily dimmed the glow while light
+                        // mode added a bright white band. Fade the shared
+                        // neutral tint out at the bottom of the toolbar.
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              stops: const [0, 0.72, 1],
+                              colors: [
+                                Colors.black.withValues(alpha: 0.12),
+                                Colors.black.withValues(alpha: 0.08),
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
                     )
                   : ColoredBox(color: chromeSurface),

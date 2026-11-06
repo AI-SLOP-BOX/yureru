@@ -4,8 +4,12 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:ffmpeg_kit_flutter_new_full/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_full/ffprobe_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_full/return_code.dart';
 import 'package:media_kit/media_kit.dart' as mk;
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
+import 'package:path_provider/path_provider.dart';
 import 'ambient_colors.dart';
 import 'playback_engine.dart';
 
@@ -16,16 +20,30 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   static const _backgroundPlaybackChannel = MethodChannel(
     'yureru/media_picker',
   );
+  static const _nativePipChannel = MethodChannel('yureru/native_pip');
+  MediaKitPlaybackEngine() {
+    _nativePipChannel.setMethodCallHandler(_handleNativePipCall);
+  }
+
   mk.Player? _player;
   mkv.VideoController? _vc;
+  PlaybackSource? _activeSource;
   PlaybackSnapshot _snap = const PlaybackSnapshot();
   final _snapCtrl = StreamController<PlaybackSnapshot>.broadcast();
   final _completedCtrl = StreamController<void>.broadcast();
+  final _positions = StreamController<Duration>.broadcast();
+  final _durations = StreamController<Duration>.broadcast();
+  final _playing = StreamController<bool>.broadcast();
   void Function()? _onEnded;
   bool _completedFired = false;
+  bool _nativePipActive = false;
+  bool _nativePipUsesWebKit = false;
+  String? _pictureInPictureFailure;
   final List<StreamSubscription> _subs = [];
   double _rate = 1.0;
   double _volume = 1.0;
+  bool _normalizationEnabled = false;
+  String? _lastPlayerError;
   final ValueNotifier<ui.Image?> _ambientMatteFrame = ValueNotifier(null);
   Future<ui.Image?> Function()? _ambientFrameSource;
   AmbientEdgeColors? _previousAmbientEdges;
@@ -40,12 +58,18 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     _subs.add(
       p.stream.log.listen((entry) {
         if (entry.level == 'error') {
+          _lastPlayerError = entry.text;
           debugPrint('media_kit: ${entry.text}');
         }
       }),
     );
     _subs.add(
       p.stream.position.listen((d) {
+        // While PiP is active, its native player owns time. Late mpv ticks
+        // from the paused in-app player must not pull the displayed state
+        // backward or make the transport control look stopped.
+        if (_nativePipActive) return;
+        _positions.add(d);
         _snap = PlaybackSnapshot(
           position: d,
           duration: _snap.duration,
@@ -54,10 +78,21 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
           completed: false,
         );
         _snapCtrl.add(_snap);
+        if (_nativePipActive) {
+          unawaited(
+            _nativePipChannel.invokeMethod<void>('updatePosition', {
+              'position': d.inMicroseconds / Duration.microsecondsPerSecond,
+              'duration':
+                  _snap.duration.inMicroseconds /
+                  Duration.microsecondsPerSecond,
+            }),
+          );
+        }
       }),
     );
     _subs.add(
       p.stream.duration.listen((d) {
+        _durations.add(d);
         _snap = PlaybackSnapshot(
           position: _snap.position,
           duration: d,
@@ -70,6 +105,8 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     );
     _subs.add(
       p.stream.playing.listen((playing) {
+        if (_nativePipActive) return;
+        _playing.add(playing);
         _snap = PlaybackSnapshot(
           position: _snap.position,
           duration: _snap.duration,
@@ -78,6 +115,11 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
           completed: false,
         );
         _snapCtrl.add(_snap);
+        if (_nativePipActive) {
+          unawaited(
+            _nativePipChannel.invokeMethod<void>('setPlaying', playing),
+          );
+        }
         unawaited(_setAndroidBackgroundPlayback(playing));
       }),
     );
@@ -106,6 +148,8 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
 
   @override
   Future<void> load(PlaybackSource source, {bool autoplay = true}) async {
+    final continueInNativePip = _nativePipActive;
+    _activeSource = source;
     _completedFired = false;
     _previousAmbientEdges = null;
     _ambientGeometry = null;
@@ -117,8 +161,17 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     _snapCtrl.add(_snap);
     await p.open(
       mk.Media(source.uri, start: source.start, end: source.end),
-      play: autoplay,
+      // Start normalized tracks only after the filter is attached, so the
+      // first audio samples receive the same processing as the rest.
+      play: autoplay && !_normalizationEnabled && !continueInNativePip,
     );
+    if (_normalizationEnabled && !continueInNativePip) {
+      final platform = p.platform;
+      if (platform is mk.NativePlayer) {
+        await _applyVolumeNormalization(platform, true);
+      }
+      if (autoplay) await p.play();
+    }
     await _setAndroidBackgroundPlayback(autoplay && p.state.playing);
     if (_rate != 1.0) await p.setRate(_rate);
     _snap = PlaybackSnapshot(
@@ -128,6 +181,27 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
       initialized: true,
     );
     _snapCtrl.add(_snap);
+    if (continueInNativePip) {
+      final pipUri =
+          _nativePipUsesWebKit &&
+              _localPath(source.uri).toLowerCase().endsWith('.webm')
+          ? source.uri
+          : await _pictureInPictureSource(source);
+      final updated = await _nativePipChannel.invokeMethod<bool>('update', {
+        'uri': pipUri,
+        'playing': autoplay,
+        'position':
+            p.state.position.inMicroseconds / Duration.microsecondsPerSecond,
+        'duration':
+            p.state.duration.inMicroseconds / Duration.microsecondsPerSecond,
+        'rate': _rate,
+      });
+      if (updated != true) {
+        _nativePipActive = false;
+        _nativePipUsesWebKit = false;
+        if (autoplay) await p.play();
+      }
+    }
   }
 
   Future<void> _enableHardwareDecoding(mk.Player player) async {
@@ -151,6 +225,51 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
       await controller.platform.future;
     } catch (_) {
       // Audio playback can still proceed if native video output is unavailable.
+    }
+  }
+
+  @override
+  bool get supportsVolumeNormalization => true;
+
+  @override
+  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
+    if (_normalizationEnabled == enabled) return;
+    final player = _player;
+    final platform = player?.platform;
+    if (_activeSource != null) {
+      if (platform is! mk.NativePlayer) {
+        throw UnsupportedError('Native audio filtering is unavailable');
+      }
+      await _applyVolumeNormalization(platform, enabled);
+    }
+    _normalizationEnabled = enabled;
+  }
+
+  Future<void> _applyVolumeNormalization(
+    mk.NativePlayer platform,
+    bool enabled,
+  ) async {
+    _lastPlayerError = null;
+    final filters = await platform.getProperty('af');
+    final isApplied = filters.contains('yureru_normalize');
+    if (isApplied == enabled) return;
+    await platform.command(
+      enabled
+          ? [
+              'af',
+              'add',
+              '@yureru_normalize:lavfi=[dynaudnorm=f=150:g=15:p=0.9:m=4:r=0.15]',
+            ]
+          : ['af', 'remove', '@yureru_normalize'],
+    );
+    final updatedFilters = await platform.getProperty('af');
+    if (updatedFilters.contains('yureru_normalize') != enabled) {
+      final playerError = _lastPlayerError;
+      throw StateError(
+        'Volume normalization filter was not added. '
+        'Current filters: $updatedFilters'
+        '${playerError == null ? '' : ' | mpv: $playerError'}',
+      );
     }
   }
 
@@ -200,12 +319,20 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
 
   @override
   Future<void> play() async {
+    if (_nativePipActive) {
+      await _nativePipChannel.invokeMethod<void>('setPlaying', true);
+      return;
+    }
     await _ensurePlayer().play();
     await _setAndroidBackgroundPlayback(true);
   }
 
   @override
   Future<void> pause() async {
+    if (_nativePipActive) {
+      await _nativePipChannel.invokeMethod<void>('setPlaying', false);
+      return;
+    }
     await _ensurePlayer().pause();
     await _setAndroidBackgroundPlayback(false);
   }
@@ -224,10 +351,27 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   }
 
   @override
-  Future<void> seekTo(Duration pos) async => _ensurePlayer().seek(pos);
+  Future<void> seekTo(Duration pos) async {
+    if (_nativePipActive) {
+      await _nativePipChannel.invokeMethod<void>(
+        'seekTo',
+        pos.inMicroseconds / Duration.microsecondsPerSecond,
+      );
+      return;
+    }
+    await _ensurePlayer().seek(pos);
+  }
+
   @override
   Future<void> setSpeed(double speed) async {
     _rate = speed;
+    if (_nativePipActive) {
+      await _nativePipChannel.invokeMethod<void>('setRate', {
+        'rate': speed,
+        'playing': _snap.isPlaying,
+      });
+      return;
+    }
     await _ensurePlayer().setRate(speed);
   }
 
@@ -332,20 +476,421 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   }
 
   @override
-  bool get supportsPictureInPicture => false;
+  bool get supportsPictureInPicture {
+    return Platform.isMacOS && _activeSource != null;
+  }
 
   @override
-  Future<bool> enterPictureInPicture() async => false;
+  String? get pictureInPictureFailure => _pictureInPictureFailure;
 
   @override
-  Stream<Duration> get positionStream =>
-      _player?.stream.position ?? const Stream.empty();
+  Future<bool> enterPictureInPicture({double? aspectRatio}) async {
+    // Starting PiP is idempotent. Do not turn an already-visible PiP window
+    // off just because the toolbar action is invoked again.
+    if (_nativePipActive) return true;
+    if (_activeSource == null) return false;
+    _pictureInPictureFailure = null;
+    final wasPlaying = _snap.isPlaying;
+    try {
+      final source = _activeSource!;
+      final sourcePath = _localPath(source.uri);
+      final isWebM = sourcePath.toLowerCase().endsWith('.webm');
+      if (isWebM) {
+        final videoCodec = await _videoCodec(sourcePath);
+        if (videoCodec == 'av1') {
+          // AVPlayer cannot open the WebM container, but Apple Silicon with
+          // AV1 hardware decode can play AV1 in MP4. Remux the video stream
+          // without decoding/re-encoding it, converting only Opus audio to
+          // AAC, then hand the compatible file to system PiP.
+          final pipUri = await _pictureInPictureSource(source);
+          if (wasPlaying) await pause();
+          final started = await _startNativePip(pipUri, wasPlaying);
+          if (started) {
+            _nativePipActive = true;
+            _nativePipUsesWebKit = false;
+            return true;
+          }
+          // Older Macs without AV1 hardware decode may still play the source
+          // through WebKit. Try that route without starting a long transcode.
+          final webKitStarted = await _startWebKitPip(source, wasPlaying);
+          if (webKitStarted) {
+            _nativePipActive = true;
+            _nativePipUsesWebKit = true;
+            return true;
+          }
+          if (wasPlaying) await play();
+          return false;
+        }
+
+        // Start the original WebM in the system WebKit PiP player first. A
+        // full-file transcode can take a minute and must never block the
+        // user's PiP button. Use a prior conversion only as a fast fallback.
+        final started = await _startWebKitPip(source, wasPlaying);
+        if (started) {
+          _nativePipActive = true;
+          _nativePipUsesWebKit = true;
+          return true;
+        }
+        final cached = await _cachedPictureInPictureSource(source);
+        if (cached == null) {
+          if (wasPlaying) await play();
+          return false;
+        }
+        if (wasPlaying) await pause();
+        final startedCached = await _startNativePip(cached, wasPlaying);
+        if (!startedCached && wasPlaying) await play();
+        if (startedCached) _nativePipActive = true;
+        return startedCached;
+      }
+
+      var pipUri = await _pictureInPictureSource(source);
+      if (wasPlaying) await pause();
+      var started = await _startNativePip(pipUri, wasPlaying);
+      if (!started && Platform.isMacOS) {
+        final converted = await _pictureInPictureSource(source, force: true);
+        if (converted != pipUri) {
+          pipUri = converted;
+          if (wasPlaying) await pause();
+          started = await _startNativePip(pipUri, wasPlaying);
+        }
+      }
+      if (!started) {
+        if (wasPlaying) await play();
+        return false;
+      }
+      _nativePipActive = true;
+      _nativePipUsesWebKit = false;
+      return true;
+    } catch (error) {
+      _pictureInPictureFailure = error.toString();
+      if (wasPlaying) await play();
+      return false;
+    }
+  }
+
+  String _localPath(String uri) {
+    final parsed = Uri.tryParse(uri);
+    return parsed?.scheme == 'file' ? parsed!.toFilePath() : uri;
+  }
+
+  Future<bool> _startNativePip(String uri, bool playing) async {
+    final started =
+        await _nativePipChannel.invokeMethod<bool>('start', {
+          'playing': playing,
+          'uri': uri,
+          'position':
+              _snap.position.inMicroseconds / Duration.microsecondsPerSecond,
+          'duration':
+              _snap.duration.inMicroseconds / Duration.microsecondsPerSecond,
+          'rate': _rate,
+        }) ??
+        false;
+    if (!started) {
+      _pictureInPictureFailure = await _nativePipChannel.invokeMethod<String>(
+        'lastStartFailure',
+      );
+    }
+    return started;
+  }
+
+  Future<bool> _startWebKitPip(PlaybackSource source, bool playing) async {
+    if (playing) await pause();
+    return await _nativePipChannel.invokeMethod<bool>('startWebKit', {
+          'uri': source.uri,
+          'playing': playing,
+          'position':
+              _snap.position.inMicroseconds / Duration.microsecondsPerSecond,
+          'duration':
+              _snap.duration.inMicroseconds / Duration.microsecondsPerSecond,
+          'rate': _rate,
+        }) ??
+        false;
+  }
+
+  Future<String?> _videoCodec(String path) async {
+    final session = await FFprobeKit.executeWithArguments([
+      '-v',
+      'error',
+      '-select_streams',
+      'v:0',
+      '-show_entries',
+      'stream=codec_name',
+      '-of',
+      'default=noprint_wrappers=1:nokey=1',
+      path,
+    ]);
+    if (!ReturnCode.isSuccess(await session.getReturnCode())) return null;
+    return (await session.getOutput())?.trim().split(RegExp(r'\r?\n')).first;
+  }
+
+  Future<String?> _cachedPictureInPictureSource(PlaybackSource source) async {
+    if (!Platform.isMacOS) return null;
+    final sourcePath = _localPath(source.uri);
+    final input = File(sourcePath);
+    if (!await input.exists()) return null;
+    final stat = await input.stat();
+    final cacheDir = Directory(
+      '${(await getTemporaryDirectory()).path}/yureru_pip',
+    );
+    final safeId = source.mediaId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    for (final suffix in ['_av1.mp4', '_vtp.mp4', '_vt.mp4']) {
+      final candidate = File(
+        '${cacheDir.path}/${safeId}_${stat.size}_${stat.modified.millisecondsSinceEpoch}$suffix',
+      );
+      final valid = suffix == '_av1.mp4'
+          ? await _isValidAv1PipMp4(candidate)
+          : await _isValidPipMp4(candidate);
+      if (valid) return candidate.path;
+    }
+    return null;
+  }
+
+  Future<String> _pictureInPictureSource(
+    PlaybackSource source, {
+    bool force = false,
+  }) async {
+    if (!Platform.isMacOS) return source.uri;
+    final uri = Uri.tryParse(source.uri);
+    final sourcePath = uri?.scheme == 'file' ? uri!.toFilePath() : source.uri;
+    if (!force && !sourcePath.toLowerCase().endsWith('.webm')) {
+      return source.uri;
+    }
+
+    final input = File(sourcePath);
+    if (!await input.exists()) return source.uri;
+    final stat = await input.stat();
+    final remuxAv1 =
+        !force &&
+        sourcePath.toLowerCase().endsWith('.webm') &&
+        await _videoCodec(sourcePath) == 'av1';
+    final cacheDir = Directory(
+      '${(await getTemporaryDirectory()).path}/yureru_pip',
+    );
+    await cacheDir.create(recursive: true);
+    final safeId = source.mediaId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    final outputSuffix = remuxAv1 ? '_av1.mp4' : '_vtp.mp4';
+    final output = File(
+      '${cacheDir.path}/${safeId}_${stat.size}_${stat.modified.millisecondsSinceEpoch}$outputSuffix',
+    );
+    final validOutput = remuxAv1
+        ? await _isValidAv1PipMp4(output)
+        : await _isValidPipMp4(output);
+    if (validOutput) return output.path;
+    if (await output.exists()) await output.delete();
+
+    // Never let AVPlayer see an MP4 while FFmpeg is still writing it. A
+    // partially written MP4 can contain megabytes of media data but no moov
+    // index, and is otherwise easy to mistake for a completed conversion.
+    final temporaryOutput = File(
+      '${cacheDir.path}/${safeId}_${stat.size}_${stat.modified.millisecondsSinceEpoch}$outputSuffix.partial.mp4',
+    );
+    if (await temporaryOutput.exists()) await temporaryOutput.delete();
+
+    final arguments = remuxAv1
+        ? <String>[
+            '-hide_banner',
+            '-y',
+            '-i',
+            sourcePath,
+            '-map',
+            '0:v:0',
+            '-map',
+            '0:a:0?',
+            '-sn',
+            '-dn',
+            '-c:v',
+            'copy',
+            '-tag:v',
+            'av01',
+            '-c:a',
+            'aac',
+            '-b:a',
+            '192k',
+            '-movflags',
+            '+faststart',
+            temporaryOutput.path,
+          ]
+        : <String>[
+            '-hide_banner',
+            '-y',
+            '-i',
+            sourcePath,
+            '-map',
+            '0:v:0',
+            '-map',
+            '0:a:0?',
+            '-sn',
+            '-dn',
+            '-vf',
+            'scale=w=1280:h=1280:force_original_aspect_ratio=decrease:force_divisible_by=2',
+            '-fps_mode',
+            'passthrough',
+            '-c:v',
+            'h264_videotoolbox',
+            '-b:v',
+            '1800k',
+            '-tag:v',
+            'avc1',
+            '-pix_fmt',
+            'yuv420p',
+            '-c:a',
+            'aac',
+            '-b:a',
+            '192k',
+            '-movflags',
+            '+faststart',
+            temporaryOutput.path,
+          ];
+    final session = await FFmpegKit.executeWithArguments(arguments);
+    if (!ReturnCode.isSuccess(await session.getReturnCode()) ||
+        !(remuxAv1
+            ? await _isValidAv1PipMp4(temporaryOutput)
+            : await _isValidPipMp4(temporaryOutput))) {
+      try {
+        await temporaryOutput.delete();
+      } catch (_) {}
+      throw StateError('Could not prepare this video for macOS system PiP.');
+    }
+
+    await temporaryOutput.rename(output.path);
+    return output.path;
+  }
+
+  Future<bool> _isValidPipMp4(File file) async {
+    if (!await file.exists() || await file.length() == 0) return false;
+    final session = await FFprobeKit.executeWithArguments([
+      '-v',
+      'error',
+      '-select_streams',
+      'v:0',
+      '-show_entries',
+      'stream=codec_name,codec_tag_string',
+      '-of',
+      'csv=p=0',
+      file.path,
+    ]);
+    final output = (await session.getOutput())?.trim() ?? '';
+    return ReturnCode.isSuccess(await session.getReturnCode()) &&
+        output
+            .split(RegExp(r'\r?\n'))
+            .any((line) => line.trim() == 'h264,avc1');
+  }
+
+  Future<bool> _isValidAv1PipMp4(File file) async {
+    if (!await file.exists() || await file.length() == 0) return false;
+    final session = await FFprobeKit.executeWithArguments([
+      '-v',
+      'error',
+      '-select_streams',
+      'v:0',
+      '-show_entries',
+      'stream=codec_name,codec_tag_string',
+      '-of',
+      'csv=p=0',
+      file.path,
+    ]);
+    final output = (await session.getOutput())?.trim() ?? '';
+    return ReturnCode.isSuccess(await session.getReturnCode()) &&
+        output.split(RegExp(r'\r?\n')).any((line) => line.trim() == 'av1,av01');
+  }
+
+  Future<dynamic> _handleNativePipCall(MethodCall call) async {
+    switch (call.method) {
+      case 'playRequested':
+        await play();
+        break;
+      case 'pauseRequested':
+        await pause();
+        break;
+      case 'seekRequested':
+        final seconds = (call.arguments as num?)?.toDouble();
+        if (seconds != null && seconds.isFinite) {
+          final current =
+              _snap.position.inMicroseconds / Duration.microsecondsPerSecond;
+          final duration =
+              _snap.duration.inMicroseconds / Duration.microsecondsPerSecond;
+          final target = (current + seconds).clamp(
+            0.0,
+            duration > 0 ? duration : double.infinity,
+          );
+          await seekTo(
+            Duration(
+              microseconds: (target * Duration.microsecondsPerSecond).round(),
+            ),
+          );
+        }
+        break;
+      case 'stopped':
+        _nativePipActive = false;
+        _nativePipUsesWebKit = false;
+        final state = call.arguments is Map
+            ? Map<String, dynamic>.from(call.arguments as Map)
+            : const <String, dynamic>{};
+        final position = (state['position'] as num?)?.toDouble();
+        if (position != null && position.isFinite) {
+          await _ensurePlayer().seek(
+            Duration(
+              microseconds: (position * Duration.microsecondsPerSecond).round(),
+            ),
+          );
+        }
+        if (state['playing'] == true) await _ensurePlayer().play();
+        break;
+      case 'completed':
+        _fireCompleted();
+        break;
+      case 'positionUpdated':
+        final state = call.arguments is Map
+            ? Map<String, dynamic>.from(call.arguments as Map)
+            : const <String, dynamic>{};
+        final seconds = (state['position'] as num?)?.toDouble();
+        if (seconds != null && seconds.isFinite) {
+          final position = Duration(
+            microseconds: (seconds * Duration.microsecondsPerSecond).round(),
+          );
+          final durationSeconds = (state['duration'] as num?)?.toDouble();
+          final duration = durationSeconds != null && durationSeconds.isFinite
+              ? Duration(
+                  microseconds:
+                      (durationSeconds * Duration.microsecondsPerSecond)
+                          .round(),
+                )
+              : _snap.duration;
+          _positions.add(position);
+          _playing.add(state['playing'] == true);
+          _snap = PlaybackSnapshot(
+            position: position,
+            duration: duration,
+            isPlaying: state['playing'] == true,
+            initialized: true,
+          );
+          _snapCtrl.add(_snap);
+        }
+        break;
+      case 'playbackStateChanged':
+        // The native PiP surface is the active audio/video player. Starting
+        // the in-app player here would play the same track a second time.
+        final playing = call.arguments == true;
+        _playing.add(playing);
+        _snap = PlaybackSnapshot(
+          position: _snap.position,
+          duration: _snap.duration,
+          isPlaying: playing,
+          initialized: true,
+          completed: false,
+        );
+        _snapCtrl.add(_snap);
+        break;
+    }
+    return null;
+  }
+
   @override
-  Stream<Duration> get durationStream =>
-      _player?.stream.duration ?? const Stream.empty();
+  Stream<Duration> get positionStream => _positions.stream;
   @override
-  Stream<bool> get playingStream =>
-      _player?.stream.playing ?? const Stream.empty();
+  Stream<Duration> get durationStream => _durations.stream;
+  @override
+  Stream<bool> get playingStream => _playing.stream;
   @override
   Stream<void> get completedStream => _completedCtrl.stream;
   @override
@@ -355,12 +900,19 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   @override
   double? get videoAspectRatio {
     final state = _player?.state;
+    // `aspect` is already the display aspect ratio. Applying the demuxer's
+    // rotation again turns landscape sources into portrait PiP windows even
+    // though media_kit_video still renders them landscape.
+    final displayAspect = state?.videoParams.aspect;
+    if (displayAspect != null && displayAspect.isFinite && displayAspect > 0) {
+      return displayAspect;
+    }
     final width = state?.width;
     final height = state?.height;
-    if (width == null || height == null || width <= 0 || height <= 0) {
-      return null;
+    if (width != null && height != null && width > 0 && height > 0) {
+      return width / height;
     }
-    return width / height;
+    return null;
   }
 
   @override
@@ -399,6 +951,14 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
 
   @override
   Future<void> dispose() async {
+    if (_nativePipActive) {
+      _nativePipActive = false;
+      try {
+        await _nativePipChannel.invokeMethod<void>('stop');
+      } catch (_) {
+        // App shutdown must still release the normal playback engine.
+      }
+    }
     await _setAndroidBackgroundPlayback(false);
     for (final s in _subs) {
       await s.cancel();

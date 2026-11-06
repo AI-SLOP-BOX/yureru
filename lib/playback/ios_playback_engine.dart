@@ -4,13 +4,18 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:ffmpeg_kit_flutter_new_full/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_full/ffprobe_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_full/return_code.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:video_player_pip/index.dart' as vp;
 
 import 'media_kit_engine.dart';
 import 'playback_engine.dart';
 
 /// Uses AVPlayer/AVPlayerLayer on iOS so the system can take over the layer
-/// for PiP. Sources AVPlayer cannot open fall back to the normal mpv engine.
+/// for PiP. Sources AVPlayer cannot open fall back to media_kit; local WebM
+/// sources are converted to a cached H.264 file only when PiP is requested.
 class IosPlaybackEngine implements PlaybackEngine {
   vp.VideoPlayerController? _controller;
   PlaybackEngine? _fallback;
@@ -30,6 +35,9 @@ class IosPlaybackEngine implements PlaybackEngine {
   void Function()? _onEnded;
   bool _didComplete = false;
   bool _switchingToFallback = false;
+  bool _normalizationEnabled = false;
+  int _sourceEpoch = 0;
+  String? _pictureInPictureFailure;
   double _volume = 1;
   double _speed = 1;
   Future<ui.Image?> Function()? _ambientFrameSource;
@@ -56,6 +64,7 @@ class IosPlaybackEngine implements PlaybackEngine {
 
   @override
   Future<void> load(PlaybackSource source, {bool autoplay = true}) async {
+    _sourceEpoch++;
     await _disposeActive();
     _switchingToFallback = false;
     _activeSource = source;
@@ -64,7 +73,7 @@ class IosPlaybackEngine implements PlaybackEngine {
     _snapshot = const PlaybackSnapshot();
     _snapshots.add(_snapshot);
 
-    if (!_isAvFoundationCandidate(source.uri)) {
+    if (_normalizationEnabled || !_isAvFoundationCandidate(source.uri)) {
       await _loadWithMediaKit(source, autoplay: autoplay);
       return;
     }
@@ -125,6 +134,7 @@ class IosPlaybackEngine implements PlaybackEngine {
     ]);
     await fallback.setVolume(_volume);
     await fallback.setSpeed(_speed);
+    await fallback.setVolumeNormalizationEnabled(_normalizationEnabled);
     fallback.setAmbientFrameSource(_ambientFrameSource);
     await fallback.load(source, autoplay: autoplay);
   }
@@ -271,6 +281,28 @@ class IosPlaybackEngine implements PlaybackEngine {
   ValueListenable<ui.Image?>? get ambientMatteFrameListenable =>
       _fallback?.ambientMatteFrameListenable;
 
+  // AVPlayer has no dynamic-normalization hook. Use the existing media_kit
+  // fallback while the feature is enabled; normal iOS playback remains on
+  // AVPlayer when the feature is off.
+  @override
+  bool get supportsVolumeNormalization => true;
+
+  @override
+  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
+    if (_normalizationEnabled == enabled) return;
+    final fallback = _fallback;
+    if (fallback != null) {
+      await fallback.setVolumeNormalizationEnabled(enabled);
+      _normalizationEnabled = enabled;
+      return;
+    }
+    _normalizationEnabled = enabled;
+    final controller = _controller;
+    if (enabled && controller != null) {
+      await _switchToMediaKit(controller);
+    }
+  }
+
   @override
   Future<String?> readEmbeddedLyrics() async => _fallback?.readEmbeddedLyrics();
 
@@ -301,23 +333,184 @@ class IosPlaybackEngine implements PlaybackEngine {
 
   @override
   bool get supportsPictureInPicture =>
-      _controller?.value.isInitialized == true &&
-      _controller?.value.size.width.round() != 0 &&
-      _controller?.value.size.height.round() != 0;
+      (_controller?.value.isInitialized == true &&
+          _controller?.value.size.width.round() != 0 &&
+          _controller?.value.size.height.round() != 0) ||
+      (_fallback != null && _isLocalWebM(_activeSource?.uri));
 
   @override
-  Future<bool> enterPictureInPicture() async {
+  String? get pictureInPictureFailure => _pictureInPictureFailure;
+
+  @override
+  Future<bool> enterPictureInPicture({double? aspectRatio}) async {
+    _pictureInPictureFailure = null;
+    if (_controller == null && _fallback != null) {
+      final source = _activeSource;
+      if (source == null || !_isLocalWebM(source.uri)) return false;
+      try {
+        await _switchWebMToAvPlayer(source, _sourceEpoch);
+      } catch (error) {
+        _pictureInPictureFailure = error.toString();
+        return false;
+      }
+    }
     final controller = _controller;
     if (controller == null || !supportsPictureInPicture) return false;
     final size = controller.value.size;
     try {
-      return await controller.enterPipMode(
+      // The PiP plugin locates the native AVPlayerLayer from the currently
+      // attached VideoPlayer widget, so let Flutter attach the replacement
+      // WebM-compatible controller before asking AVKit to take it over.
+      await WidgetsBinding.instance.endOfFrame;
+      final started = await controller.enterPipMode(
         width: size.width.round().clamp(1, 4096),
         height: size.height.round().clamp(1, 4096),
       );
-    } catch (_) {
+      if (!started) _pictureInPictureFailure = 'iOS did not start system PiP.';
+      return started;
+    } catch (error) {
+      _pictureInPictureFailure = 'iOS could not start system PiP: $error';
       return false;
     }
+  }
+
+  bool _isLocalWebM(String? uri) {
+    if (uri == null) return false;
+    final parsed = Uri.tryParse(uri);
+    final path = parsed?.scheme == 'file' ? parsed!.toFilePath() : uri;
+    return (parsed == null ||
+            parsed.scheme.isEmpty ||
+            parsed.scheme == 'file') &&
+        path.toLowerCase().endsWith('.webm');
+  }
+
+  Future<void> _switchWebMToAvPlayer(
+    PlaybackSource source,
+    int sourceEpoch,
+  ) async {
+    final fallback = _fallback;
+    if (fallback == null) return;
+    // Let the current WebM keep playing while the PiP-compatible copy is
+    // prepared, then transfer at the latest playback position.
+    final convertedPath = await _prepareWebMForAvPlayer(source);
+    if (sourceEpoch != _sourceEpoch || !identical(fallback, _fallback)) {
+      throw StateError('The current video changed before PiP was ready.');
+    }
+    final current = fallback.snapshot;
+    final file = Uri.tryParse(convertedPath)?.toFilePath() ?? convertedPath;
+    final controller = vp.VideoPlayerController.file(
+      File(file),
+      videoPlayerOptions: vp.VideoPlayerOptions(allowBackgroundPlayback: true),
+    );
+    try {
+      await controller.initialize();
+      await controller.setVolume(_volume);
+      await controller.setPlaybackSpeed(_speed);
+      await controller.seekTo(current.position);
+      await fallback.pause();
+      _controller = controller;
+      controller.addListener(_onVideoPlayerChanged);
+      for (final subscription in _fallbackSubscriptions) {
+        await subscription.cancel();
+      }
+      _fallbackSubscriptions.clear();
+      _fallback = null;
+      await fallback.dispose();
+      _activeSource = PlaybackSource(
+        mediaId: source.mediaId,
+        uri: convertedPath,
+        start: source.start,
+        end: source.end,
+      );
+      if (current.isPlaying) await controller.play();
+      _onVideoPlayerChanged();
+    } catch (_) {
+      await controller.dispose();
+      rethrow;
+    }
+  }
+
+  Future<String> _prepareWebMForAvPlayer(PlaybackSource source) async {
+    final parsed = Uri.tryParse(source.uri);
+    final inputPath = parsed?.scheme == 'file'
+        ? parsed!.toFilePath()
+        : source.uri;
+    final input = File(inputPath);
+    if (!await input.exists()) {
+      throw StateError('The WebM source file is unavailable for iOS PiP.');
+    }
+    final stat = await input.stat();
+    final cacheDir = Directory(
+      '${(await getTemporaryDirectory()).path}/yureru_pip',
+    );
+    await cacheDir.create(recursive: true);
+    final safeId = source.mediaId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    final baseName =
+        '${safeId}_${stat.size}_${stat.modified.millisecondsSinceEpoch}_ios';
+    final output = File('${cacheDir.path}/$baseName.mp4');
+    if (await _isAvPlayerMp4(output)) return output.path;
+    if (await output.exists()) await output.delete();
+    final partial = File('${output.path}.partial.mp4');
+    if (await partial.exists()) await partial.delete();
+
+    final session = await FFmpegKit.executeWithArguments([
+      '-hide_banner',
+      '-y',
+      '-i',
+      inputPath,
+      '-map',
+      '0:v:0',
+      '-map',
+      '0:a:0?',
+      '-sn',
+      '-dn',
+      '-vf',
+      'scale=w=1920:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2',
+      '-fps_mode',
+      'passthrough',
+      '-c:v',
+      'h264_videotoolbox',
+      '-b:v',
+      '3000k',
+      '-tag:v',
+      'avc1',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '192k',
+      '-movflags',
+      '+faststart',
+      partial.path,
+    ]);
+    if (!ReturnCode.isSuccess(await session.getReturnCode()) ||
+        !await _isAvPlayerMp4(partial)) {
+      if (await partial.exists()) await partial.delete();
+      throw StateError('Could not prepare this WebM video for iOS system PiP.');
+    }
+    await partial.rename(output.path);
+    return output.path;
+  }
+
+  Future<bool> _isAvPlayerMp4(File file) async {
+    if (!await file.exists() || await file.length() == 0) return false;
+    final session = await FFprobeKit.executeWithArguments([
+      '-v',
+      'error',
+      '-select_streams',
+      'v:0',
+      '-show_entries',
+      'stream=codec_name,codec_tag_string',
+      '-of',
+      'csv=p=0',
+      file.path,
+    ]);
+    final output = (await session.getOutput())?.trim() ?? '';
+    return ReturnCode.isSuccess(await session.getReturnCode()) &&
+        output
+            .split(RegExp(r'\r?\n'))
+            .any((line) => line.trim() == 'h264,avc1');
   }
 
   @override
@@ -362,6 +555,7 @@ class IosPlaybackEngine implements PlaybackEngine {
 
   @override
   Future<void> dispose() async {
+    _sourceEpoch++;
     await _disposeActive();
     await _snapshots.close();
     await _completed.close();

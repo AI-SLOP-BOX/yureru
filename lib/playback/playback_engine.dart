@@ -54,6 +54,12 @@ abstract class PlaybackEngine {
   Future<void> setVolume(double volume);
   double get volume;
 
+  /// Whether this backend can apply dynamic loudness normalization.
+  bool get supportsVolumeNormalization => false;
+  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
+    if (enabled) throw UnsupportedError('Volume normalization is unavailable');
+  }
+
   /// Enable or disable video track (for audio-only / battery saving mode)
   Future<void> setVideoTrackEnabled(bool enabled) async {}
 
@@ -83,8 +89,11 @@ abstract class PlaybackEngine {
   /// Whether the current source can be handed to the system PiP player.
   bool get supportsPictureInPicture => false;
 
+  /// Diagnostic detail from the most recent PiP start failure, if available.
+  String? get pictureInPictureFailure => null;
+
   /// Start native PiP for engines that expose a platform video layer.
-  Future<bool> enterPictureInPicture() async => false;
+  Future<bool> enterPictureInPicture({double? aspectRatio}) async => false;
 
   Future<void> dispose();
 

@@ -7,7 +7,6 @@ import '../../playback/playback_controller.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import 'media_metadata_editor.dart';
-import 'batch_metadata_editor.dart';
 import '../widgets/app_svg_icon.dart';
 import '../widgets/thumb_image.dart';
 import '../widgets/duration_text.dart';
@@ -26,26 +25,14 @@ class CollectionBrowser extends ConsumerStatefulWidget {
 
 class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
   String? _selectedId;
-  bool _selecting = false;
-  final Set<String> _selection = {};
-
-  void _leaveSelection() {
-    _selecting = false;
-    _selection.clear();
-  }
 
   @override
   void didUpdateWidget(CollectionBrowser oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.kind != widget.kind) {
       _selectedId = null;
-      _leaveSelection();
     }
   }
-
-  void _toggle(String id) => setState(() {
-    if (!_selection.add(id)) _selection.remove(id);
-  });
 
   void _play(
     List<MediaItem> items, {
@@ -112,107 +99,6 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
     ),
   );
 
-  Widget _selectionBar(MediaCollection collection, List<MediaItem> visible) {
-    final ids = collection.items
-        .where((m) => _selection.contains(m.id))
-        .map((m) => m.id)
-        .toList();
-    final visibleIds = visible.map((m) => m.id).toSet();
-    final allVisible =
-        visibleIds.isNotEmpty && visibleIds.every(_selection.contains);
-    final hidden = ids.where((id) => !visibleIds.contains(id)).length;
-    return Material(
-      elevation: 8,
-      color: themeCard(context),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      ref
-                          .tr('batch_count')
-                          .replaceAll('{count}', '${ids.length}'),
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: visibleIds.isEmpty
-                        ? null
-                        : () => setState(() {
-                            if (allVisible) {
-                              _selection.removeAll(visibleIds);
-                            } else {
-                              _selection.addAll(visibleIds);
-                            }
-                          }),
-                    child: Text(
-                      ref.tr(
-                        allVisible
-                            ? 'browse_deselect_visible'
-                            : 'browse_select_visible',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              if (hidden > 0)
-                Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      ref
-                          .tr('browse_hidden_selection')
-                          .replaceAll('{count}', '$hidden'),
-                      style: TextStyle(
-                        color: themeTextSub(context),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: ids.isEmpty
-                          ? null
-                          : () async {
-                              final saved = await showBatchMetadataEditor(
-                                context,
-                                ref,
-                                ids,
-                              );
-                              if (!mounted || !saved) return;
-                              setState(() {
-                                _leaveSelection();
-                                _selectedId = null;
-                              });
-                            },
-                      icon: const AppSvgIcon('collection_edit', size: 18),
-                      label: Text(ref.tr('batch_metadata')),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  TextButton(
-                    onPressed: () => setState(_leaveSelection),
-                    child: Text(ref.tr('browse_finish_selection')),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _hero(MediaCollection collection) {
     final cover = collection.items.first;
     return Container(
@@ -277,37 +163,23 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
             ],
           ),
           const SizedBox(height: 16),
-          if (_selecting)
-            Text(
-              ref.tr('browse_selection_hint'),
-              style: TextStyle(color: themeTextSub(context)),
-            )
-          else
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                FilledButton.icon(
-                  onPressed: () => _play(collection.items),
-                  icon: const AppSvgIcon('play', size: 18),
-                  label: Text(ref.tr('play')),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () => _play(collection.items, shuffle: true),
-                  icon: const AppSvgIcon('collection_shuffle', size: 18),
-                  label: Text(ref.tr('shuffle')),
-                ),
-                TextButton.icon(
-                  onPressed: () => setState(() {
-                    _selection.clear();
-                    _selecting = true;
-                  }),
-                  icon: const AppSvgIcon('collection_select', size: 18),
-                  label: Text(ref.tr('select_tracks')),
-                ),
-              ],
-            ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilledButton.icon(
+                onPressed: () => _play(collection.items),
+                icon: const AppSvgIcon('play', size: 18),
+                label: Text(ref.tr('play')),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _play(collection.items, shuffle: true),
+                icon: const AppSvgIcon('collection_shuffle', size: 18),
+                label: Text(ref.tr('shuffle')),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -327,22 +199,15 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
       selectedTileColor: Theme.of(
         context,
       ).colorScheme.primary.withValues(alpha: 0.12),
-      selected: _selecting
-          ? _selection.contains(media.id)
-          : currentId == media.id,
-      leading: _selecting
-          ? Checkbox(
-              value: _selection.contains(media.id),
-              onChanged: (_) => _toggle(media.id),
-            )
-          : ThumbImage(
-              seed: media.title,
-              mediaId: media.id,
-              localPath: media.localPath,
-              imageContext: widget.kind == CollectionKind.albums
-                  ? MediaImageContext.album
-                  : MediaImageContext.home,
-            ),
+      selected: currentId == media.id,
+      leading: ThumbImage(
+        seed: media.title,
+        mediaId: media.id,
+        localPath: media.localPath,
+        imageContext: widget.kind == CollectionKind.albums
+            ? MediaImageContext.album
+            : MediaImageContext.home,
+      ),
       title: Row(
         children: [
           Expanded(
@@ -368,68 +233,60 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: _selecting
-          ? null
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (wide && media.durationMs != null)
-                  DurationText(
-                    mediaId: media.id,
-                    localPath: media.localPath,
-                    durationMs: media.durationMs,
-                  ),
-                PopupMenuButton<String>(
-                  tooltip: ref.tr('browse_track_actions'),
-                  icon: const AppSvgIcon('more_horizontal'),
-                  onSelected: (action) {
-                    if (action == 'edit') {
-                      showMediaMetadataEditor(context, ref, media);
-                    } else {
-                      ref
-                          .read(libraryProvider.notifier)
-                          .toggleFavorite(media.id);
-                    }
-                  },
-                  itemBuilder: (_) => [
-                    PopupMenuItem(
-                      value: 'favorite',
-                      child: Row(
-                        children: [
-                          AppSvgIcon(
-                            media.isFavorite ? 'favorite_filled' : 'favorite',
-                            size: 18,
-                          ),
-                          const SizedBox(width: 12),
-                          Flexible(
-                            child: Text(
-                              ref.tr(
-                                media.isFavorite
-                                    ? 'remove_favorite'
-                                    : 'add_favorite',
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (wide && media.durationMs != null)
+            DurationText(
+              mediaId: media.id,
+              localPath: media.localPath,
+              durationMs: media.durationMs,
+            ),
+          PopupMenuButton<String>(
+            tooltip: ref.tr('browse_track_actions'),
+            icon: const AppSvgIcon('more_horizontal'),
+            onSelected: (action) {
+              if (action == 'edit') {
+                showMediaMetadataEditor(context, ref, media);
+              } else {
+                ref.read(libraryProvider.notifier).toggleFavorite(media.id);
+              }
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'favorite',
+                child: Row(
+                  children: [
+                    AppSvgIcon(
+                      media.isFavorite ? 'favorite_filled' : 'favorite',
+                      size: 18,
                     ),
-                    PopupMenuItem(
-                      value: 'edit',
-                      child: Row(
-                        children: [
-                          const AppSvgIcon('collection_edit', size: 18),
-                          const SizedBox(width: 12),
-                          Flexible(child: Text(ref.tr('metadata_edit_title'))),
-                        ],
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        ref.tr(
+                          media.isFavorite ? 'remove_favorite' : 'add_favorite',
+                        ),
                       ),
                     ),
                   ],
                 ),
-              ],
-            ),
-      onTap: () => _selecting
-          ? _toggle(media.id)
-          : _play(collection.items, selected: media),
+              ),
+              PopupMenuItem(
+                value: 'edit',
+                child: Row(
+                  children: [
+                    const AppSvgIcon('collection_edit', size: 18),
+                    const SizedBox(width: 12),
+                    Flexible(child: Text(ref.tr('metadata_edit_title'))),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      onTap: () => _play(collection.items, selected: media),
     );
   }
 
@@ -473,7 +330,6 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
                           TextButton.icon(
                             onPressed: () => setState(() {
                               _selectedId = null;
-                              _leaveSelection();
                             }),
                             icon: const AppSvgIcon('back', size: 18),
                             label: Text(ref.tr('back')),
@@ -504,7 +360,6 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
                 ],
               ),
             ),
-            if (_selecting) _selectionBar(collection, visible),
           ],
         ),
       );

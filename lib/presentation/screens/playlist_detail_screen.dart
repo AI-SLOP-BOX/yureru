@@ -1,8 +1,11 @@
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../app_state.dart';
 import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
@@ -12,6 +15,7 @@ import '../i18n.dart';
 import '../layout_metrics.dart';
 import '../theme.dart';
 import '../widgets/duration_text.dart';
+import '../widgets/app_svg_icon.dart';
 import '../widgets/frosted_panel.dart';
 import '../widgets/thumb_image.dart';
 
@@ -216,6 +220,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           localPath: first.localPath,
                           imageContext: MediaImageContext.playlist,
                           playlistId: pl.id,
+                          playlistCover: true,
                           size: artworkSize,
                           expand: true,
                         ),
@@ -292,6 +297,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                               localPath: first?.localPath,
                               imageContext: MediaImageContext.playlist,
                               playlistId: pl.id,
+                              playlistCover: true,
                               size: artworkSize,
                               radius: 16,
                               expand: true,
@@ -367,11 +373,6 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                       onTap: () =>
                                           _showRenameDialog(context, pl),
                                     ),
-                                    _playlistImagePriorityButton(
-                                      pl,
-                                      isDark,
-                                      buttonSize: tight ? 40 : 44,
-                                    ),
                                     // 2. Center Large White Play Button
                                     Material(
                                       color: pl.mediaIds.isEmpty
@@ -427,8 +428,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                     ),
                     if (screenWidth >= 1200) ...[
                       const SizedBox(width: 28),
-                      SizedBox(
-                        width: 238,
+                      IntrinsicWidth(
                         child: FrostedPanel(
                           borderRadius: BorderRadius.circular(16),
                           padding: const EdgeInsets.all(9),
@@ -653,9 +653,9 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                           height: 52,
                                           child: ReorderableDragStartListener(
                                             index: i,
-                                            child: const Icon(
-                                              Icons.drag_handle_rounded,
-                                              size: 28,
+                                            child: const AppSvgIcon(
+                                              'drag',
+                                              size: 22,
                                               color: kTextSub,
                                             ),
                                           ),
@@ -863,58 +863,6 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     );
   }
 
-  Widget _playlistImagePriorityButton(
-    Playlist playlist,
-    bool isDark, {
-    required double buttonSize,
-  }) {
-    final current = playlist.imagePriority;
-    return Tooltip(
-      message: ref.tr('playlist_image_priority'),
-      child: PopupMenuButton<String>(
-        tooltip: ref.tr('playlist_image_priority'),
-        popUpAnimationStyle: AnimationStyle.noAnimation,
-        onSelected: (value) => ref
-            .read(libraryProvider.notifier)
-            .setPlaylistImagePriority(
-              playlist.id,
-              value == 'default' ? null : value,
-            ),
-        itemBuilder: (_) => [
-          CheckedPopupMenuItem(
-            value: 'default',
-            checked: current == null,
-            child: Text(ref.tr('image_priority_default')),
-          ),
-          CheckedPopupMenuItem(
-            value: MediaImagePriority.artworkFirst.name,
-            checked: current == MediaImagePriority.artworkFirst.name,
-            child: Text(ref.tr('image_priority_artwork')),
-          ),
-          CheckedPopupMenuItem(
-            value: MediaImagePriority.thumbnailFirst.name,
-            checked: current == MediaImagePriority.thumbnailFirst.name,
-            child: Text(ref.tr('image_priority_thumbnail')),
-          ),
-        ],
-        child: Material(
-          color: isDark ? const Color(0xFF242424) : const Color(0xFFE4E4E4),
-          shape: const CircleBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: SizedBox(
-            width: buttonSize,
-            height: buttonSize,
-            child: Icon(
-              Icons.image_outlined,
-              size: 20,
-              color: isDark ? Colors.white : Colors.black87,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _moreMenuButton(
     BuildContext context,
     dynamic pl,
@@ -1108,30 +1056,150 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     }
   }
 
-  Future<void> _showRenameDialog(BuildContext context, dynamic pl) async {
+  Future<void> _showRenameDialog(BuildContext context, Playlist pl) async {
     final c = TextEditingController(text: pl.name);
-    final name = await showDialog<String>(
+    String? selectedArtworkPath;
+    var clearArtwork = false;
+    final save = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(ref.tr('rename')),
-        content: TextField(controller: c, autofocus: true),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(ref.tr('cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, c.text),
-            child: Text(ref.tr('save')),
-          ),
-        ],
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final previewPath = clearArtwork
+              ? null
+              : selectedArtworkPath ?? pl.artworkPath;
+          return AlertDialog(
+            title: Text(ref.tr('edit_playlist')),
+            content: SizedBox(
+              width: 360,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: c,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      labelText: ref.tr('playlist_name'),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    ref.tr('playlist_artwork'),
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: SizedBox.square(
+                          dimension: 72,
+                          child: previewPath == null
+                              ? ColoredBox(
+                                  color: themeBorder(context),
+                                  child: const Icon(Icons.queue_music_rounded),
+                                )
+                              : Image.file(
+                                  File(previewPath),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) =>
+                                      const Icon(Icons.broken_image_outlined),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 4,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () async {
+                                final result = await FilePicker.platform
+                                    .pickFiles(
+                                      type: FileType.image,
+                                      allowMultiple: false,
+                                      withData: false,
+                                    );
+                                final path = result?.files.single.path;
+                                if (path != null) {
+                                  setDialogState(() {
+                                    selectedArtworkPath = path;
+                                    clearArtwork = false;
+                                  });
+                                }
+                              },
+                              icon: const Icon(Icons.image_outlined),
+                              label: Text(ref.tr('choose_artwork')),
+                            ),
+                            if (previewPath != null)
+                              IconButton(
+                                tooltip: ref.tr('clear_artwork'),
+                                onPressed: () => setDialogState(() {
+                                  selectedArtworkPath = null;
+                                  clearArtwork = true;
+                                }),
+                                icon: const Icon(Icons.delete_outline_rounded),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: Text(ref.tr('cancel')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text(ref.tr('save')),
+              ),
+            ],
+          );
+        },
       ),
     );
-    if (name != null && name.trim().isNotEmpty) {
-      await ref
-          .read(libraryProvider.notifier)
-          .renamePlaylist(pl.id, name.trim());
+    if (save == true && context.mounted) {
+      if (c.text.trim().isNotEmpty && c.text.trim() != pl.name) {
+        await ref
+            .read(libraryProvider.notifier)
+            .renamePlaylist(pl.id, c.text.trim());
+      }
+      String? artworkPath = pl.artworkPath;
+      if (selectedArtworkPath != null) {
+        try {
+          final support = await getApplicationSupportDirectory();
+          final directory = Directory(
+            '${support.path}/yureru_playlist_artwork',
+          );
+          await directory.create(recursive: true);
+          final extension = selectedArtworkPath!.split('.').last.toLowerCase();
+          final destination =
+              '${directory.path}/${pl.id}_${DateTime.now().microsecondsSinceEpoch}.$extension';
+          await File(selectedArtworkPath!).copy(destination);
+          artworkPath = destination;
+        } catch (error) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('$error')));
+          }
+          c.dispose();
+          return;
+        }
+      } else if (clearArtwork) {
+        artworkPath = null;
+      }
+      if (artworkPath != pl.artworkPath) {
+        await ref
+            .read(libraryProvider.notifier)
+            .setPlaylistArtworkPath(pl.id, artworkPath);
+      }
     }
+    c.dispose();
   }
 
   Future<void> _importAndAddVideos(BuildContext context, WidgetRef ref) async {

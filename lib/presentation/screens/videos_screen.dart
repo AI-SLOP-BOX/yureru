@@ -1,10 +1,7 @@
 import 'dart:async';
-import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../../library/media_order.dart';
@@ -432,153 +429,17 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
         highlighted: m.id == _highlightedId,
         reorderable: reorderable,
         onPlay: () => _playFromHere(ref, ids, i),
-        onAddToPlaylist: () => _addToPlaylist(context, ref, m.id),
         onPlayNext: () {
           final wasEmpty = !ref.read(queueProvider).hasCurrent;
           ref.read(queueProvider.notifier).playNext(m.id);
           if (wasEmpty) ref.read(playbackControllerProvider).openCurrent();
         },
-        onEnqueue: () => ref.read(queueProvider.notifier).append(m.id),
-        onChangeThumbnail: () => _changeThumbnail(context, ref, m),
-        onChangeArtwork: () => _changeArtwork(context, ref, m),
-        onDelete: () => _confirmDelete(context, ref, m),
       ),
     );
     if (!reorderable) return row;
     return KeyedSubtree(
       key: ValueKey('video-${m.id}'),
       child: ReorderableDelayedDragStartListener(index: i, child: row),
-    );
-  }
-
-  Future<void> _changeThumbnail(
-    BuildContext context,
-    WidgetRef ref,
-    MediaItem media,
-  ) => _chooseAndSaveImage(context, ref, media, artwork: false);
-
-  Future<void> _changeArtwork(
-    BuildContext context,
-    WidgetRef ref,
-    MediaItem media,
-  ) => _chooseAndSaveImage(context, ref, media, artwork: true);
-
-  Future<void> _chooseAndSaveImage(
-    BuildContext context,
-    WidgetRef ref,
-    MediaItem media, {
-    required bool artwork,
-  }) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: false,
-      withData: false,
-    );
-    final sourcePath = result?.files.single.path;
-    if (sourcePath == null) return;
-    try {
-      final dir = await getApplicationSupportDirectory();
-      final imageDir = Directory(
-        '${dir.path}/${artwork ? 'yureru_artwork' : 'yureru_thumbnails'}',
-      );
-      await imageDir.create(recursive: true);
-      final extension = sourcePath.contains('.')
-          ? sourcePath.split('.').last.toLowerCase()
-          : 'png';
-      final destination =
-          '${imageDir.path}/${media.id}_${DateTime.now().microsecondsSinceEpoch}.$extension';
-      await File(sourcePath).copy(destination);
-      if (artwork) {
-        await ref
-            .read(libraryProvider.notifier)
-            .updateMediaArtwork(media.id, destination);
-      } else {
-        await ref
-            .read(libraryProvider.notifier)
-            .updateMediaThumbnail(media.id, destination);
-      }
-    } catch (error) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              ref.tr('thumbnail_change_failed').replaceAll('{error}', '$error'),
-            ),
-          ),
-        );
-      }
-    }
-  }
-
-  void _confirmDelete(BuildContext context, WidgetRef ref, MediaItem media) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(ref.tr('delete_from_library')),
-        content: Text(
-          ref.tr('remove_media_confirm').replaceAll('{title}', media.title),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(ref.tr('cancel')),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: kAccent),
-            onPressed: () async {
-              Navigator.pop(context);
-              await ref
-                  .read(playbackControllerProvider)
-                  .handleMediaRemoved(media.id);
-              await ref.read(libraryProvider.notifier).removeMedia(media.id);
-            },
-            child: Text(ref.tr('delete')),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _addToPlaylist(BuildContext context, WidgetRef ref, String mediaId) {
-    final lib = ref.read(libraryProvider);
-    if (lib.playlists.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(ref.tr('empty_playlist'))));
-      return;
-    }
-    showDialog(
-      context: context,
-      builder: (_) => SimpleDialog(
-        title: Text(ref.tr('add_playlist')),
-        children: [
-          for (final pl in lib.playlists)
-            SimpleDialogOption(
-              onPressed: () async {
-                await ref
-                    .read(libraryProvider.notifier)
-                    .addToPlaylist(pl.id, mediaId);
-                if (context.mounted) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        ref
-                            .tr('added_to_playlist')
-                            .replaceAll('{name}', displayTitle(pl.name)),
-                      ),
-                    ),
-                  );
-                }
-              },
-              child: Text(
-                displayTitle(pl.name),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-        ],
-      ),
     );
   }
 }
@@ -590,12 +451,7 @@ class _TrackRow extends ConsumerStatefulWidget {
   final bool playing;
   final bool highlighted;
   final VoidCallback onPlay;
-  final VoidCallback onAddToPlaylist;
   final VoidCallback onPlayNext;
-  final VoidCallback onEnqueue;
-  final VoidCallback onChangeThumbnail;
-  final VoidCallback onChangeArtwork;
-  final VoidCallback onDelete;
 
   const _TrackRow({
     required this.index,
@@ -603,12 +459,7 @@ class _TrackRow extends ConsumerStatefulWidget {
     required this.playing,
     required this.highlighted,
     required this.onPlay,
-    required this.onAddToPlaylist,
     required this.onPlayNext,
-    required this.onEnqueue,
-    required this.onChangeThumbnail,
-    required this.onChangeArtwork,
-    required this.onDelete,
     this.reorderable = false,
   });
 
@@ -853,27 +704,10 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                             : themeTextSub(context),
                       ),
                       onSelected: (v) {
-                        switch (v) {
-                          case 'favorite':
-                            ref
-                                .read(libraryProvider.notifier)
-                                .toggleFavorite(widget.media.id);
-                            break;
-                          case 'enqueue':
-                            widget.onEnqueue();
-                            break;
-                          case 'addToPlaylist':
-                            widget.onAddToPlaylist();
-                            break;
-                          case 'changeThumbnail':
-                            widget.onChangeThumbnail();
-                            break;
-                          case 'changeArtwork':
-                            widget.onChangeArtwork();
-                            break;
-                          case 'delete':
-                            widget.onDelete();
-                            break;
+                        if (v == 'favorite') {
+                          ref
+                              .read(libraryProvider.notifier)
+                              .toggleFavorite(widget.media.id);
                         }
                       },
                       itemBuilder: (_) => [
@@ -894,65 +728,6 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                                       ? 'remove_favorite'
                                       : 'add_favorite',
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'enqueue',
-                          child: Row(
-                            children: [
-                              AppSvgIcon('queue_add', size: 20),
-                              SizedBox(width: 10),
-                              Text(ref.tr('add_queue')),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'addToPlaylist',
-                          child: Row(
-                            children: [
-                              AppSvgIcon('playlist_add', size: 20),
-                              SizedBox(width: 10),
-                              Text(ref.tr('add_playlist')),
-                            ],
-                          ),
-                        ),
-                        PopupMenuDivider(),
-                        PopupMenuItem(
-                          value: 'changeThumbnail',
-                          child: Row(
-                            children: [
-                              const Icon(Icons.image_outlined, size: 20),
-                              SizedBox(width: 10),
-                              Text(ref.tr('change_thumbnail')),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'changeArtwork',
-                          child: Row(
-                            children: [
-                              AppSvgIcon('artwork', size: 20),
-                              SizedBox(width: 10),
-                              Text(ref.tr('artwork')),
-                            ],
-                          ),
-                        ),
-                        PopupMenuDivider(),
-                        PopupMenuItem(
-                          value: 'delete',
-                          child: Row(
-                            children: [
-                              AppSvgIcon(
-                                'delete',
-                                size: 20,
-                                color: Colors.redAccent,
-                              ),
-                              SizedBox(width: 10),
-                              Text(
-                                ref.tr('delete_from_library_short'),
-                                style: TextStyle(color: Colors.redAccent),
                               ),
                             ],
                           ),

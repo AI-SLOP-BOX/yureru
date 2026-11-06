@@ -4,6 +4,8 @@ import 'package:uuid/uuid.dart';
 const _uuid = Uuid();
 const _unchanged = Object();
 
+enum PlaybackRankingPeriod { threeDays, week, month, olderPopular, allTime }
+
 /// A single media item in the library. Identity = [id], never path.
 class MediaItem {
   final String id;
@@ -11,6 +13,10 @@ class MediaItem {
   final String title;
   final bool isFavorite;
   final DateTime? lastPlayedAt;
+  final int playCount;
+
+  /// Calendar-day play counts (YYYY-MM-DD), retained for period rankings.
+  final Map<String, int> playCountsByDay;
   final String? artist;
   final String? album;
   final String? albumArtist;
@@ -40,8 +46,37 @@ class MediaItem {
   /// User-selected lyrics file (.lrc or plain text), if available.
   final String? lyricsPath;
 
+  /// Optional translated lyrics. Its lines are displayed against the source
+  /// lyric timestamps, so translation does not need duplicate timing data.
+  final String? translatedLyricsPath;
+
+  /// Hides the in-player lyric edit control after the user finalizes the text.
+  final bool lyricsEditingFinalized;
+
   /// Signed correction for synchronized lyrics. Positive values delay lines.
   final int lyricsOffsetMs;
+
+  /// When enabled, the player chooses a separate lyric file for video and
+  /// jacket display modes, falling back to the shared lyrics when absent.
+  final bool separateLyricsByView;
+  final String? videoLyricsPath;
+  final int videoLyricsOffsetMs;
+  final String? artworkLyricsPath;
+  final int artworkLyricsOffsetMs;
+
+  /// When true, jacket lyrics follow the video timing correction unless a
+  /// separate jacket audio source is configured.
+  final bool artworkLyricsOffsetFollowsVideo;
+
+  /// Optional library media whose audio is used in jacket mode.
+  final String? artworkAudioMediaId;
+
+  /// Optional copied audio file used in jacket mode.
+  final String? artworkAudioPath;
+
+  /// User explicitly marked the current item as having no lyrics, hiding the
+  /// player lyrics entry until lyrics are added again.
+  final bool lyricsButtonHidden;
 
   MediaItem({
     String? id,
@@ -53,6 +88,8 @@ class MediaItem {
     this.discNumber,
     this.isFavorite = false,
     this.lastPlayedAt,
+    this.playCount = 0,
+    this.playCountsByDay = const {},
     required this.localPath,
     this.durationMs,
     DateTime? createdAt,
@@ -62,9 +99,79 @@ class MediaItem {
     this.artworkPath,
     this.thumbnailPath,
     this.lyricsPath,
+    this.translatedLyricsPath,
+    this.lyricsEditingFinalized = false,
     this.lyricsOffsetMs = 0,
+    this.separateLyricsByView = false,
+    this.videoLyricsPath,
+    this.videoLyricsOffsetMs = 0,
+    this.artworkLyricsPath,
+    this.artworkLyricsOffsetMs = 0,
+    this.artworkLyricsOffsetFollowsVideo = true,
+    this.artworkAudioMediaId,
+    this.artworkAudioPath,
+    this.lyricsButtonHidden = false,
   }) : id = id ?? _uuid.v4(),
        createdAt = createdAt ?? DateTime.now();
+
+  String? lyricsPathForView({required bool artwork}) {
+    if (!separateLyricsByView) return lyricsPath;
+    return (artwork ? artworkLyricsPath : videoLyricsPath) ?? lyricsPath;
+  }
+
+  int playCountFor(PlaybackRankingPeriod period, {DateTime? now}) {
+    if (period == PlaybackRankingPeriod.allTime) return playCount;
+    final today = now ?? DateTime.now();
+    final end = DateTime(today.year, today.month, today.day);
+    final range = switch (period) {
+      PlaybackRankingPeriod.threeDays => (2, -1),
+      PlaybackRankingPeriod.week => (6, -1),
+      PlaybackRankingPeriod.month => (29, -1),
+      // Older popularity: the 90-day window before the most recent 90 days.
+      PlaybackRankingPeriod.olderPopular => (180, 90),
+      PlaybackRankingPeriod.allTime => (0, 0),
+    };
+    final from = end.subtract(Duration(days: range.$1));
+    final until = end.subtract(Duration(days: range.$2));
+    return playCountBetween(from, until);
+  }
+
+  int playCountBetween(DateTime start, DateTime end) {
+    var day = DateTime(start.year, start.month, start.day);
+    final until = DateTime(end.year, end.month, end.day);
+    var total = 0;
+    while (day.isBefore(until)) {
+      final key =
+          '${day.year.toString().padLeft(4, '0')}-'
+          '${day.month.toString().padLeft(2, '0')}-'
+          '${day.day.toString().padLeft(2, '0')}';
+      total += playCountsByDay[key] ?? 0;
+      day = day.add(const Duration(days: 1));
+    }
+    return total;
+  }
+
+  /// Internal recommendation signal: emphasize recent listening while keeping
+  /// a smaller contribution from evergreen and previously popular media.
+  double get recommendationScore =>
+      playCountFor(PlaybackRankingPeriod.threeDays) * 4.0 +
+      playCountFor(PlaybackRankingPeriod.week) * 2.0 +
+      playCountFor(PlaybackRankingPeriod.month) +
+      playCountFor(PlaybackRankingPeriod.olderPopular) * 0.35 +
+      playCount * 0.05;
+
+  int lyricsOffsetForView({required bool artwork}) {
+    final videoOffset = separateLyricsByView
+        ? videoLyricsOffsetMs
+        : lyricsOffsetMs;
+    if (!artwork) return videoOffset;
+    if (artworkLyricsOffsetFollowsVideo &&
+        artworkAudioMediaId == null &&
+        artworkAudioPath == null) {
+      return videoOffset;
+    }
+    return artworkLyricsOffsetMs;
+  }
 
   /// Updates selected fields while preserving identity and creation time.
   /// Omit nullable fields to preserve them; pass null to clear them.
@@ -72,6 +179,8 @@ class MediaItem {
     String? title,
     bool? isFavorite,
     Object? lastPlayedAt = _unchanged,
+    int? playCount,
+    Map<String, int>? playCountsByDay,
     Object? artist = _unchanged,
     Object? album = _unchanged,
     Object? albumArtist = _unchanged,
@@ -85,7 +194,18 @@ class MediaItem {
     Object? artworkPath = _unchanged,
     Object? thumbnailPath = _unchanged,
     Object? lyricsPath = _unchanged,
+    Object? translatedLyricsPath = _unchanged,
+    bool? lyricsEditingFinalized,
     int? lyricsOffsetMs,
+    bool? separateLyricsByView,
+    Object? videoLyricsPath = _unchanged,
+    int? videoLyricsOffsetMs,
+    Object? artworkLyricsPath = _unchanged,
+    int? artworkLyricsOffsetMs,
+    bool? artworkLyricsOffsetFollowsVideo,
+    Object? artworkAudioMediaId = _unchanged,
+    Object? artworkAudioPath = _unchanged,
+    bool? lyricsButtonHidden,
   }) => MediaItem(
     id: id,
     title: title ?? this.title,
@@ -93,6 +213,8 @@ class MediaItem {
     lastPlayedAt: identical(lastPlayedAt, _unchanged)
         ? this.lastPlayedAt
         : lastPlayedAt as DateTime?,
+    playCount: playCount ?? this.playCount,
+    playCountsByDay: playCountsByDay ?? this.playCountsByDay,
     artist: identical(artist, _unchanged) ? this.artist : artist as String?,
     album: identical(album, _unchanged) ? this.album : album as String?,
     albumArtist: identical(albumArtist, _unchanged)
@@ -125,7 +247,30 @@ class MediaItem {
     lyricsPath: identical(lyricsPath, _unchanged)
         ? this.lyricsPath
         : lyricsPath as String?,
+    translatedLyricsPath: identical(translatedLyricsPath, _unchanged)
+        ? this.translatedLyricsPath
+        : translatedLyricsPath as String?,
+    lyricsEditingFinalized:
+        lyricsEditingFinalized ?? this.lyricsEditingFinalized,
     lyricsOffsetMs: lyricsOffsetMs ?? this.lyricsOffsetMs,
+    separateLyricsByView: separateLyricsByView ?? this.separateLyricsByView,
+    videoLyricsPath: identical(videoLyricsPath, _unchanged)
+        ? this.videoLyricsPath
+        : videoLyricsPath as String?,
+    videoLyricsOffsetMs: videoLyricsOffsetMs ?? this.videoLyricsOffsetMs,
+    artworkLyricsPath: identical(artworkLyricsPath, _unchanged)
+        ? this.artworkLyricsPath
+        : artworkLyricsPath as String?,
+    artworkLyricsOffsetMs: artworkLyricsOffsetMs ?? this.artworkLyricsOffsetMs,
+    artworkLyricsOffsetFollowsVideo:
+        artworkLyricsOffsetFollowsVideo ?? this.artworkLyricsOffsetFollowsVideo,
+    artworkAudioMediaId: identical(artworkAudioMediaId, _unchanged)
+        ? this.artworkAudioMediaId
+        : artworkAudioMediaId as String?,
+    artworkAudioPath: identical(artworkAudioPath, _unchanged)
+        ? this.artworkAudioPath
+        : artworkAudioPath as String?,
+    lyricsButtonHidden: lyricsButtonHidden ?? this.lyricsButtonHidden,
   );
 
   factory MediaItem.fromJson(Map<String, dynamic> j) => MediaItem(
@@ -134,6 +279,12 @@ class MediaItem {
     lastPlayedAt: j['lastPlayedAt'] is String
         ? DateTime.tryParse(j['lastPlayedAt'] as String)
         : null,
+    playCount: (j['playCount'] as num?)?.toInt() ?? 0,
+    playCountsByDay:
+        (j['playCountsByDay'] as Map?)?.map(
+          (key, value) => MapEntry(key.toString(), (value as num).toInt()),
+        ) ??
+        const {},
     title: (j['title'] as String?) ?? '(不明)',
     artist: j['artist'] as String?,
     album: j['album'] as String?,
@@ -151,7 +302,27 @@ class MediaItem {
     artworkPath: j['artworkPath'] as String?,
     thumbnailPath: j['thumbnailPath'] as String?,
     lyricsPath: j['lyricsPath'] as String?,
+    translatedLyricsPath: j['translatedLyricsPath'] as String?,
+    lyricsEditingFinalized: j['lyricsEditingFinalized'] as bool? ?? false,
     lyricsOffsetMs: (j['lyricsOffsetMs'] as num?)?.toInt() ?? 0,
+    separateLyricsByView: j['separateLyricsByView'] as bool? ?? false,
+    videoLyricsPath: j['videoLyricsPath'] as String?,
+    videoLyricsOffsetMs:
+        (j['videoLyricsOffsetMs'] as num?)?.toInt() ??
+        ((j['separateLyricsByView'] as bool? ?? false)
+            ? (j['lyricsOffsetMs'] as num?)?.toInt() ?? 0
+            : 0),
+    artworkLyricsPath: j['artworkLyricsPath'] as String?,
+    artworkLyricsOffsetMs:
+        (j['artworkLyricsOffsetMs'] as num?)?.toInt() ??
+        ((j['separateLyricsByView'] as bool? ?? false)
+            ? (j['lyricsOffsetMs'] as num?)?.toInt() ?? 0
+            : 0),
+    artworkLyricsOffsetFollowsVideo:
+        j['artworkLyricsOffsetFollowsVideo'] as bool? ?? true,
+    artworkAudioMediaId: j['artworkAudioMediaId'] as String?,
+    artworkAudioPath: j['artworkAudioPath'] as String?,
+    lyricsButtonHidden: j['lyricsButtonHidden'] as bool? ?? false,
   );
 
   Map<String, dynamic> toJson() => {
@@ -159,6 +330,8 @@ class MediaItem {
     'title': title,
     'isFavorite': isFavorite,
     'lastPlayedAt': lastPlayedAt?.toIso8601String(),
+    'playCount': playCount,
+    'playCountsByDay': playCountsByDay,
     'artist': artist,
     'album': album,
     'albumArtist': albumArtist,
@@ -173,7 +346,18 @@ class MediaItem {
     'artworkPath': artworkPath,
     'thumbnailPath': thumbnailPath,
     'lyricsPath': lyricsPath,
+    'translatedLyricsPath': translatedLyricsPath,
+    'lyricsEditingFinalized': lyricsEditingFinalized,
     'lyricsOffsetMs': lyricsOffsetMs,
+    'separateLyricsByView': separateLyricsByView,
+    'videoLyricsPath': videoLyricsPath,
+    'videoLyricsOffsetMs': videoLyricsOffsetMs,
+    'artworkLyricsPath': artworkLyricsPath,
+    'artworkLyricsOffsetMs': artworkLyricsOffsetMs,
+    'artworkLyricsOffsetFollowsVideo': artworkLyricsOffsetFollowsVideo,
+    'artworkAudioMediaId': artworkAudioMediaId,
+    'artworkAudioPath': artworkAudioPath,
+    'lyricsButtonHidden': lyricsButtonHidden,
   };
 }
 
@@ -186,6 +370,7 @@ class Playlist {
 
   /// Optional per-playlist image choice; null follows the playlist default.
   final String? imagePriority;
+  final String? artworkPath;
 
   Playlist({
     String? id,
@@ -193,6 +378,7 @@ class Playlist {
     List<String>? mediaIds,
     DateTime? createdAt,
     this.imagePriority,
+    this.artworkPath,
   }) : id = id ?? _uuid.v4(),
        mediaIds = List.unmodifiable(mediaIds ?? const []),
        createdAt = createdAt ?? DateTime.now();
@@ -201,6 +387,7 @@ class Playlist {
     String? name,
     List<String>? mediaIds,
     Object? imagePriority = _unchanged,
+    Object? artworkPath = _unchanged,
   }) => Playlist(
     id: id,
     name: name ?? this.name,
@@ -209,6 +396,9 @@ class Playlist {
     imagePriority: identical(imagePriority, _unchanged)
         ? this.imagePriority
         : imagePriority as String?,
+    artworkPath: identical(artworkPath, _unchanged)
+        ? this.artworkPath
+        : artworkPath as String?,
   );
 
   factory Playlist.fromJson(Map<String, dynamic> j) {
@@ -224,6 +414,7 @@ class Playlist {
           ? (DateTime.tryParse(j['createdAt'] as String) ?? DateTime.now())
           : DateTime.now(),
       imagePriority: j['imagePriority'] as String?,
+      artworkPath: j['artworkPath'] as String?,
     );
   }
 
@@ -233,6 +424,7 @@ class Playlist {
     'mediaIds': mediaIds,
     'createdAt': createdAt.toIso8601String(),
     'imagePriority': imagePriority,
+    'artworkPath': artworkPath,
   };
 }
 

@@ -1,26 +1,37 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../app_state.dart';
 import '../../platform/window_utils.dart';
+import '../../playback/playback_controller.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import 'frosted_panel.dart';
 import 'player_card.dart';
+import 'pip_video_surface.dart';
+import 'thumb_image.dart';
 
 class ShellCompactDrawerItem extends StatelessWidget {
   const ShellCompactDrawerItem({
     super.key,
-    required this.icon,
+    this.icon,
+    this.leading,
     required this.label,
     required this.selected,
     required this.onTap,
+    this.compact = false,
   });
-  final IconData icon;
+  final IconData? icon;
+  final Widget? leading;
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +40,7 @@ class ShellCompactDrawerItem extends StatelessWidget {
         ? (isDark ? kAccentLight : Colors.black87)
         : (isDark ? kTextSub : Colors.black54);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: compact ? 1 : 3),
       child: Material(
         color: selected
             ? (isDark
@@ -41,11 +52,11 @@ class ShellCompactDrawerItem extends StatelessWidget {
           borderRadius: BorderRadius.circular(13),
           onTap: onTap,
           child: SizedBox(
-            height: 48,
+            height: compact ? 42 : 48,
             child: Row(
               children: [
                 const SizedBox(width: 15),
-                Icon(icon, size: 21, color: color),
+                leading ?? Icon(icon, size: 21, color: color),
                 const SizedBox(width: 14),
                 Text(
                   label,
@@ -179,118 +190,298 @@ class ShellPictureInPictureView extends ConsumerStatefulWidget {
 }
 
 class ShellPictureInPictureViewState
-    extends ConsumerState<ShellPictureInPictureView> {
-  bool _hovered = false;
+    extends ConsumerState<ShellPictureInPictureView>
+    with WindowListener {
+  Timer? _aspectCorrectionTimer;
+  double? _videoAspectRatio;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+  }
+
+  @override
+  void dispose() {
+    _aspectCorrectionTimer?.cancel();
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  @override
+  void onWindowResized() {
+    if (ref.read(nativeSystemPictureInPictureProvider)) return;
+    if (defaultTargetPlatform != TargetPlatform.macOS &&
+        defaultTargetPlatform != TargetPlatform.windows) {
+      return;
+    }
+    _schedulePictureInPictureAspectCorrection();
+  }
+
+  @override
+  void onWindowResize() {
+    if (ref.read(nativeSystemPictureInPictureProvider)) return;
+    if (defaultTargetPlatform != TargetPlatform.linux) return;
+    _schedulePictureInPictureAspectCorrection();
+  }
+
+  void _schedulePictureInPictureAspectCorrection() {
+    _aspectCorrectionTimer?.cancel();
+    _aspectCorrectionTimer = Timer(
+      const Duration(milliseconds: 120),
+      _correctPictureInPictureAspectRatio,
+    );
+  }
+
+  Future<void> _correctPictureInPictureAspectRatio() async {
+    if (ref.read(nativeSystemPictureInPictureProvider)) return;
+    final aspectRatio = _videoAspectRatio;
+    if (!mounted || aspectRatio == null || aspectRatio <= 0) return;
+    try {
+      final size = await windowManager.getSize();
+      final titleBarHeight = await windowManager.getTitleBarHeight();
+      final contentHeight = size.height - titleBarHeight;
+      if (size.width <= 0 || contentHeight <= 0) return;
+      final currentAspectRatio = size.width / contentHeight;
+      final relativeDifference =
+          (currentAspectRatio - aspectRatio).abs() / aspectRatio;
+      if (relativeDifference < 0.08) return;
+
+      final correctedSize = aspectRatio >= 1
+          ? Size(size.width, size.width / aspectRatio + titleBarHeight)
+          : Size(contentHeight * aspectRatio, size.height);
+      await windowManager.setSize(correctedSize, animate: false);
+    } catch (_) {
+      // Keep PiP usable if the native window size cannot be read.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final ref = this.ref;
     final engine = ref.watch(engineProvider);
-    final media = ref
-        .watch(libraryProvider)
-        .byId(
-          ref.watch(queueProvider.select((queue) => queue.currentId ?? '')),
-        );
+    final queue = ref.watch(queueProvider);
+    final media = ref.watch(libraryProvider).byId(queue.currentId ?? '');
+    final reportedAspectRatio = engine.videoAspectRatio;
+    final videoAspectRatio =
+        reportedAspectRatio != null &&
+            reportedAspectRatio.isFinite &&
+            reportedAspectRatio > 0
+        ? reportedAspectRatio
+        : 16 / 9;
+    _videoAspectRatio = videoAspectRatio;
+    final showArtwork =
+        ref.watch(playerViewModeProvider) == PlayerViewMode.image;
+    if (ref.watch(nativeSystemPictureInPictureProvider)) {
+      return ColoredBox(
+        color: Colors.black,
+        child: showArtwork && media != null
+            ? Center(
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: ThumbImage(
+                    seed: media.id,
+                    mediaId: media.id,
+                    localPath: media.localPath,
+                    forceArtwork: true,
+                    highRes: true,
+                    expand: true,
+                  ),
+                ),
+              )
+            : Center(
+                child: AspectRatio(
+                  aspectRatio: videoAspectRatio,
+                  child: PipVideoSurface(engine: engine),
+                ),
+              ),
+      );
+    }
     return Scaffold(
       backgroundColor: Colors.black,
-      body: MouseRegion(
-        onEnter: (_) {
-          if (!_hovered) setState(() => _hovered = true);
-        },
-        onExit: (_) {
-          if (_hovered) setState(() => _hovered = false);
-        },
-        child: GestureDetector(
-          // The compact macOS window has no title bar, and the Flutter video
-          // surface consumes pointer events before AppKit's background-drag
-          // handling can move the window. Start a native window drag when the
-          // user drags anywhere on the PiP surface; taps still reach controls.
-          behavior: HitTestBehavior.opaque,
-          onPanStart: (_) => windowManager.startDragging(),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                engine.buildVideoView(),
-                IgnorePointer(
-                  ignoring: !_hovered,
-                  child: AnimatedOpacity(
-                    opacity: _hovered ? 1 : 0,
-                    duration: const Duration(milliseconds: 180),
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Container(
-                        height: 58,
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [Colors.transparent, Color(0xCC000000)],
+      body: GestureDetector(
+        // The compact macOS window has no title bar, and the Flutter video
+        // surface consumes pointer events before AppKit's background-drag
+        // handling can move the window. Start a native window drag when the
+        // user drags anywhere on the PiP surface; taps still reach controls.
+        behavior: HitTestBehavior.opaque,
+        onPanStart: defaultTargetPlatform == TargetPlatform.macOS
+            ? null
+            : (_) => windowManager.startDragging(),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (showArtwork && media != null)
+                Center(
+                  child: AspectRatio(
+                    aspectRatio: 1,
+                    child: ThumbImage(
+                      seed: media.id,
+                      mediaId: media.id,
+                      localPath: media.localPath,
+                      forceArtwork: true,
+                      highRes: true,
+                      expand: true,
+                    ),
+                  ),
+                )
+              else
+                Center(
+                  child: AspectRatio(
+                    aspectRatio: videoAspectRatio,
+                    child: PipVideoSurface(engine: engine),
+                  ),
+                ),
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  height: 58,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.transparent, Color(0xCC000000)],
+                    ),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 200;
+                      final buttonWidth = compact ? 32.0 : 44.0;
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              media?.title ?? ref.tr('playing'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: compact ? 10 : 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
-                        ),
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                media?.title ?? ref.tr('playing'),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
+                          StreamBuilder<bool>(
+                            stream: engine.playingStream,
+                            initialData: engine.snapshot.isPlaying,
+                            builder: (context, state) {
+                              final playing = state.data ?? false;
+                              return IconButton(
+                                tooltip: ref.tr(playing ? 'pause' : 'play'),
+                                color: Colors.white,
+                                constraints: BoxConstraints.tightFor(
+                                  width: buttonWidth,
+                                  height: 44,
                                 ),
-                              ),
+                                padding: EdgeInsets.zero,
+                                // Use the state shown by this StreamBuilder.
+                                // PlaybackController.toggle() reads its cached
+                                // snapshot, which can lag behind the platform
+                                // stream during the PiP surface transition and
+                                // issue pause again when the button shows Play.
+                                onPressed: () =>
+                                    playing ? engine.pause() : engine.play(),
+                                icon: Icon(
+                                  playing
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
+                                ),
+                              );
+                            },
+                          ),
+                          IconButton(
+                            tooltip: ref.tr('next_video'),
+                            color: Colors.white,
+                            constraints: BoxConstraints.tightFor(
+                              width: buttonWidth,
+                              height: 44,
                             ),
-                            StreamBuilder<bool>(
-                              stream: engine.playingStream,
-                              initialData: engine.snapshot.isPlaying,
-                              builder: (context, state) {
-                                final playing = state.data ?? false;
-                                return IconButton(
-                                  tooltip: ref.tr(playing ? 'pause' : 'play'),
-                                  color: Colors.white,
-                                  // Use the state shown by this StreamBuilder.
-                                  // PlaybackController.toggle() reads its cached
-                                  // snapshot, which can lag behind the platform
-                                  // stream during the PiP surface transition and
-                                  // issue pause again when the button shows Play.
-                                  onPressed: () =>
-                                      playing ? engine.pause() : engine.play(),
-                                  icon: Icon(
-                                    playing
-                                        ? Icons.pause_rounded
-                                        : Icons.play_arrow_rounded,
-                                  ),
-                                );
-                              },
+                            padding: EdgeInsets.zero,
+                            onPressed: queue.hasCurrent
+                                ? () => ref
+                                      .read(playbackControllerProvider)
+                                      .playNext()
+                                : null,
+                            icon: const Icon(Icons.skip_next_rounded),
+                          ),
+                          IconButton(
+                            tooltip: ref.tr('restore_window'),
+                            color: Colors.white,
+                            constraints: BoxConstraints.tightFor(
+                              width: buttonWidth,
+                              height: 44,
                             ),
-                            IconButton(
-                              tooltip: ref.tr('restore_window'),
-                              color: Colors.white,
-                              onPressed: () async {
-                                ref
-                                        .read(pictureInPictureProvider.notifier)
-                                        .state =
-                                    false;
-                                await WidgetsBinding.instance.endOfFrame;
-                                await restorePictureInPictureWindow(
-                                  engine: engine,
-                                );
-                              },
-                              icon: const Icon(
-                                Icons.picture_in_picture_alt_rounded,
-                              ),
-                            ),
-                          ],
-                        ),
+                            padding: EdgeInsets.zero,
+                            onPressed: () async {
+                              if (ref.read(
+                                nativeSystemPictureInPictureProvider,
+                              )) {
+                                await const MethodChannel(
+                                  'yureru/native_pip',
+                                ).invokeMethod<void>('stop');
+                                return;
+                              }
+                              ref
+                                      .read(pictureInPictureProvider.notifier)
+                                      .state =
+                                  false;
+                              await WidgetsBinding.instance.endOfFrame;
+                              await restorePictureInPictureWindow(
+                                engine: engine,
+                              );
+                            },
+                            icon: const Icon(Icons.open_in_full_rounded),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
+              Positioned(
+                right: 0,
+                top: 0,
+                child: IgnorePointer(
+                  child: Container(
+                    width: 30,
+                    height: 30,
+                    decoration: const BoxDecoration(
+                      color: Color(0x66000000),
+                      borderRadius: BorderRadius.only(
+                        bottomLeft: Radius.circular(8),
                       ),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Icon(
+                      Icons.drag_handle_rounded,
+                      color: Colors.white,
+                      size: 18,
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+              Positioned.fill(
+                child: defaultTargetPlatform == TargetPlatform.macOS
+                    ? const SizedBox.expand()
+                    : DragToResizeArea(
+                        resizeEdgeSize: 12,
+                        enableResizeEdges: const [
+                          ResizeEdge.top,
+                          ResizeEdge.left,
+                          ResizeEdge.right,
+                          ResizeEdge.bottom,
+                          ResizeEdge.topLeft,
+                          ResizeEdge.topRight,
+                          ResizeEdge.bottomLeft,
+                          ResizeEdge.bottomRight,
+                        ],
+                        child: const SizedBox.expand(),
+                      ),
+              ),
+            ],
           ),
         ),
       ),

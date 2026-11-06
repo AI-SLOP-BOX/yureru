@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../app_state.dart';
+import '../../data/importer.dart' show isVideoPath;
 import '../../domain/models.dart';
 import '../../playback/playback_controller.dart';
 import '../i18n.dart';
@@ -16,8 +17,9 @@ import '../widgets/metadata_fields.dart';
 Future<void> showMediaMetadataEditor(
   BuildContext context,
   WidgetRef ref,
-  MediaItem media,
-) async {
+  MediaItem media, {
+  bool focusCreator = false,
+}) async {
   final messenger = ScaffoldMessenger.of(context);
   final languageCode = ref.read(activeLanguageCodeProvider);
   String tr(String key) => translate(key, languageCode);
@@ -36,11 +38,40 @@ Future<void> showMediaMetadataEditor(
   final lyricsOffsetController = TextEditingController(
     text: _formatLyricsOffset(media.lyricsOffsetMs),
   );
+  final videoLyricsOffsetController = TextEditingController(
+    text: _formatLyricsOffset(media.lyricsOffsetForView(artwork: false)),
+  );
+  final artworkLyricsOffsetController = TextEditingController(
+    text: _formatLyricsOffset(media.lyricsOffsetForView(artwork: true)),
+  );
+  final videoLyricsOffsetFromArtworkController = TextEditingController(
+    text: _formatLyricsOffset(
+      media.lyricsOffsetForView(artwork: false) -
+          media.lyricsOffsetForView(artwork: true),
+    ),
+  );
+  var separateLyricsByView = media.separateLyricsByView;
+  var artworkLyricsOffsetFollowsVideo = media.artworkLyricsOffsetFollowsVideo;
+  var videoLyricsTimingRelativeToArtwork =
+      media.separateLyricsByView && !media.artworkLyricsOffsetFollowsVideo;
+  String? artworkAudioMediaId = media.artworkAudioMediaId;
+  String? artworkAudioPath = media.artworkAudioPath;
+  String? selectedArtworkAudioPath;
+  var clearArtworkAudio = false;
+  final audioSourceChoices = ref
+      .read(libraryProvider)
+      .savedMedia
+      .where((item) => !isVideoPath(item.localPath))
+      .toList();
+  if (!audioSourceChoices.any((item) => item.id == artworkAudioMediaId)) {
+    artworkAudioMediaId = null;
+  }
   String? selectedArtworkPath;
   var clearArtwork = false;
   String? selectedThumbnailPath;
   var clearThumbnail = false;
   var editLyricsAfterClose = false;
+  var creatorWasEdited = false;
   var deleteMediaAfterClose = false;
   DialogRoute<bool>? dialogRoute;
   try {
@@ -88,7 +119,7 @@ Future<void> showMediaMetadataEditor(
                     MetadataField(
                       label: tr('metadata_title'),
                       controller: titleController,
-                      autofocus: true,
+                      autofocus: !focusCreator,
                       textColor: textColor,
                       labelColor: subtle,
                       borderColor: border,
@@ -102,8 +133,11 @@ Future<void> showMediaMetadataEditor(
                       borderColor: border,
                       isDark: isDark,
                       strings: tr,
-                      onChanged: (names) =>
-                          artistController.text = names.join('・'),
+                      autofocusEntry: focusCreator,
+                      onChanged: (names) {
+                        creatorWasEdited = true;
+                        artistController.text = names.join('・');
+                      },
                     ),
                     const SizedBox(height: 16),
                     for (final field in [
@@ -127,22 +161,332 @@ Future<void> showMediaMetadataEditor(
                       ),
                       const SizedBox(height: 16),
                     ],
-                    MetadataField(
-                      label: tr('lyrics_timing'),
-                      controller: lyricsOffsetController,
-                      textColor: textColor,
-                      labelColor: subtle,
-                      borderColor: border,
-                      isDark: isDark,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                        signed: true,
+                    StatefulBuilder(
+                      builder: (context, setDialogState) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(tr('lyrics_separate_timing')),
+                            value: separateLyricsByView,
+                            onChanged: (value) {
+                              setDialogState(() {
+                                if (value) {
+                                  final shared = _parseLyricsOffset(
+                                    lyricsOffsetController.text,
+                                  );
+                                  if (shared != null) {
+                                    videoLyricsOffsetController.text =
+                                        _formatLyricsOffset(shared);
+                                    artworkLyricsOffsetController.text =
+                                        _formatLyricsOffset(shared);
+                                  }
+                                } else {
+                                  if (videoLyricsTimingRelativeToArtwork) {
+                                    final artworkOffset =
+                                        _parseLyricsOffset(
+                                          artworkLyricsOffsetController.text,
+                                        ) ??
+                                        0;
+                                    final relativeOffset =
+                                        _parseLyricsOffset(
+                                          videoLyricsOffsetFromArtworkController
+                                              .text,
+                                        ) ??
+                                        0;
+                                    videoLyricsOffsetController.text =
+                                        _formatLyricsOffset(
+                                          artworkOffset + relativeOffset,
+                                        );
+                                    videoLyricsTimingRelativeToArtwork = false;
+                                  }
+                                  lyricsOffsetController.text =
+                                      videoLyricsOffsetController.text;
+                                  if (artworkAudioMediaId == null) {
+                                    artworkLyricsOffsetFollowsVideo = true;
+                                  }
+                                }
+                                separateLyricsByView = value;
+                              });
+                            },
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            tr('artwork_audio_source'),
+                            style: TextStyle(
+                              color: subtle,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          DropdownButtonFormField<String?>(
+                            initialValue: artworkAudioMediaId,
+                            isExpanded: true,
+                            decoration: InputDecoration(
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                            ),
+                            items: [
+                              DropdownMenuItem<String?>(
+                                value: null,
+                                child: Text(tr('audio_source_same_as_video')),
+                              ),
+                              for (final source in audioSourceChoices)
+                                DropdownMenuItem<String?>(
+                                  value: source.id,
+                                  child: Text(
+                                    displayTitle(source.title),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                            onChanged: (value) => setDialogState(() {
+                              final videoOffset = separateLyricsByView
+                                  ? videoLyricsOffsetController.text
+                                  : lyricsOffsetController.text;
+                              if (artworkLyricsOffsetFollowsVideo) {
+                                artworkLyricsOffsetController.text =
+                                    videoOffset;
+                              }
+                              artworkAudioMediaId = value;
+                              artworkAudioPath = null;
+                              selectedArtworkAudioPath = null;
+                              clearArtworkAudio = false;
+                              if (value != null) {
+                                artworkLyricsOffsetFollowsVideo = false;
+                              }
+                            }),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () async {
+                                    final result = await FilePicker.platform
+                                        .pickFiles(
+                                          type: FileType.audio,
+                                          allowMultiple: false,
+                                          withData: false,
+                                        );
+                                    final path = result?.files.single.path;
+                                    if (path == null) return;
+                                    setDialogState(() {
+                                      final videoOffset = separateLyricsByView
+                                          ? videoLyricsOffsetController.text
+                                          : lyricsOffsetController.text;
+                                      if (artworkLyricsOffsetFollowsVideo) {
+                                        artworkLyricsOffsetController.text =
+                                            videoOffset;
+                                      }
+                                      selectedArtworkAudioPath = path;
+                                      artworkAudioPath = path;
+                                      artworkAudioMediaId = null;
+                                      artworkLyricsOffsetFollowsVideo = false;
+                                      clearArtworkAudio = false;
+                                    });
+                                  },
+                                  icon: const Icon(Icons.audio_file_outlined),
+                                  label: Text(tr('choose_audio_file')),
+                                ),
+                              ),
+                              if (artworkAudioPath != null ||
+                                  selectedArtworkAudioPath != null)
+                                IconButton(
+                                  tooltip: tr('clear_audio_source'),
+                                  onPressed: () => setDialogState(() {
+                                    artworkAudioPath = null;
+                                    selectedArtworkAudioPath = null;
+                                    artworkAudioMediaId = null;
+                                    clearArtworkAudio = true;
+                                  }),
+                                  icon: const Icon(
+                                    Icons.delete_outline_rounded,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          if (artworkAudioPath != null ||
+                              selectedArtworkAudioPath != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              (selectedArtworkAudioPath ?? artworkAudioPath)!
+                                  .split(Platform.pathSeparator)
+                                  .last,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: themeTextSub(context),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 4),
+                          Text(
+                            tr('artwork_audio_source_hint'),
+                            style: TextStyle(color: subtle, fontSize: 11),
+                          ),
+                          const SizedBox(height: 4),
+                          SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(tr('video_timing_relative_to_artwork')),
+                            value: videoLyricsTimingRelativeToArtwork,
+                            onChanged: (value) => setDialogState(() {
+                              if (value) {
+                                final videoOffset =
+                                    _parseLyricsOffset(
+                                      videoLyricsOffsetController.text,
+                                    ) ??
+                                    _parseLyricsOffset(
+                                      lyricsOffsetController.text,
+                                    ) ??
+                                    0;
+                                final artworkOffset =
+                                    _parseLyricsOffset(
+                                      artworkLyricsOffsetController.text,
+                                    ) ??
+                                    0;
+                                videoLyricsOffsetFromArtworkController.text =
+                                    _formatLyricsOffset(
+                                      videoOffset - artworkOffset,
+                                    );
+                                separateLyricsByView = true;
+                                artworkLyricsOffsetFollowsVideo = false;
+                              } else {
+                                final artworkOffset =
+                                    _parseLyricsOffset(
+                                      artworkLyricsOffsetController.text,
+                                    ) ??
+                                    0;
+                                final relativeOffset =
+                                    _parseLyricsOffset(
+                                      videoLyricsOffsetFromArtworkController
+                                          .text,
+                                    ) ??
+                                    0;
+                                videoLyricsOffsetController.text =
+                                    _formatLyricsOffset(
+                                      artworkOffset + relativeOffset,
+                                    );
+                              }
+                              videoLyricsTimingRelativeToArtwork = value;
+                            }),
+                          ),
+                          if (!videoLyricsTimingRelativeToArtwork)
+                            SwitchListTile.adaptive(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(tr('artwork_timing_follows_video')),
+                              value: artworkLyricsOffsetFollowsVideo,
+                              onChanged: (value) => setDialogState(() {
+                                if (!artworkLyricsOffsetFollowsVideo) {
+                                  artworkLyricsOffsetController.text =
+                                      separateLyricsByView
+                                      ? videoLyricsOffsetController.text
+                                      : lyricsOffsetController.text;
+                                }
+                                artworkLyricsOffsetFollowsVideo = value;
+                              }),
+                            ),
+                          if (videoLyricsTimingRelativeToArtwork) ...[
+                            MetadataField(
+                              label: tr('lyrics_timing_for_artwork'),
+                              controller: artworkLyricsOffsetController,
+                              textColor: textColor,
+                              labelColor: subtle,
+                              borderColor: border,
+                              isDark: isDark,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                    signed: true,
+                                  ),
+                            ),
+                            const SizedBox(height: 12),
+                            MetadataField(
+                              label: tr('video_timing_from_artwork'),
+                              controller:
+                                  videoLyricsOffsetFromArtworkController,
+                              textColor: textColor,
+                              labelColor: subtle,
+                              borderColor: border,
+                              isDark: isDark,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                    signed: true,
+                                  ),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              tr('video_timing_from_artwork_hint'),
+                              style: TextStyle(color: subtle, fontSize: 11),
+                            ),
+                          ] else if (separateLyricsByView ||
+                              artworkAudioMediaId != null ||
+                              artworkAudioPath != null ||
+                              !artworkLyricsOffsetFollowsVideo) ...[
+                            MetadataField(
+                              label: tr('lyrics_timing_for_video'),
+                              controller: videoLyricsOffsetController,
+                              textColor: textColor,
+                              labelColor: subtle,
+                              borderColor: border,
+                              isDark: isDark,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                    signed: true,
+                                  ),
+                              enabled: separateLyricsByView,
+                            ),
+                            const SizedBox(height: 12),
+                            MetadataField(
+                              label: tr('lyrics_timing_for_artwork'),
+                              controller: artworkLyricsOffsetController,
+                              textColor: textColor,
+                              labelColor: subtle,
+                              borderColor: border,
+                              isDark: isDark,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                    signed: true,
+                                  ),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              tr('lyrics_timing_hint'),
+                              style: TextStyle(color: subtle, fontSize: 11),
+                            ),
+                          ] else ...[
+                            MetadataField(
+                              label: tr('lyrics_timing'),
+                              controller: lyricsOffsetController,
+                              textColor: textColor,
+                              labelColor: subtle,
+                              borderColor: border,
+                              isDark: isDark,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                    signed: true,
+                                  ),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              tr('lyrics_timing_hint'),
+                              style: TextStyle(color: subtle, fontSize: 11),
+                            ),
+                          ],
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      tr('lyrics_timing_hint'),
-                      style: TextStyle(color: subtle, fontSize: 11),
                     ),
                     if (media.lyricsPath != null) ...[
                       const SizedBox(height: 10),
@@ -369,10 +713,34 @@ Future<void> showMediaMetadataEditor(
                               );
                               return;
                             }
-                            if (_parseLyricsOffset(
-                                  lyricsOffsetController.text,
-                                ) ==
-                                null) {
+                            final timingIsValid =
+                                videoLyricsTimingRelativeToArtwork
+                                ? _parseLyricsOffset(
+                                            artworkLyricsOffsetController.text,
+                                          ) !=
+                                          null &&
+                                      _parseLyricsOffset(
+                                            videoLyricsOffsetFromArtworkController
+                                                .text,
+                                          ) !=
+                                          null
+                                : separateLyricsByView ||
+                                      artworkAudioMediaId != null ||
+                                      artworkAudioPath != null ||
+                                      !artworkLyricsOffsetFollowsVideo
+                                ? _parseLyricsOffset(
+                                            videoLyricsOffsetController.text,
+                                          ) !=
+                                          null &&
+                                      _parseLyricsOffset(
+                                            artworkLyricsOffsetController.text,
+                                          ) !=
+                                          null
+                                : _parseLyricsOffset(
+                                        lyricsOffsetController.text,
+                                      ) !=
+                                      null;
+                            if (!timingIsValid) {
                               messenger.showSnackBar(
                                 SnackBar(
                                   content: Text(tr('invalid_lyrics_timing')),
@@ -411,8 +779,31 @@ Future<void> showMediaMetadataEditor(
       return;
     }
     if (save != true || !context.mounted) return;
-    final offsetMs = _parseLyricsOffset(lyricsOffsetController.text);
-    if (offsetMs == null) {
+    final offsetMs = _parseLyricsOffset(lyricsOffsetController.text) ?? 0;
+    final needsSeparateTiming =
+        separateLyricsByView ||
+        videoLyricsTimingRelativeToArtwork ||
+        artworkAudioMediaId != null ||
+        artworkAudioPath != null ||
+        !artworkLyricsOffsetFollowsVideo;
+    final artworkOffsetMs = needsSeparateTiming
+        ? _parseLyricsOffset(artworkLyricsOffsetController.text)
+        : null;
+    final videoOffsetMs = videoLyricsTimingRelativeToArtwork
+        ? artworkOffsetMs == null
+              ? null
+              : artworkOffsetMs +
+                    (_parseLyricsOffset(
+                          videoLyricsOffsetFromArtworkController.text,
+                        ) ??
+                        0)
+        : separateLyricsByView
+        ? _parseLyricsOffset(videoLyricsOffsetController.text)
+        : null;
+    if (needsSeparateTiming &&
+        (artworkOffsetMs == null ||
+            ((separateLyricsByView || videoLyricsTimingRelativeToArtwork) &&
+                videoOffsetMs == null))) {
       messenger.showSnackBar(
         SnackBar(content: Text(tr('invalid_lyrics_timing'))),
       );
@@ -429,6 +820,14 @@ Future<void> showMediaMetadataEditor(
     }
     String? nullableText(TextEditingController controller) =>
         controller.text.trim().isEmpty ? null : controller.text.trim();
+    // Clearing all creator chips and saving intentionally stores a whitespace
+    // marker: it hides the creator and disables the blank-area edit shortcut.
+    // The media settings editor can still reopen and restore the field.
+    final artistValue = creatorWasEdited
+        ? (artistController.text.trim().isEmpty
+              ? ' '
+              : artistController.text.trim())
+        : media.artist;
 
     String? artworkPath = media.artworkPath;
     if (selectedArtworkPath != null) {
@@ -480,12 +879,35 @@ Future<void> showMediaMetadataEditor(
     } else if (clearThumbnail) {
       thumbnailPath = null;
     }
+    String? artworkAudioPathValue = artworkAudioPath;
+    if (selectedArtworkAudioPath != null) {
+      try {
+        final support = await getApplicationSupportDirectory();
+        final audioDir = Directory('${support.path}/yureru_audio_sources');
+        await audioDir.create(recursive: true);
+        final extension = selectedArtworkAudioPath!
+            .split('.')
+            .last
+            .toLowerCase();
+        final destination =
+            '${audioDir.path}/${media.id}_${DateTime.now().microsecondsSinceEpoch}.$extension';
+        await File(selectedArtworkAudioPath!).copy(destination);
+        artworkAudioPathValue = destination;
+      } catch (error) {
+        if (context.mounted) {
+          messenger.showSnackBar(SnackBar(content: Text('$error')));
+        }
+        return;
+      }
+    } else if (clearArtworkAudio) {
+      artworkAudioPathValue = null;
+    }
     await ref
         .read(libraryProvider.notifier)
         .updateMediaDetails(
           media.id,
           title: titleController.text.trim(),
-          artist: nullableText(artistController),
+          artist: artistValue,
           album: nullableText(albumController),
           albumArtist: nullableText(albumArtistController),
           trackNumber: number,
@@ -493,7 +915,20 @@ Future<void> showMediaMetadataEditor(
           artworkPath: artworkPath,
           thumbnailPath: thumbnailPath,
           lyricsOffsetMs: offsetMs,
+          separateLyricsByView: separateLyricsByView,
+          videoLyricsOffsetMs: videoOffsetMs,
+          artworkLyricsOffsetMs: artworkOffsetMs,
+          artworkLyricsOffsetFollowsVideo: videoLyricsTimingRelativeToArtwork
+              ? false
+              : artworkLyricsOffsetFollowsVideo,
+          artworkAudioMediaId: artworkAudioMediaId,
+          artworkAudioPath: artworkAudioPathValue,
         );
+    final queue = ref.read(queueProvider);
+    if (queue.currentId == media.id &&
+        ref.read(playerViewModeProvider) == PlayerViewMode.image) {
+      await ref.read(playbackControllerProvider).syncCurrentViewSource();
+    }
   } finally {
     // The route remains mounted while its closing animation runs.
     if (dialogRoute != null) await dialogRoute.completed;
@@ -504,6 +939,9 @@ Future<void> showMediaMetadataEditor(
     trackController.dispose();
     discController.dispose();
     lyricsOffsetController.dispose();
+    videoLyricsOffsetController.dispose();
+    artworkLyricsOffsetController.dispose();
+    videoLyricsOffsetFromArtworkController.dispose();
   }
 }
 
@@ -531,6 +969,12 @@ Future<void> _showLyricsEditor(
       onSaved: (newPath) => ref
           .read(libraryProvider.notifier)
           .updateMediaLyrics(media.id, newPath),
+      onDraftSaved: (newPath) => ref
+          .read(libraryProvider.notifier)
+          .updateMediaLyrics(media.id, newPath),
+      onFinalized: () => ref
+          .read(libraryProvider.notifier)
+          .setLyricsEditingFinalized(media.id, true),
     ),
   );
 }

@@ -21,10 +21,13 @@ import '../widgets/app_svg_icon.dart';
 import '../widgets/transport_icon.dart';
 import '../widgets/skip_next_icon.dart';
 import '../widgets/lyrics_panel.dart';
+import 'media_metadata_editor.dart';
 import '../widgets/favorite_button.dart';
 import '../widgets/sleep_timer_button.dart';
 import '../widgets/playback_options.dart';
 import '../widgets/thumb_image.dart';
+import '../widgets/pip_video_surface.dart';
+import '../widgets/picture_in_picture_button.dart';
 
 /// A presentation-only view: switching layouts never loads or pauses a source.
 class ImmersivePlayerScreen extends ConsumerStatefulWidget {
@@ -48,11 +51,22 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
   bool _editingControls = false;
   bool _showLyrics = true;
   bool _editingLyrics = false;
+  String? _lastMediaId;
 
   @override
   void initState() {
     super.initState();
     _engine = ref.read(engineProvider);
+    final currentId = ref.read(queueProvider).currentId;
+    final currentMedia = currentId == null
+        ? null
+        : ref.read(libraryProvider).byId(currentId);
+    _lastMediaId = currentId;
+    _showLyrics =
+        currentMedia?.lyricsPathForView(
+          artwork: ref.read(playerViewModeProvider) == PlayerViewMode.image,
+        ) !=
+        null;
     _reveal();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -162,12 +176,34 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<String?>(queueProvider.select((queue) => queue.currentId), (
+      _,
+      nextId,
+    ) {
+      if (nextId == _lastMediaId) return;
+      _lastMediaId = nextId;
+      if (nextId == null) {
+        setState(() => _showLyrics = false);
+        return;
+      }
+      final nextMedia = ref.read(libraryProvider).byId(nextId);
+      final mode = ref.read(playerViewModeProvider);
+      setState(() {
+        _showLyrics =
+            nextMedia?.lyricsPathForView(
+              artwork: mode == PlayerViewMode.image,
+            ) !=
+            null;
+      });
+    });
     final media = ref
         .watch(libraryProvider)
         .byId(ref.watch(queueProvider).currentId ?? '');
     if (media == null) return const SizedBox.shrink();
     final engine = ref.watch(engineProvider);
     final mode = ref.watch(playerViewModeProvider);
+    final showLyricsButton = !media.lyricsButtonHidden;
+    final showLyrics = _showLyrics && showLyricsButton;
     final exitShortcut = ref
         .watch(keyboardShortcutsProvider)[AppShortcutAction.exitExpandedView]!
         .label(macOS: defaultTargetPlatform == TargetPlatform.macOS);
@@ -244,6 +280,7 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                           engine: engine,
                           media: media,
                           immersive: true,
+                          viewMode: mode,
                           onEditingChanged: (editing) {
                             if (_editingLyrics != editing) {
                               setState(() => _editingLyrics = editing);
@@ -266,7 +303,7 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                                     child: Row(
                                       children: [
                                         Expanded(child: content),
-                                        if (_showLyrics) ...[
+                                        if (showLyrics) ...[
                                           const SizedBox(width: 48),
                                           Expanded(child: lyrics),
                                         ],
@@ -276,14 +313,14 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                                 )
                               : Column(
                                   children: [
-                                    if (_editingLyrics && _showLyrics)
+                                    if (_editingLyrics && showLyrics)
                                       Expanded(child: lyrics)
                                     else ...[
                                       Expanded(
-                                        flex: _showLyrics ? 3 : 1,
+                                        flex: showLyrics ? 3 : 1,
                                         child: content,
                                       ),
-                                      if (_showLyrics) ...[
+                                      if (showLyrics) ...[
                                         const SizedBox(height: 20),
                                         Expanded(flex: 2, child: lyrics),
                                       ],
@@ -303,6 +340,11 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                       child: LayoutBuilder(
                         builder: (context, constraints) {
                           final compact = constraints.maxWidth < 600;
+                          final viewModeWidth = constraints.maxWidth < 400
+                              ? 96.0
+                              : constraints.maxWidth < 440
+                              ? 110.0
+                              : 132.0;
                           final exit = Tooltip(
                             message:
                                 '${ref.tr('exit_immersive')} ($exitShortcut)',
@@ -375,8 +417,8 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                                       ),
                                   ],
                                   child: ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxWidth: 132,
+                                    constraints: BoxConstraints(
+                                      maxWidth: viewModeWidth,
                                     ),
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(
@@ -437,19 +479,24 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                                     _reveal();
                                   },
                                 ),
-                                IconButton(
-                                  tooltip: ref.tr('lyrics'),
-                                  isSelected: _showLyrics,
-                                  onPressed: () => setState(
-                                    () => _showLyrics = !_showLyrics,
-                                  ),
-                                  icon: AppSvgIcon(
-                                    'lyrics',
-                                    color: _showLyrics
-                                        ? Colors.white
-                                        : Colors.white38,
-                                  ),
+                                PictureInPictureButton(
+                                  engine: engine,
+                                  color: Colors.white,
                                 ),
+                                if (showLyricsButton)
+                                  IconButton(
+                                    tooltip: ref.tr('lyrics'),
+                                    isSelected: _showLyrics,
+                                    onPressed: () => setState(
+                                      () => _showLyrics = !_showLyrics,
+                                    ),
+                                    icon: AppSvgIcon(
+                                      'lyrics',
+                                      color: _showLyrics
+                                          ? Colors.white
+                                          : Colors.white38,
+                                    ),
+                                  ),
                               ],
                             ),
                           );
@@ -541,7 +588,10 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                     child: video
                         ? RepaintBoundary(
                             key: _ambientCaptureKey,
-                            child: engine.buildVideoView(fit: BoxFit.contain),
+                            child: PipVideoSurface(
+                              engine: engine,
+                              fit: BoxFit.contain,
+                            ),
                           )
                         : ThumbImage(
                             seed: media.id,
@@ -560,50 +610,71 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        Align(
-          alignment: AlignmentDirectional.centerStart,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                key: const ValueKey('immersive-title'),
-                displayTitle(media.title),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (formatCreatorNames(media.artist).isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Tooltip(
-                    message: ref.tr('search_by_creator'),
-                    child: InkWell(
-                      key: const ValueKey('immersive-creator-search'),
-                      onTap: () =>
-                          ref
-                              .read(creatorVideosRequestProvider.notifier)
-                              .state = formatCreatorNames(
-                            media.artist,
+        _controls(
+          AnimatedOpacity(
+            opacity: _pointerOverSurface ? 1 : 0,
+            duration: const Duration(milliseconds: 180),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    key: const ValueKey('immersive-title'),
+                    displayTitle(media.title),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (formatCreatorNames(media.artist).isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Tooltip(
+                        message: ref.tr('search_by_creator'),
+                        child: InkWell(
+                          key: const ValueKey('immersive-creator-search'),
+                          onTap: () =>
+                              ref
+                                  .read(creatorVideosRequestProvider.notifier)
+                                  .state = formatCreatorNames(
+                                media.artist,
+                              ),
+                          child: Text(
+                            key: const ValueKey('immersive-creator'),
+                            formatCreatorNames(media.artist),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 18,
+                            ),
                           ),
-                      child: Text(
-                        key: const ValueKey('immersive-creator'),
-                        formatCreatorNames(media.artist),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 18,
                         ),
                       ),
                     ),
-                  ),
-                ),
-            ],
+                  if (media.artist == null || media.artist!.isEmpty)
+                    SizedBox(
+                      width: 240,
+                      height: 30,
+                      child: InkWell(
+                        key: const ValueKey('immersive-empty-creator-edit'),
+                        onTap: () => showMediaMetadataEditor(
+                          context,
+                          ref,
+                          media,
+                          focusCreator: true,
+                        ),
+                        child: const SizedBox.expand(),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ],

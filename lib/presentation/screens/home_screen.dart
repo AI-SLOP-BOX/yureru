@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
@@ -149,6 +151,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final favorites = lib.savedMedia.where((item) => item.isFavorite).toList();
     final recentlyAdded = [...lib.savedMedia]
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final listenAgainTop = _randomPastTopThree(lib.savedMedia, DateTime.now());
 
     // The middle scrolls: header + preview are fixed, so CJK line-height
     // variance (the classic 1px Column overflow) can never break this page.
@@ -187,6 +190,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                 favorites: false,
                                 sort: VideosSort.recentlyPlayed,
                               ),
+                      ),
+                    ),
+                  if (listenAgainTop.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: MediaShelf(
+                        key: const ValueKey('home-listen-again'),
+                        title: ref.tr('listen_again_recommendation'),
+                        items: listenAgainTop,
+                        seeAllLabel: ref.tr('see_all'),
+                        onPlay: (media) =>
+                            _playCollection(listenAgainTop, media),
                       ),
                     ),
                   if (favorites.isNotEmpty)
@@ -448,6 +462,55 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
+List<MediaItem> _randomPastTopThree(List<MediaItem> library, DateTime now) {
+  final today = DateTime(now.year, now.month, now.day);
+  final currentWeekStart = today.subtract(Duration(days: today.weekday - 1));
+  final currentMonthStart = DateTime(today.year, today.month);
+  final random = math.Random(today.millisecondsSinceEpoch);
+  final eligible = library
+      .where((item) {
+        final lastPlayed = item.lastPlayedAt;
+        return lastPlayed == null || now.difference(lastPlayed).inDays >= 30;
+      })
+      .toList(growable: false);
+  if (eligible.isEmpty) return const [];
+
+  // Sample past weekly or monthly windows without writing ranking snapshots.
+  // The date seed keeps today's recommendations steady, then rotates tomorrow.
+  for (var attempt = 0; attempt < 12; attempt++) {
+    late final DateTime start;
+    late final DateTime end;
+    if (random.nextBool()) {
+      final weeksAgo = 8 + random.nextInt(45);
+      end = currentWeekStart.subtract(Duration(days: weeksAgo * 7));
+      start = end.subtract(const Duration(days: 7));
+    } else {
+      final monthsAgo = 3 + random.nextInt(10);
+      start = DateTime(
+        currentMonthStart.year,
+        currentMonthStart.month - monthsAgo,
+      );
+      end = DateTime(start.year, start.month + 1);
+    }
+
+    final ranked =
+        [
+          for (final item in eligible)
+            (item: item, plays: item.playCountBetween(start, end)),
+        ].where((entry) => entry.plays > 0).toList()..sort((a, b) {
+          final byPlays = b.plays.compareTo(a.plays);
+          if (byPlays != 0) return byPlays;
+          return b.item.recommendationScore.compareTo(
+            a.item.recommendationScore,
+          );
+        });
+    if (ranked.isNotEmpty) {
+      return ranked.take(3).map((entry) => entry.item).toList(growable: false);
+    }
+  }
+  return const [];
+}
+
 class _PlaylistCard extends ConsumerStatefulWidget {
   final String playlistId;
   final String name;
@@ -527,6 +590,7 @@ class _PlaylistCardState extends ConsumerState<_PlaylistCard> {
                               localPath: widget.thumbPath,
                               imageContext: MediaImageContext.playlist,
                               playlistId: widget.playlistId,
+                              playlistCover: true,
                               radius: 0,
                               expand: true,
                             ),

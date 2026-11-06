@@ -3,6 +3,7 @@ package dev.yureru.yureru
 import android.app.PictureInPictureParams
 import android.os.Build
 import android.util.Rational
+import kotlin.math.roundToInt
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
@@ -41,8 +42,16 @@ class MainActivity : FlutterActivity() {
                         result.success(false)
                     } else {
                         try {
+                            val args = call.arguments as? Map<*, *>
+                            val aspectRatio = (args?.get("aspectRatio") as? Number)
+                                ?.toDouble()
+                                ?.takeIf { it.isFinite() && it > 0 }
+                                ?.coerceIn(0.42, 2.39)
+                                ?: (16.0 / 9.0)
                             val params = PictureInPictureParams.Builder()
-                                .setAspectRatio(Rational(16, 9))
+                                .setAspectRatio(
+                                    Rational((aspectRatio * 1000).roundToInt(), 1000),
+                                )
                                 .build()
                             result.success(enterPictureInPictureMode(params))
                         } catch (_: IllegalArgumentException) {

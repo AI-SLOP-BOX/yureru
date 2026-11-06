@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../i18n.dart';
+import '../widgets/app_svg_icon.dart';
 import 'imported_media_screen.dart';
 
 Future<String> _storageText(List<MediaItem> media, String languageCode) async {
@@ -21,27 +22,47 @@ class LibraryManagementScreen extends ConsumerWidget {
   const LibraryManagementScreen({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final lib = ref.watch(libraryProvider);
     return Scaffold(
-      appBar: AppBar(title: Text(ref.tr('library_management'))),
+      appBar: AppBar(title: Text(ref.tr('library'))),
       body: ListView(
         children: [
           ListTile(
             leading: const Icon(Icons.file_download),
             title: Text(ref.tr('import_video')),
             subtitle: Text(ref.tr('import_video_desc')),
-            onTap: () => importVideos(context, ref),
+            onTap: () => chooseImportMethod(context, ref),
           ),
           ListTile(
-            leading: const Icon(Icons.folder_open),
-            title: Text(ref.tr('import_folder')),
-            subtitle: Text(ref.tr('import_folder_desc')),
-            onTap: () => importFolder(context, ref),
+            leading: const AppSvgIcon('history'),
+            title: Text(ref.tr('clear_playback_history')),
+            onTap: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: Text(ref.tr('clear_playback_history')),
+                  content: Text(ref.tr('clear_history_desc')),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: Text(ref.tr('cancel')),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      child: Text(ref.tr('clear')),
+                    ),
+                  ],
+                ),
+              );
+              if (confirmed == true && context.mounted) {
+                await ref.read(libraryProvider.notifier).clearPlaybackHistory();
+              }
+            },
           ),
           ListTile(
-            leading: const Icon(Icons.video_library),
-            title: Text(ref.tr('imported_media')),
-            subtitle: Text(ref.videosCount(lib.savedMedia.length)),
+            leading: const AppSvgIcon('collection_edit'),
+            title: Text(ref.tr('edit_media_artwork')),
+            subtitle: Text(ref.tr('edit_media_artwork_desc')),
+            trailing: const Icon(Icons.chevron_right_rounded),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const ImportedMediaScreen()),
             ),
@@ -51,15 +72,54 @@ class LibraryManagementScreen extends ConsumerWidget {
             title: Text(ref.tr('storage')),
             onTap: () => _storage(context, ref),
           ),
-          ListTile(
-            leading: const Icon(Icons.folder),
-            title: Text(ref.tr('import_folder_referenced')),
-            subtitle: Text(ref.tr('import_folder_referenced_desc')),
-            onTap: () => importFolderReferenced(context, ref),
-          ),
         ],
       ),
     );
+  }
+
+  static Future<void> chooseImportMethod(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final method = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.video_file_outlined),
+              title: Text(ref.tr('import_files_copy')),
+              subtitle: Text(ref.tr('import_files_copy_desc')),
+              onTap: () => Navigator.pop(sheetContext, 'files'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_copy_outlined),
+              title: Text(ref.tr('import_folder')),
+              subtitle: Text(ref.tr('import_folder_desc')),
+              onTap: () => Navigator.pop(sheetContext, 'folder-copy'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.drive_folder_upload_outlined),
+              title: Text(ref.tr('import_folder_referenced')),
+              subtitle: Text(ref.tr('import_folder_referenced_desc')),
+              onTap: () => Navigator.pop(sheetContext, 'folder-reference'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || method == null) return;
+    switch (method) {
+      case 'files':
+        await importVideos(context, ref);
+      case 'folder-copy':
+        await importFolder(context, ref);
+      case 'folder-reference':
+        await importFolderReferenced(context, ref);
+    }
   }
 
   static Future<void> importVideos(BuildContext context, WidgetRef ref) async {

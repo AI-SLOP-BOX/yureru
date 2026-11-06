@@ -34,6 +34,11 @@ void main() {
       thumbnailPath: '/thumb.jpg',
       lyricsPath: '/lyrics.lrc',
       lyricsOffsetMs: 50,
+      separateLyricsByView: true,
+      videoLyricsPath: '/video.lrc',
+      videoLyricsOffsetMs: -250,
+      artworkLyricsPath: '/jacket.lrc',
+      artworkLyricsOffsetMs: 900,
     );
     expect(item.copyWith().toJson(), item.toJson());
     expect(item.copyWith(title: 'New').toJson(), {
@@ -50,6 +55,8 @@ void main() {
       thumbnailPath: null,
       lyricsPath: null,
       lyricsOffsetMs: 0,
+      videoLyricsPath: null,
+      artworkLyricsPath: null,
     );
     expect(cleared.toJson(), {
       ...item.toJson(),
@@ -61,10 +68,38 @@ void main() {
       'thumbnailPath': null,
       'lyricsPath': null,
       'lyricsOffsetMs': 0,
+      'videoLyricsPath': null,
+      'artworkLyricsPath': null,
     });
     expect(item.artist, 'Artist');
     expect(item.preferredImagePath, '/art.jpg');
     expect(item.copyWith(artworkPath: null).preferredImagePath, '/thumb.jpg');
+  });
+
+  test('view-specific lyrics fall back to shared lyrics until configured', () {
+    final shared = MediaItem(
+      id: 'shared',
+      title: 'Shared',
+      localPath: '/shared.mp4',
+      lyricsPath: '/shared.lrc',
+      lyricsOffsetMs: 5000,
+      separateLyricsByView: true,
+    );
+    expect(shared.lyricsPathForView(artwork: false), '/shared.lrc');
+    expect(shared.lyricsPathForView(artwork: true), '/shared.lrc');
+    expect(shared.lyricsOffsetForView(artwork: false), 5000);
+
+    final split = shared.copyWith(
+      videoLyricsPath: '/video.lrc',
+      videoLyricsOffsetMs: -1000,
+      artworkLyricsPath: '/artwork.lrc',
+      artworkLyricsOffsetMs: 250,
+    );
+    final restored = MediaItem.fromJson(split.toJson());
+    expect(restored.lyricsPathForView(artwork: false), '/video.lrc');
+    expect(restored.lyricsOffsetForView(artwork: false), -1000);
+    expect(restored.lyricsPathForView(artwork: true), '/artwork.lrc');
+    expect(restored.lyricsOffsetForView(artwork: true), 250);
   });
 
   test(

@@ -231,43 +231,50 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                               )
                             : null,
                       ),
-                      child: Material(color: Colors.transparent, child: ListTile(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: ListTile(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          leading: ThumbImage(
+                            seed: pl.id,
+                            mediaId: pl.mediaIds.isEmpty
+                                ? null
+                                : lib.byId(pl.mediaIds.first)?.id,
+                            localPath: pl.mediaIds.isEmpty
+                                ? null
+                                : lib.byId(pl.mediaIds.first)?.localPath,
+                            imageContext: MediaImageContext.playlist,
+                            playlistId: pl.id,
+                            playlistCover: true,
+                            size: 40,
+                          ),
+                          title: Text(
+                            displayTitle(pl.name),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            ref.tracksCount(pl.mediaIds.length),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: kTextSub,
+                            ),
+                          ),
+                          trailing: isSelected
+                              ? const Icon(
+                                  Icons.keyboard_return_rounded,
+                                  size: 16,
+                                  color: kAccentLight,
+                                )
+                              : null,
+                          onTap: () {
+                            Navigator.pop(context);
+                            widget.onOpenPlaylist(pl.id);
+                          },
                         ),
-                        leading: ThumbImage(
-                          seed: pl.id,
-                          mediaId: pl.mediaIds.isEmpty
-                              ? null
-                              : lib.byId(pl.mediaIds.first)?.id,
-                          localPath: pl.mediaIds.isEmpty
-                              ? null
-                              : lib.byId(pl.mediaIds.first)?.localPath,
-                          imageContext: MediaImageContext.playlist,
-                          playlistId: pl.id,
-                          size: 40,
-                        ),
-                        title: Text(
-                          displayTitle(pl.name),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          ref.tracksCount(pl.mediaIds.length),
-                          style: const TextStyle(fontSize: 12, color: kTextSub),
-                        ),
-                        trailing: isSelected
-                            ? const Icon(
-                                Icons.keyboard_return_rounded,
-                                size: 16,
-                                color: kAccentLight,
-                              )
-                            : null,
-                        onTap: () {
-                          Navigator.pop(context);
-                          widget.onOpenPlaylist(pl.id);
-                        },
-                      )),
+                      ),
                     );
                   }(),
                 ],
@@ -307,61 +314,64 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                               )
                             : null,
                       ),
-                      child: Material(color: Colors.transparent, child: ListTile(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        leading: ThumbImage(
-                          seed: m.id,
-                          mediaId: m.id,
-                          localPath: m.localPath,
-                          imageContext: MediaImageContext.home,
-                          size: 40,
-                          radius: 8,
-                        ),
-                        title: Text(
-                          displayTitle(m.title),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: subtitleText != null
-                            ? Text(
-                                subtitleText,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: kTextSub,
-                                ),
-                              )
-                            : DurationText(
-                                mediaId: m.id,
-                                localPath: m.localPath,
-                                durationMs: m.durationMs,
-                              ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (subtitleText != null)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 8),
-                                child: DurationText(
+                      child: Material(
+                        color: Colors.transparent,
+                        child: ListTile(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          leading: ThumbImage(
+                            seed: m.id,
+                            mediaId: m.id,
+                            localPath: m.localPath,
+                            imageContext: MediaImageContext.home,
+                            size: 40,
+                            radius: 8,
+                          ),
+                          title: Text(
+                            displayTitle(m.title),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: subtitleText != null
+                              ? Text(
+                                  subtitleText,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: kTextSub,
+                                  ),
+                                )
+                              : DurationText(
                                   mediaId: m.id,
                                   localPath: m.localPath,
                                   durationMs: m.durationMs,
                                 ),
-                              ),
-                            if (isSelected)
-                              const Icon(
-                                Icons.arrow_forward_rounded,
-                                size: 18,
-                                color: kAccentLight,
-                              ),
-                          ],
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (subtitleText != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: DurationText(
+                                    mediaId: m.id,
+                                    localPath: m.localPath,
+                                    durationMs: m.durationMs,
+                                  ),
+                                ),
+                              if (isSelected)
+                                const Icon(
+                                  Icons.arrow_forward_rounded,
+                                  size: 18,
+                                  color: kAccentLight,
+                                ),
+                            ],
+                          ),
+                          onTap: () =>
+                              _activateIndex(globalIdx, playlists, videos, lib),
                         ),
-                        onTap: () =>
-                            _activateIndex(globalIdx, playlists, videos, lib),
-                      )),
+                      ),
                     );
                   }(),
                 ],

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +11,7 @@ import '../data/session.dart';
 import '../domain/models.dart';
 import '../platform/system_media_provider.dart';
 import '../platform/keyboard_shortcuts.dart';
+import '../platform/window_utils.dart';
 import 'i18n.dart';
 import '../playback/playback_controller.dart';
 import 'nav.dart';
@@ -31,6 +33,7 @@ import 'widgets/sidebar.dart';
 import 'widgets/shell_chrome.dart';
 import 'widgets/top_bar.dart';
 import 'widgets/transport_bar.dart';
+import 'widgets/thumb_image.dart';
 import 'widgets/yureru_logo.dart';
 
 /// 3-pane desktop shell (sidebar / center / queue) + bottom transport bar.
@@ -45,6 +48,7 @@ class _AppShellState extends ConsumerState<AppShell>
     with WidgetsBindingObserver {
   static const _appExitChannel = MethodChannel('yureru/app_exit');
   static const _pipChannel = MethodChannel('yureru/media_picker');
+  static const _pipHandoffChannel = MethodChannel('yureru/pip_handoff');
   static const _nativeMenuChannel = MethodChannel('yureru/native_menu');
   static const _firstLaunchCompleteKey = 'yureru_first_launch_complete_v1';
   Nav nav = Nav.library;
@@ -90,11 +94,31 @@ class _AppShellState extends ConsumerState<AppShell>
     });
     _pipChannel.setMethodCallHandler((call) async {
       if (call.method == 'onSystemPictureInPictureChanged') {
-        ref.read(pictureInPictureProvider.notifier).state =
-            call.arguments == true;
+        final active = call.arguments == true;
+        final isMacOS = defaultTargetPlatform == TargetPlatform.macOS;
+        ref.read(pictureInPictureProvider.notifier).state = active && !isMacOS;
+        ref.read(nativeSystemPictureInPictureProvider.notifier).state =
+            active && isMacOS;
         return null;
       }
       return null;
+    });
+    _pipHandoffChannel.setMethodCallHandler((call) async {
+      if (call.method != 'enterCompactWindow' || !mounted) return false;
+      final arguments = call.arguments is Map
+          ? Map<String, dynamic>.from(call.arguments as Map)
+          : const <String, dynamic>{};
+      final aspectRatio = (arguments['aspectRatio'] as num?)?.toDouble();
+      ref.read(pictureInPictureProvider.notifier).state = true;
+      await WidgetsBinding.instance.endOfFrame;
+      final started = await enterPictureInPictureWindow(
+        engine: ref.read(engineProvider),
+        aspectRatio: aspectRatio,
+      );
+      if (!started && mounted) {
+        ref.read(pictureInPictureProvider.notifier).state = false;
+      }
+      return started;
     });
     _nativeMenuChannel.setMethodCallHandler((call) async {
       if (call.method == 'openSettings') {
@@ -145,6 +169,7 @@ class _AppShellState extends ConsumerState<AppShell>
     _playbackController?.saveCurrentPosition();
     _appExitChannel.setMethodCallHandler(null);
     _pipChannel.setMethodCallHandler(null);
+    _pipHandoffChannel.setMethodCallHandler(null);
     _nativeMenuChannel.setMethodCallHandler(null);
     super.dispose();
   }
@@ -745,6 +770,9 @@ class _AppShellState extends ConsumerState<AppShell>
 
   /// Narrow fallback: pages + mini player + bottom navigation.
   Widget _narrow() {
+    final library = ref.watch(libraryProvider);
+    final playlists = library.playlists;
+    final compactDrawer = MediaQuery.sizeOf(context).height < 620;
     final pages = [
       HomeScreen(
         onOpenPlaylist: _openDetail,
@@ -784,7 +812,12 @@ class _AppShellState extends ConsumerState<AppShell>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(22, 20, 18, 24),
+              padding: EdgeInsets.fromLTRB(
+                22,
+                compactDrawer ? 12 : 20,
+                18,
+                compactDrawer ? 14 : 24,
+              ),
               child: Row(
                 children: [
                   const YureruWaveLogo(size: 38),
@@ -799,7 +832,7 @@ class _AppShellState extends ConsumerState<AppShell>
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(22, 0, 16, 10),
+              padding: EdgeInsets.fromLTRB(22, 0, 16, compactDrawer ? 5 : 10),
               child: Text(
                 ref.tr('library'),
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -816,6 +849,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 Navigator.pop(context);
                 _setNav(Nav.library);
               },
+              compact: compactDrawer,
             ),
             ShellCompactDrawerItem(
               icon: Icons.playlist_play_rounded,
@@ -826,6 +860,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 Navigator.pop(context);
                 _setNav(Nav.playlists);
               },
+              compact: compactDrawer,
             ),
             ShellCompactDrawerItem(
               icon: Icons.library_music_rounded,
@@ -835,6 +870,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 Navigator.pop(context);
                 _setNav(Nav.videos);
               },
+              compact: compactDrawer,
             ),
             ShellCompactDrawerItem(
               icon: Icons.settings_rounded,
@@ -844,6 +880,57 @@ class _AppShellState extends ConsumerState<AppShell>
                 Navigator.pop(context);
                 _setNav(Nav.settings);
               },
+              compact: compactDrawer,
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: 22,
+                vertical: compactDrawer ? 7 : 12,
+              ),
+              child: Divider(height: 1),
+            ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(22, 0, 16, compactDrawer ? 3 : 6),
+              child: Text(
+                ref.tr('playlists'),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: kTextMuted,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ),
+            Expanded(
+              child: playlists.isEmpty
+                  ? const SizedBox.shrink()
+                  : ListView.builder(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      itemCount: playlists.length,
+                      itemBuilder: (context, index) {
+                        final playlist = playlists[index];
+                        final firstMedia = playlist.mediaIds.isEmpty
+                            ? null
+                            : library.byId(playlist.mediaIds.first);
+                        return ShellCompactDrawerItem(
+                          leading: ThumbImage(
+                            seed: playlist.id,
+                            mediaId: firstMedia?.id,
+                            localPath: firstMedia?.localPath,
+                            size: 28,
+                            radius: 6,
+                            imageContext: MediaImageContext.playlist,
+                            playlistId: playlist.id,
+                            playlistCover: true,
+                          ),
+                          label: playlist.name,
+                          selected: detailId == playlist.id && !isPlayerMode,
+                          compact: compactDrawer,
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openDetail(playlist.id);
+                          },
+                        );
+                      },
+                    ),
             ),
           ],
         ),

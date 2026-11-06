@@ -10,23 +10,29 @@ class QueueLyricsTabs extends ConsumerWidget {
     required this.showLyrics,
     required this.onQueue,
     required this.onLyrics,
+    this.showLyricsTab = true,
+    this.showQueueTab = true,
   });
 
   final bool showLyrics;
   final VoidCallback onQueue;
   final VoidCallback onLyrics;
+  final bool showLyricsTab;
+  final bool showQueueTab;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Row(
       children: [
-        _Tab(
-          label: ref.tr('next_contents'),
-          selected: !showLyrics,
-          onTap: onQueue,
-        ),
-        const SizedBox(width: 22),
-        _Tab(label: ref.tr('lyrics'), selected: showLyrics, onTap: onLyrics),
+        if (showQueueTab)
+          _Tab(
+            label: ref.tr('next_contents'),
+            selected: !showLyrics,
+            onTap: onQueue,
+          ),
+        if (showQueueTab && showLyricsTab) const SizedBox(width: 22),
+        if (showLyricsTab)
+          _Tab(label: ref.tr('lyrics'), selected: showLyrics, onTap: onLyrics),
       ],
     );
   }

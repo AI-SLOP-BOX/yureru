@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
+import '../../ambient/video_lyrics_settings.dart';
 import '../../data/thumbnails.dart';
 import '../../platform/keyboard_shortcuts.dart';
 import '../../domain/creator_names.dart';
@@ -23,10 +24,14 @@ import 'app_svg_icon.dart';
 import 'favorite_button.dart';
 import 'sleep_timer_button.dart';
 import 'playback_options.dart';
+import '../screens/media_metadata_editor.dart';
 import 'repeat_icon.dart';
 import 'skip_next_icon.dart';
 import 'transport_icon.dart';
 import 'thumb_image.dart';
+import 'pip_video_surface.dart';
+import 'picture_in_picture_button.dart';
+import 'video_lyrics_overlay.dart';
 
 /// Playing screen:
 /// - Video and artwork playback surface
@@ -55,6 +60,8 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   final GlobalKey _playerHoverBoundsKey = GlobalKey();
   final GlobalKey _ambientVideoBoundsKey = GlobalKey();
   final GlobalKey _ambientVideoCaptureKey = GlobalKey();
+  final GlobalKey _compactPlayerStackKey = GlobalKey();
+  final GlobalKey _compactPlayerVisualKey = GlobalKey();
   late StateController<Rect?> _ambientApertureController;
   late PlaybackEngine _engine;
   Rect? _lastAmbientAperture;
@@ -78,8 +85,41 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   double _dragAccumulatedDelta = 0.0;
   Duration _dragStartPos = Duration.zero;
   bool _queueSheetExpanded = false;
+  bool _queuePositionReportScheduled = false;
+  double? _queueSheetTop;
   String? _visualAspectRatioKey;
   double? _visualAspectRatio;
+
+  void _scheduleQueueSheetPositionUpdate() {
+    if (_queuePositionReportScheduled) return;
+    _queuePositionReportScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _queuePositionReportScheduled = false;
+      if (!mounted || _queueSheetExpanded) return;
+      final stackObject = _compactPlayerStackKey.currentContext
+          ?.findRenderObject();
+      final visualObject = _compactPlayerVisualKey.currentContext
+          ?.findRenderObject();
+      if (stackObject is! RenderBox ||
+          visualObject is! RenderBox ||
+          !stackObject.hasSize ||
+          !visualObject.hasSize) {
+        return;
+      }
+      final visualBottom = visualObject
+          .localToGlobal(
+            Offset(0, visualObject.size.height),
+            ancestor: stackObject,
+          )
+          .dy;
+      final minVisibleSheet = math.min(240.0, stackObject.size.height * 0.36);
+      final maxTop = math.max(0.0, stackObject.size.height - minVisibleSheet);
+      final nextTop = visualBottom.clamp(0.0, maxTop).toDouble();
+      if (_queueSheetTop == null || (_queueSheetTop! - nextTop).abs() > 2) {
+        setState(() => _queueSheetTop = nextTop);
+      }
+    });
+  }
 
   void _requestVisualAspectRatio(MediaItem media, PlayerViewMode mode) {
     final preferArtwork = mode == PlayerViewMode.image;
@@ -361,7 +401,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
           quarterTurns: 1,
           child: engine.videoAspectRatio == null
               ? const SizedBox.shrink()
-              : engine.buildVideoView(fit: BoxFit.cover),
+              : PipVideoSurface(engine: engine, fit: BoxFit.cover),
         );
       }
       return Stack(
@@ -376,7 +416,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
               aspectRatio: engine.videoAspectRatio ?? (16 / 9),
               child: engine.videoAspectRatio == null
                   ? const SizedBox.shrink()
-                  : engine.buildVideoView(fit: BoxFit.contain),
+                  : PipVideoSurface(engine: engine, fit: BoxFit.contain),
             ),
           ),
         ],
@@ -395,40 +435,44 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     return Positioned(
       left: 28,
       bottom: bottom,
-      child: IgnorePointer(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.sizeOf(context).width * 0.55,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                key: const ValueKey('cinema-title'),
-                displayTitle(media.title),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  shadows: [Shadow(color: Colors.black87, blurRadius: 10)],
+      child: AnimatedOpacity(
+        opacity: _pointerOverPlayer ? 1 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: IgnorePointer(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width * 0.55,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  key: const ValueKey('cinema-title'),
+                  displayTitle(media.title),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    shadows: [Shadow(color: Colors.black87, blurRadius: 10)],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                key: const ValueKey('cinema-creator'),
-                creator.isEmpty ? ref.tr('creator_not_set') : creator,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                  shadows: [Shadow(color: Colors.black87, blurRadius: 8)],
+                const SizedBox(height: 4),
+                Text(
+                  key: const ValueKey('cinema-creator'),
+                  creator.isEmpty ? ref.tr('creator_not_set') : creator,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                    shadows: [Shadow(color: Colors.black87, blurRadius: 8)],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -440,7 +484,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     // rendered only in the surrounding app canvas beneath this aperture.
     return RepaintBoundary(
       key: _ambientVideoCaptureKey,
-      child: engine.buildVideoView(fit: fit),
+      child: PipVideoSurface(engine: engine, fit: fit),
     );
   }
 
@@ -467,8 +511,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     _onPointerHover();
     ref.read(playerViewModeProvider.notifier).state = newMode;
     // Keep the player layout in place while the visual smoothly changes mode.
-    final engine = ref.read(engineProvider);
-    engine.setVideoTrackEnabled(newMode == PlayerViewMode.media);
+    unawaited(ref.read(playbackControllerProvider).syncCurrentViewSource());
   }
 
   Widget _playPauseGlyph(bool isPlaying, double size, Color color) =>
@@ -594,6 +637,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final ctl = ref.read(playbackControllerProvider);
     final mode = ref.watch(playerViewModeProvider);
     final ambientLightEnabled = ref.watch(ambientLightProvider);
+    final videoLyricsSettings = ref.watch(videoLyricsSettingsProvider);
     final fullPlayerView = ref.watch(viewingPlayerProvider);
     final snap = engine.snapshot;
     final media = q.currentId == null ? null : lib.byId(q.currentId!);
@@ -695,9 +739,15 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = themeTextPrimary(context);
     final textSub = themeTextSub(context);
-    final playerTextPrimary = useVideoOverlay ? Colors.white : textPrimary;
-    final playerTextSub = useVideoOverlay ? Colors.white70 : textSub;
-    final transportIconColor = useVideoOverlay
+    final useLightAmbientControls =
+        useVideoOverlay && ambientLightEnabled && !isDark;
+    final playerTextPrimary = useVideoOverlay && !useLightAmbientControls
+        ? Colors.white
+        : textPrimary;
+    final playerTextSub = useVideoOverlay && !useLightAmbientControls
+        ? Colors.white70
+        : textSub;
+    final transportIconColor = useVideoOverlay && !useLightAmbientControls
         ? Colors.white70
         : (isDark ? const Color(0xFFA9A9A9) : const Color(0xFF5D5D5D));
     final playIconColor = transportIconColor;
@@ -745,10 +795,16 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                 padding: isCinema
                     ? EdgeInsets.zero
                     : EdgeInsets.fromLTRB(
-                        isCompact ? 16 : 32,
-                        isCompact ? 68 : 80,
-                        isCompact ? 16 : 32,
-                        isCompact ? 120 : 150,
+                        (isCompact ? 16 : 32) +
+                            (isCompact ? 0 : widget.leadingChromeInset),
+                        mode == PlayerViewMode.image
+                            ? (isCompact ? 48 : 52)
+                            : (isCompact ? 68 : 80),
+                        (isCompact ? 16 : 32) +
+                            (isCompact ? 0 : widget.trailingChromeInset),
+                        mode == PlayerViewMode.image
+                            ? (isCompact ? 88 : 96)
+                            : (isCompact ? 120 : 150),
                       ),
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
@@ -904,6 +960,17 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                         ),
                                                       if (hasValidVideoAspectRatio)
                                                         _videoSurface(engine),
+                                                      if (videoLyricsSettings
+                                                          .enabled)
+                                                        VideoLyricsOverlay(
+                                                          key: ValueKey(
+                                                            'video-lyrics-${media.id}',
+                                                          ),
+                                                          media: media,
+                                                          engine: engine,
+                                                          settings:
+                                                              videoLyricsSettings,
+                                                        ),
                                                     ],
                                                   )
                                                 : Stack(
@@ -1978,6 +2045,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     // instead of relying on hover, which mobile devices do not have.
     final keepVideoControlsVisible = useVideoOverlay;
     final ambientLightEnabled = ref.watch(ambientLightProvider);
+    final videoLyricsSettings = ref.watch(videoLyricsSettingsProvider);
     final title = displayTitle(media.title);
     final artist = formatCreatorNames(media.artist);
 
@@ -2016,6 +2084,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
             ? Colors.transparent
             : Theme.of(context).scaffoldBackgroundColor,
         body: Stack(
+          key: _compactPlayerStackKey,
           children: [
             // Keep the tap-away layer behind playback controls. The queue sheet
             // itself remains above them, while controls outside it stay usable.
@@ -2033,6 +2102,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
             SafeArea(
               child: LayoutBuilder(
                 builder: (context, constraints) {
+                  _scheduleQueueSheetPositionUpdate();
                   return SingleChildScrollView(
                     physics: const ClampingScrollPhysics(),
                     child: ConstrainedBox(
@@ -2086,6 +2156,11 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                         Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
+                                            PictureInPictureButton(
+                                              engine: engine,
+                                              iconSize: 22,
+                                              color: textPrimary,
+                                            ),
                                             // Mode switcher (media / image)
                                             IconButton(
                                               icon: Icon(
@@ -2363,8 +2438,15 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                           : 16 / 9;
                                       final aspectRatio =
                                           _visualAspectRatio ?? fallbackRatio;
+                                      final heightFactor = isPhoneSize
+                                          ? (aspectRatio < 0.8
+                                                ? 0.34
+                                                : aspectRatio < 1.15
+                                                ? 0.40
+                                                : 0.46)
+                                          : 0.48;
                                       final maxVisualHeight =
-                                          constraints.maxHeight * 0.48;
+                                          constraints.maxHeight * heightFactor;
                                       final maxVisualWidth =
                                           MediaQuery.sizeOf(context).width -
                                           safePadding.horizontal -
@@ -2382,10 +2464,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                         ),
                                         curve: Curves.easeInOutCubic,
                                         alignment: Alignment.center,
+                                        onEnd:
+                                            _scheduleQueueSheetPositionUpdate,
                                         child: SizedBox(
-                                          key: const ValueKey(
-                                            'compact-player-visual',
-                                          ),
+                                          key: _compactPlayerVisualKey,
                                           width: visualWidth,
                                           height: visualHeight,
                                           child: Stack(
@@ -2479,6 +2561,19 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                                             null)
                                                                           _videoSurface(
                                                                             engine,
+                                                                          ),
+                                                                        if (videoLyricsSettings
+                                                                            .enabled)
+                                                                          VideoLyricsOverlay(
+                                                                            key: ValueKey(
+                                                                              'compact-video-lyrics-${media.id}',
+                                                                            ),
+                                                                            media:
+                                                                                media,
+                                                                            engine:
+                                                                                engine,
+                                                                            settings:
+                                                                                videoLyricsSettings,
                                                                           ),
                                                                       ],
                                                                     )
@@ -2578,6 +2673,24 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                       ),
                                     ),
                                   ],
+                                  if (media.artist == null ||
+                                      media.artist!.isEmpty)
+                                    SizedBox(
+                                      width: 240,
+                                      height: 28,
+                                      child: InkWell(
+                                        key: const ValueKey(
+                                          'player-empty-creator-edit',
+                                        ),
+                                        onTap: () => showMediaMetadataEditor(
+                                          context,
+                                          ref,
+                                          media,
+                                          focusCreator: true,
+                                        ),
+                                        child: const SizedBox.expand(),
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
@@ -2713,51 +2826,8 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
 
                             const SizedBox(height: 18),
 
-                            // A touch-friendly entry point to the queue/lyrics
-                            // sheet. QueuePanel already provides tabs for
-                            // switching between next contents and lyrics.
-                            if (!lockQueueOpen)
-                              Visibility(
-                                visible: !showQueueSheet,
-                                maintainState: true,
-                                maintainAnimation: true,
-                                maintainSize: true,
-                                child: Center(
-                                  child: TextButton.icon(
-                                    key: const ValueKey(
-                                      'compact-next-content-button',
-                                    ),
-                                    onPressed: () {
-                                      ref
-                                              .read(
-                                                lyricsPanelProvider.notifier,
-                                              )
-                                              .state =
-                                          false;
-                                      ref
-                                              .read(
-                                                queueVisibleProvider.notifier,
-                                              )
-                                              .state =
-                                          true;
-                                      setState(
-                                        () => _queueSheetExpanded = false,
-                                      );
-                                    },
-                                    icon: const Icon(
-                                      Icons.keyboard_arrow_up_rounded,
-                                      size: 20,
-                                    ),
-                                    label: Text(ref.tr('next_contents')),
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: textSub,
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                  ),
-                                ),
-                              ),
-
                             const Spacer(flex: 1),
+                            const SizedBox(height: 72),
                           ],
                         ),
                       ),
@@ -2766,6 +2836,45 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                 },
               ),
             ),
+
+            // Keep the queue entry point pinned to the viewport so tall media
+            // or lyric layouts can never push it below the screen.
+            if (!lockQueueOpen && !showQueueSheet)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: SafeArea(
+                  top: false,
+                  child: Center(
+                    child: TextButton.icon(
+                      key: const ValueKey('compact-next-content-button'),
+                      onPressed: () {
+                        ref.read(lyricsPanelProvider.notifier).state = false;
+                        ref.read(queueVisibleProvider.notifier).state = true;
+                        setState(() => _queueSheetExpanded = false);
+                      },
+                      icon: const Icon(
+                        Icons.keyboard_arrow_up_rounded,
+                        size: 30,
+                      ),
+                      label: Text(ref.tr('next_contents')),
+                      style: TextButton.styleFrom(
+                        foregroundColor: textSub,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 12,
+                        ),
+                        minimumSize: const Size(0, 56),
+                        textStyle: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
 
             // Slide-up queue sheet for mobile
             if (showQueueSheet)
@@ -2776,26 +2885,25 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                     // transport bar is outside it. Size the sheet from this
                     // actual body, otherwise an expanded sheet can start above
                     // the window and clip its handle/header.
-                    final safeTop = MediaQuery.paddingOf(context).top;
-                    // Expanded queue should begin just under the player
-                    // toolbar, eliminating the dead band above the sheet
-                    // without covering its top controls.
-                    final expandedHeight =
-                        (constraints.maxHeight - safeTop - 64)
-                            .clamp(0.0, constraints.maxHeight)
-                            .toDouble();
-                    final sheetHeight = _queueSheetExpanded
-                        ? expandedHeight
-                        : constraints.maxHeight * 0.52;
+                    // The expanded sheet covers the whole player body so the
+                    // track title and controls behind it cannot peek above it.
+                    final sheetTop = _queueSheetExpanded
+                        ? 0.0
+                        : (_queueSheetTop ?? constraints.maxHeight * 0.48)
+                              .clamp(
+                                0.0,
+                                math.max(0.0, constraints.maxHeight - 120),
+                              )
+                              .toDouble();
                     return Stack(
                       children: [
                         AnimatedPositioned(
                           duration: const Duration(milliseconds: 320),
                           curve: Curves.easeOutCubic,
+                          top: sheetTop,
                           left: 0,
                           right: 0,
                           bottom: 0,
-                          height: sheetHeight,
                           child: QueuePanel(
                             width: double.infinity,
                             ambient: ambientLightEnabled,
@@ -2818,15 +2926,14 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                     _queueSheetExpanded = !_queueSheetExpanded,
                               );
                             },
-                            onClose: isPhoneSize
-                                ? () {
-                                    ref
-                                            .read(queueVisibleProvider.notifier)
-                                            .state =
-                                        false;
-                                    setState(() => _queueSheetExpanded = false);
-                                  }
-                                : null,
+                            // The queue sheet is used on both phones and
+                            // tablets. Keep its close button available across
+                            // the entire narrow-window layout range.
+                            onClose: () {
+                              ref.read(queueVisibleProvider.notifier).state =
+                                  false;
+                              setState(() => _queueSheetExpanded = false);
+                            },
                           ),
                         ),
                       ],

@@ -203,6 +203,7 @@ class PlaylistsScreen extends ConsumerWidget {
                       size: 48,
                       imageContext: MediaImageContext.playlist,
                       playlistId: pl.id,
+                      playlistCover: true,
                     ),
                     title: Text(
                       displayTitle(pl.name),

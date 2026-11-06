@@ -13,6 +13,7 @@ class MetadataField extends StatelessWidget {
     required this.isDark,
     this.autofocus = false,
     this.keyboardType,
+    this.enabled = true,
   });
 
   final String label;
@@ -23,6 +24,7 @@ class MetadataField extends StatelessWidget {
   final bool isDark;
   final bool autofocus;
   final TextInputType? keyboardType;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -44,6 +46,7 @@ class MetadataField extends StatelessWidget {
         controller: controller,
         autofocus: autofocus,
         keyboardType: keyboardType,
+        enabled: enabled,
         style: TextStyle(color: textColor, fontSize: 15),
         decoration: InputDecoration(
           hintText: label,
@@ -79,6 +82,7 @@ class CreatorNamesField extends StatefulWidget {
     required this.isDark,
     required this.onChanged,
     this.strings,
+    this.autofocusEntry = false,
   });
 
   final String? initialValue;
@@ -88,6 +92,7 @@ class CreatorNamesField extends StatefulWidget {
   final bool isDark;
   final ValueChanged<List<String>> onChanged;
   final String Function(String key)? strings;
+  final bool autofocusEntry;
 
   String text(String key, String fallback) => strings?.call(key) ?? fallback;
 
@@ -216,6 +221,7 @@ class CreatorNamesFieldState extends State<CreatorNamesField> {
               child: TextField(
                 controller: _entryController,
                 style: TextStyle(color: widget.textColor, fontSize: 15),
+                autofocus: widget.autofocusEntry,
                 textInputAction: TextInputAction.done,
                 onSubmitted: _addName,
                 decoration: InputDecoration(
@@ -244,6 +250,19 @@ class CreatorNamesFieldState extends State<CreatorNamesField> {
               tooltip: widget.text('add_name', '名前を追加'),
               onPressed: () => _addName(),
               icon: const Icon(Icons.add_rounded),
+              style: IconButton.styleFrom(
+                foregroundColor: widget.textColor,
+                side: BorderSide(color: widget.borderColor),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: widget.text('save_creator_blank', '著作者を空白にする'),
+              onPressed: () => widget.onChanged(const [' ']),
+              icon: const Icon(Icons.visibility_off_outlined),
               style: IconButton.styleFrom(
                 foregroundColor: widget.textColor,
                 side: BorderSide(color: widget.borderColor),

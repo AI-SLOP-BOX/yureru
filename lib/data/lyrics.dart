@@ -7,7 +7,8 @@ class LyricLine {
 
 /// Parses synchronized LRC timestamps, including multiple timestamps per line.
 List<LyricLine> parseLrc(String source) {
-  final lines = <LyricLine>[];
+  final orderedLines = <({LyricLine line, int order})>[];
+  var sourceOrder = 0;
   final timestampPattern = RegExp(
     r'\[(?:(\d+):)?(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]',
   );
@@ -46,16 +47,20 @@ List<LyricLine> parseLrc(String source) {
       };
       final total =
           (hours * 3600 + minutes * 60 + seconds) * 1000 + millis - offsetMs;
-      lines.add(
-        LyricLine(
+      orderedLines.add((
+        line: LyricLine(
           time: Duration(milliseconds: total.clamp(0, 1 << 60)),
           text: text,
         ),
-      );
+        order: sourceOrder++,
+      ));
     }
   }
-  lines.sort((a, b) => a.time.compareTo(b.time));
-  return lines;
+  orderedLines.sort((a, b) {
+    final byTime = a.line.time.compareTo(b.line.time);
+    return byTime != 0 ? byTime : a.order.compareTo(b.order);
+  });
+  return orderedLines.map((entry) => entry.line).toList();
 }
 
 /// Parses timestamps copied from video comments or a URL into a duration.
@@ -130,4 +135,52 @@ int activeLyricIndex(
     active = i;
   }
   return active;
+}
+
+/// Converts a displayed lyric timestamp to the playback position at which it
+/// should be heard. A positive offset delays the lyric display, so seeking to
+/// a lyric also advances playback by that offset.
+Duration playbackPositionForLyric(
+  Duration lyricTime, {
+  Duration offset = Duration.zero,
+}) {
+  final position = lyricTime + offset;
+  return position.isNegative ? Duration.zero : position;
+}
+
+/// Converts the current playback position back to the timestamp stored in the
+/// lyric file, keeping manual timing edits consistent with the display offset.
+Duration lyricTimestampAtPlaybackPosition(
+  Duration playbackPosition, {
+  Duration offset = Duration.zero,
+}) {
+  final timestamp = playbackPosition - offset;
+  return timestamp.isNegative ? Duration.zero : timestamp;
+}
+
+/// Shifts every timestamp in an LRC file while leaving metadata and lyric text
+/// intact. Negative results are clamped to zero.
+String shiftLrcTimestamps(String source, int deltaMs) {
+  final timestampPattern = RegExp(
+    r'\[(?:(\d+):)?(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]',
+  );
+  return source.replaceAllMapped(timestampPattern, (match) {
+    final hours = int.tryParse(match[1] ?? '0') ?? 0;
+    final minutes = int.parse(match[2]!);
+    final seconds = int.parse(match[3]!);
+    final fraction = match[4] ?? '';
+    final millis = fraction.isEmpty
+        ? 0
+        : int.parse(fraction.padRight(3, '0').substring(0, 3));
+    final total = ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis;
+    final shifted = (total + deltaMs).clamp(0, 1 << 60);
+    final shiftedHours = shifted ~/ 3600000;
+    final shiftedMinutes = (shifted ~/ 60000) % 60;
+    final shiftedSeconds = (shifted ~/ 1000) % 60;
+    final shiftedMillis = shifted % 1000;
+    final time = shiftedHours > 0
+        ? '${shiftedHours.toString().padLeft(2, '0')}:${shiftedMinutes.toString().padLeft(2, '0')}:${shiftedSeconds.toString().padLeft(2, '0')}.${shiftedMillis.toString().padLeft(3, '0')}'
+        : '${shiftedMinutes.toString().padLeft(2, '0')}:${shiftedSeconds.toString().padLeft(2, '0')}.${shiftedMillis.toString().padLeft(3, '0')}';
+    return '[$time]';
+  });
 }

@@ -224,4 +224,43 @@ void main() {
       expect(library.state.byId(media.id)!.title, 'New title');
     },
   );
+
+  test(
+    'lyrics can be stored separately by player view with shared fallback',
+    () async {
+      final library = LibraryNotifier(InMemoryLibraryRepository());
+      addTearDown(library.dispose);
+      final media = _media('lyrics-profiles');
+      await library.addMedia([media]);
+      await library.updateMediaLyrics(media.id, '/shared.lrc');
+      await library.updateMediaLyricsOffset(media.id, 2000);
+      await library.setSeparateLyricsByView(media.id, true);
+      await library.updateMediaLyricsForView(
+        media.id,
+        artwork: false,
+        path: '/video.lrc',
+      );
+      await library.updateMediaLyricsOffsetForView(
+        media.id,
+        artwork: false,
+        offsetMs: -500,
+      );
+
+      final updated = library.state.byId(media.id)!;
+      expect(updated.lyricsPathForView(artwork: false), '/video.lrc');
+      expect(updated.lyricsOffsetForView(artwork: false), -500);
+      expect(updated.lyricsPathForView(artwork: true), '/shared.lrc');
+      expect(updated.lyricsOffsetForView(artwork: true), 2000);
+
+      await library.updateMediaLyricsForView(
+        media.id,
+        artwork: false,
+        path: null,
+      );
+      expect(
+        library.state.byId(media.id)!.lyricsPathForView(artwork: false),
+        '/shared.lrc',
+      );
+    },
+  );
 }

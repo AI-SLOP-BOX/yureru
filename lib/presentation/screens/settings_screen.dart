@@ -3,9 +3,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../app_state.dart';
+import '../../ambient/video_lyrics_settings.dart';
+import '../../domain/models.dart';
 import '../../platform/keyboard_shortcuts.dart';
 import '../i18n.dart';
 import '../theme.dart';
@@ -14,6 +18,8 @@ import '../widgets/page_header.dart';
 import '../widgets/semantics_safe_slider.dart';
 import 'imported_media_screen.dart';
 import 'settings_library_screen.dart';
+import 'settings_lyrics_screen.dart';
+import 'licenses_screen.dart';
 
 /// Settings page (center-pane body; shell owns chrome).
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -196,9 +202,49 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final ambientIntensity = ref.watch(ambientIntensityProvider);
     final ambientGeometry = ref.watch(ambientGeometryProvider);
     final ambientFrameRate = ref.watch(ambientFrameRateProvider);
+    final videoLyricsSettings = ref.watch(videoLyricsSettingsProvider);
     final themeMode = ref.watch(themeModeProvider);
     final imagePriorities = ref.watch(mediaImagePriorityProvider);
+    final library = ref.watch(libraryProvider);
     final language = ref.watch(languageProvider);
+    final normalization = ref.watch(audioSettingsProvider);
+    final supportsNormalization = ref
+        .watch(engineProvider)
+        .supportsVolumeNormalization;
+    Future<void> choosePlaylistArtwork(Playlist playlist) async {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: false,
+      );
+      final sourcePath = result?.files.single.path;
+      if (sourcePath == null) return;
+      try {
+        final support = await getApplicationSupportDirectory();
+        final directory = Directory('${support.path}/yureru_playlist_artwork');
+        await directory.create(recursive: true);
+        final extension = File(
+          sourcePath,
+        ).uri.pathSegments.last.split('.').last.toLowerCase();
+        final destination =
+            '${directory.path}/${playlist.id}_${DateTime.now().microsecondsSinceEpoch}.$extension';
+        await File(sourcePath).copy(destination);
+        await ref
+            .read(libraryProvider.notifier)
+            .setPlaylistArtworkPath(playlist.id, destination);
+      } catch (error) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                ref.tr('artwork_save_error').replaceAll('{error}', '$error'),
+              ),
+            ),
+          );
+        }
+      }
+    }
+
     Widget imagePrioritySelector(String title, MediaImageContext screen) {
       return Padding(
         padding: const EdgeInsets.only(top: 12),
@@ -237,24 +283,138 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       );
     }
 
+    Widget playlistImagePrioritySelector(Playlist playlist) {
+      final value = playlist.imagePriority ?? 'default';
+      return Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    displayTitle(playlist.name),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                SizedBox(
+                  width: 176,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: value,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      DropdownMenuItem(
+                        value: 'default',
+                        child: Text(
+                          ref.tr('image_priority_default'),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      DropdownMenuItem(
+                        value: MediaImagePriority.artworkFirst.name,
+                        child: Text(ref.tr('image_priority_artwork')),
+                      ),
+                      DropdownMenuItem(
+                        value: MediaImagePriority.thumbnailFirst.name,
+                        child: Text(ref.tr('image_priority_thumbnail')),
+                      ),
+                    ],
+                    onChanged: (selection) => ref
+                        .read(libraryProvider.notifier)
+                        .setPlaylistImagePriority(
+                          playlist.id,
+                          selection == null || selection == 'default'
+                              ? null
+                              : selection,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: SizedBox.square(
+                    dimension: 38,
+                    child: playlist.artworkPath == null
+                        ? ColoredBox(
+                            color: themeBorder(context),
+                            child: const Icon(Icons.queue_music_rounded),
+                          )
+                        : Image.file(
+                            File(playlist.artworkPath!),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => ColoredBox(
+                              color: themeBorder(context),
+                              child: const Icon(Icons.broken_image_outlined),
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => choosePlaylistArtwork(playlist),
+                  icon: const Icon(Icons.image_outlined, size: 18),
+                  label: Text(ref.tr('choose_artwork')),
+                ),
+                if (playlist.artworkPath != null)
+                  IconButton(
+                    tooltip: ref.tr('clear_artwork'),
+                    onPressed: () => ref
+                        .read(libraryProvider.notifier)
+                        .setPlaylistArtworkPath(playlist.id, null),
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
     final groups = <_SettingsGroup>[
       _SettingsGroup(
-        id: 'settings_import',
+        id: 'settings_library',
         icon: 'settings_folder',
-        description: ref.tr('import_video_desc'),
-        title: ref.tr('import_video'),
+        description: ref.tr('settings_library_hint'),
+        title: ref.tr('settings_library'),
         children: [
           ListTile(
-            leading: const Icon(Icons.video_file_outlined),
+            leading: const AppSvgIcon('settings_folder'),
             title: Text(ref.tr('import_video')),
-            subtitle: Text(ref.tr('import_video_desc')),
-            onTap: () => LibraryManagementScreen.importVideos(context, ref),
+            subtitle: Text(ref.tr('library_management_desc')),
+            trailing: const AppSvgIcon('chevron_right', size: 20),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            onTap: () => SettingsScreenActions.openLibraryManagement(context),
           ),
           ListTile(
-            leading: const Icon(Icons.folder_open_rounded),
-            title: Text(ref.tr('import_folder')),
-            subtitle: Text(ref.tr('import_folder_desc')),
-            onTap: () => LibraryManagementScreen.importFolder(context, ref),
+            leading: const AppSvgIcon('collection_edit'),
+            title: Text(ref.tr('edit_media_artwork')),
+            subtitle: Text(ref.tr('edit_media_artwork_desc')),
+            trailing: const AppSvgIcon('chevron_right', size: 20),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            onTap: () => SettingsScreenActions.openMediaEditor(context),
+          ),
+          ListTile(
+            leading: const Icon(Icons.lyrics_outlined),
+            title: Text(ref.tr('lyrics_settings')),
+            subtitle: Text(ref.tr('lyrics_settings_hint')),
+            trailing: const AppSvgIcon('chevron_right', size: 20),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            onTap: () => SettingsScreenActions.openLyricsSettings(context),
           ),
         ],
       ),
@@ -292,6 +452,174 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
         ),
+      _SettingsGroup(
+        id: 'video_lyrics_overlay',
+        icon: 'settings_tune',
+        description: ref.tr('video_lyrics_customization_desc'),
+        title: ref.tr('video_lyrics_customization'),
+        children: [
+          SwitchListTile(
+            secondary: const Icon(Icons.closed_caption_rounded),
+            title: Text(ref.tr('video_lyrics_overlay')),
+            subtitle: Text(ref.tr('video_lyrics_overlay_desc')),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            value: videoLyricsSettings.enabled,
+            onChanged: (enabled) {
+              final notifier = ref.read(videoLyricsSettingsProvider.notifier);
+              notifier.update(videoLyricsSettings.copyWith(enabled: enabled));
+              notifier.persist();
+            },
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _VideoLyricsPositionPreview(
+                  settings: videoLyricsSettings,
+                  hint: ref.tr('video_lyrics_drag_hint'),
+                  resetLabel: ref.tr('video_lyrics_position_reset'),
+                  onChanged: (next) => ref
+                      .read(videoLyricsSettingsProvider.notifier)
+                      .update(next),
+                  onCommit: () =>
+                      ref.read(videoLyricsSettingsProvider.notifier).persist(),
+                ),
+                const SizedBox(height: 12),
+                Text(ref.tr('video_lyrics_font')),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  initialValue: videoLyricsSettings.fontFamily,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    border: OutlineInputBorder(),
+                  ),
+                  items:
+                      [
+                            ('system', 'video_lyrics_font_system'),
+                            ('serif', 'video_lyrics_font_serif'),
+                            ('monospace', 'video_lyrics_font_monospace'),
+                          ]
+                          .map(
+                            (font) => DropdownMenuItem(
+                              value: font.$1,
+                              child: Text(ref.tr(font.$2)),
+                            ),
+                          )
+                          .toList(),
+                  onChanged: (font) {
+                    if (font == null) return;
+                    final notifier = ref.read(
+                      videoLyricsSettingsProvider.notifier,
+                    );
+                    notifier.update(
+                      videoLyricsSettings.copyWith(fontFamily: font),
+                    );
+                    notifier.persist();
+                  },
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(ref.tr('video_lyrics_size')),
+                  trailing: Text('${videoLyricsSettings.fontSize.round()}'),
+                ),
+                Slider(
+                  value: videoLyricsSettings.fontSize,
+                  min: 16,
+                  max: 56,
+                  divisions: 40,
+                  onChanged: (size) => ref
+                      .read(videoLyricsSettingsProvider.notifier)
+                      .update(videoLyricsSettings.copyWith(fontSize: size)),
+                  onChangeEnd: (_) =>
+                      ref.read(videoLyricsSettingsProvider.notifier).persist(),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8, bottom: 4),
+                  child: Text(ref.tr('video_lyrics_color')),
+                ),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  children:
+                      [
+                        (0xFFFFFFFF, 'video_lyrics_color_white'),
+                        (0xFFFFE4B5, 'video_lyrics_color_warm'),
+                        (0xFFFF987D, 'video_lyrics_color_coral'),
+                        (0xFF8AE8FF, 'video_lyrics_color_cyan'),
+                        (0xFF181818, 'video_lyrics_color_black'),
+                      ].map((choice) {
+                        final selected = videoLyricsSettings.color == choice.$1;
+                        return Tooltip(
+                          message: ref.tr(choice.$2),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () {
+                              final notifier = ref.read(
+                                videoLyricsSettingsProvider.notifier,
+                              );
+                              notifier.update(
+                                videoLyricsSettings.copyWith(color: choice.$1),
+                              );
+                              notifier.persist();
+                            },
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: Color(choice.$1),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: selected
+                                      ? Theme.of(context).colorScheme.primary
+                                      : themeBorder(context),
+                                  width: selected ? 3 : 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                ),
+                const SizedBox(height: 16),
+                Text(ref.tr('video_lyrics_frame')),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<VideoLyricsFrame>(
+                    showSelectedIcon: false,
+                    segments: VideoLyricsFrame.values
+                        .map(
+                          (frame) => ButtonSegment(
+                            value: frame,
+                            label: Text(
+                              ref.tr('video_lyrics_frame_${frame.name}'),
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    selected: {videoLyricsSettings.frame},
+                    onSelectionChanged: (selection) {
+                      final notifier = ref.read(
+                        videoLyricsSettingsProvider.notifier,
+                      );
+                      notifier.update(
+                        videoLyricsSettings.copyWith(frame: selection.single),
+                      );
+                      notifier.persist();
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
       _SettingsGroup(
         id: 'settings_display',
         icon: 'settings_palette',
@@ -482,6 +810,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ],
       ),
       _SettingsGroup(
+        id: 'settings_audio',
+        icon: 'settings_tune',
+        description: ref.tr('settings_audio_hint'),
+        title: ref.tr('settings_audio'),
+        children: [
+          SwitchListTile.adaptive(
+            key: const ValueKey('volume-normalization'),
+            secondary: const Icon(Icons.equalizer_rounded),
+            title: Text(ref.tr('volume_normalization')),
+            subtitle: Text(
+              !supportsNormalization
+                  ? ref.tr('normalization_unsupported')
+                  : normalization.hasError
+                  ? '${ref.tr('normalization_failed')}\n${normalization.error}'
+                  : ref.tr('normalization_desc'),
+            ),
+            value: normalization.valueOrNull ?? false,
+            onChanged: supportsNormalization && !normalization.isLoading
+                ? ref.read(audioSettingsProvider.notifier).setEnabled
+                : null,
+          ),
+        ],
+      ),
+      _SettingsGroup(
         id: 'settings_image_priority',
         icon: 'settings_tune',
         description: ref.tr('image_display_priority_desc'),
@@ -504,6 +856,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ref.tr('image_priority_albums'),
                   MediaImageContext.album,
                 ),
+                if (library.playlists.isNotEmpty) ...[
+                  const SizedBox(height: 18),
+                  Text(
+                    ref.tr('playlist_image_priority_section'),
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  for (final playlist in library.playlists)
+                    playlistImagePrioritySelector(playlist),
+                ],
               ],
             ),
           ),
@@ -536,58 +900,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onPressed: ref.read(keyboardShortcutsProvider.notifier).reset,
               child: Text(ref.tr('shortcut_reset')),
             ),
-          ),
-        ],
-      ),
-      _SettingsGroup(
-        id: 'settings_library',
-        icon: 'settings_folder',
-        description: ref.tr('settings_library_hint'),
-        title: ref.tr('settings_library'),
-        children: [
-          ListTile(
-            leading: const AppSvgIcon('history'),
-            title: Text(ref.tr('clear_playback_history')),
-            onTap: () async {
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (dialogContext) => AlertDialog(
-                  title: Text(ref.tr('clear_playback_history')),
-                  content: Text(ref.tr('clear_history_desc')),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogContext, false),
-                      child: Text(ref.tr('cancel')),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogContext, true),
-                      child: Text(ref.tr('clear')),
-                    ),
-                  ],
-                ),
-              );
-              if (confirmed == true && context.mounted) {
-                await ref.read(libraryProvider.notifier).clearPlaybackHistory();
-              }
-            },
-          ),
-
-          ListTile(
-            leading: const AppSvgIcon('settings_folder'),
-            title: Text(ref.tr('library_management')),
-            subtitle: Text(ref.tr('library_management_desc')),
-            trailing: const AppSvgIcon('chevron_right', size: 20),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            onTap: () => SettingsScreenActions.openLibraryManagement(context),
-          ),
-          const Divider(height: 1, indent: 16, endIndent: 16),
-          ListTile(
-            leading: const AppSvgIcon('collection_edit'),
-            title: Text(ref.tr('edit_media_artwork')),
-            subtitle: Text(ref.tr('edit_media_artwork_desc')),
-            trailing: const AppSvgIcon('chevron_right', size: 20),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            onTap: () => SettingsScreenActions.openMediaEditor(context),
           ),
         ],
       ),
@@ -654,6 +966,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             contentPadding: const EdgeInsets.symmetric(horizontal: 16),
             onTap: () => SettingsScreenActions.openAbout(context),
           ),
+          ListTile(
+            leading: const Icon(Icons.policy_outlined),
+            title: Text(ref.tr('open_source_licenses')),
+            subtitle: Text(ref.tr('open_source_licenses_desc')),
+            trailing: const AppSvgIcon('chevron_right', size: 20),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            onTap: () => SettingsScreenActions.openLicenses(context),
+          ),
         ],
       ),
     ];
@@ -690,7 +1010,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         );
 
-        void selectSection(String? id) => setState(() => _section = id);
+        void selectSection(String? id) {
+          setState(() => _section = id);
+        }
 
         Widget desktopSection(String? id, String title, String icon) {
           final selected = _section == id;
@@ -1016,6 +1338,226 @@ class _SettingsGroup extends StatelessWidget {
   }
 }
 
+class _VideoLyricsPositionPreview extends StatelessWidget {
+  const _VideoLyricsPositionPreview({
+    required this.settings,
+    required this.hint,
+    required this.resetLabel,
+    required this.onChanged,
+    required this.onCommit,
+  });
+
+  final VideoLyricsSettings settings;
+  final String hint;
+  final String resetLabel;
+  final ValueChanged<VideoLyricsSettings> onChanged;
+  final VoidCallback onCommit;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
+    final sample = Text(
+      '歌詞のサンプル',
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        color: Color(settings.color),
+        fontSize: settings.fontSize,
+        fontFamily: switch (settings.fontFamily) {
+          'serif' => 'serif',
+          'monospace' => 'monospace',
+          _ => null,
+        },
+        fontWeight: FontWeight.w700,
+        height: 1.2,
+        shadows: settings.frame == VideoLyricsFrame.outline
+            ? const [
+                Shadow(color: Colors.black, blurRadius: 5),
+                Shadow(color: Colors.black, blurRadius: 2),
+              ]
+            : null,
+      ),
+    );
+    final outlineSample = Stack(
+      children: [
+        Text(
+          '歌詞のサンプル',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            foreground: Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 3.5
+              ..color = Colors.black,
+            fontSize: settings.fontSize,
+            fontFamily: settings.fontFamily == 'system'
+                ? null
+                : settings.fontFamily,
+            fontWeight: FontWeight.w800,
+            height: 1.2,
+          ),
+        ),
+        sample,
+      ],
+    );
+    final framedSample = switch (settings.frame) {
+      VideoLyricsFrame.none => sample,
+      VideoLyricsFrame.outline => outlineSample,
+      VideoLyricsFrame.plate => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.62),
+          border: Border.all(color: Colors.white38),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: sample,
+      ),
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final previewHeight = constraints.maxHeight;
+                    return Container(
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Color(0xFF263C50),
+                            Color(0xFF14262E),
+                            Color(0xFF111820),
+                          ],
+                        ),
+                      ),
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            right: -38,
+                            top: -55,
+                            child: Container(
+                              width: previewHeight * 0.9,
+                              height: previewHeight * 0.9,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.lightBlueAccent.withValues(
+                                  alpha: 0.12,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: 12,
+                            top: 10,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.28),
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              child: const Padding(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 3,
+                                ),
+                                child: Text(
+                                  'MV',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment(
+                              settings.positionX * 2 - 1,
+                              settings.positionY * 2 - 1,
+                            ),
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.translucent,
+                              onPanUpdate: (details) {
+                                final width = constraints.maxWidth;
+                                if (width <= 0 || previewHeight <= 0) return;
+                                onChanged(
+                                  settings.copyWith(
+                                    positionX:
+                                        (settings.positionX +
+                                                details.delta.dx / width)
+                                            .clamp(0.04, 0.96)
+                                            .toDouble(),
+                                    positionY:
+                                        (settings.positionY +
+                                                details.delta.dy /
+                                                    previewHeight)
+                                            .clamp(0.08, 0.92)
+                                            .toDouble(),
+                                  ),
+                                );
+                              },
+                              onPanEnd: (_) => onCommit(),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: accent.withValues(alpha: 0.72),
+                                    width: 1.5,
+                                  ),
+                                  borderRadius: BorderRadius.circular(9),
+                                  color: Colors.black.withValues(alpha: 0.08),
+                                ),
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: constraints.maxWidth * 0.9,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(6),
+                                    child: framedSample,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                hint,
+                style: TextStyle(color: themeTextSub(context), fontSize: 12),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () {
+                onChanged(settings.copyWith(positionX: 0.5, positionY: 0.84));
+                onCommit();
+              },
+              icon: const Icon(Icons.restart_alt_rounded, size: 18),
+              label: Text(resetLabel),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 /// Opens settings sub-screens; kept next to the settings page.
 class SettingsScreenActions {
   static const _defaultMediaPlayerChannel = MethodChannel(
@@ -1038,6 +1580,12 @@ class SettingsScreenActions {
     ).push(MaterialPageRoute(builder: (_) => const ImportedMediaScreen()));
   }
 
+  static void openLyricsSettings(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const LyricsSettingsScreen()),
+    );
+  }
+
   static Future<void> openAbout(BuildContext context) async {
     final info = await packageInfo;
     if (!context.mounted) return;
@@ -1046,5 +1594,11 @@ class SettingsScreenActions {
       applicationName: info.appName,
       applicationVersion: '${info.version} (${info.buildNumber})',
     );
+  }
+
+  static void openLicenses(BuildContext context) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const LicensesScreen()));
   }
 }

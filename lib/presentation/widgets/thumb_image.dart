@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_state.dart';
 import '../../data/thumbnails.dart';
+import '../../domain/models.dart';
 import '../theme.dart';
 
 /// Video thumbnail with gradient fallback: shows [ThumbBox] while loading
@@ -27,6 +28,11 @@ class ThumbImage extends ConsumerStatefulWidget {
   final MediaImageContext? imageContext;
   final String? playlistId;
 
+  /// Treat this image as the playlist's cover (custom image or collage).
+  /// Playlist members pass [playlistId] only to inherit image priority.
+  final bool playlistCover;
+  final bool enablePlaylistCollage;
+
   const ThumbImage({
     super.key,
     required this.seed,
@@ -40,6 +46,8 @@ class ThumbImage extends ConsumerStatefulWidget {
     this.forceArtwork = false,
     this.imageContext,
     this.playlistId,
+    this.playlistCover = false,
+    this.enablePlaylistCollage = true,
   });
 
   @override
@@ -137,7 +145,39 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
               );
             }),
           );
-    final imagePath = imagePaths?.$1;
+    final playlistArtworkPath =
+        widget.playlistId == null || !widget.playlistCover
+        ? null
+        : ref.watch(
+            libraryProvider.select(
+              (lib) => lib.playlistById(widget.playlistId!)?.artworkPath,
+            ),
+          );
+    final playlistMedia =
+        widget.playlistId == null ||
+            !widget.playlistCover ||
+            !widget.enablePlaylistCollage
+        ? const <MediaItem>[]
+        : ref.watch(
+            libraryProvider.select((lib) {
+              final playlist = lib.playlistById(widget.playlistId!);
+              if (playlist == null) return const <MediaItem>[];
+              final uniqueMedia = <String, MediaItem>{};
+              for (final id in playlist.mediaIds) {
+                final item = lib.byId(id);
+                if (item != null) uniqueMedia.putIfAbsent(id, () => item);
+              }
+              final topPlayed = uniqueMedia.values.toList()
+                ..sort((a, b) {
+                  final byScore = b.recommendationScore.compareTo(
+                    a.recommendationScore,
+                  );
+                  return byScore != 0 ? byScore : a.id.compareTo(b.id);
+                });
+              return topPlayed.take(4).toList(growable: false);
+            }),
+          );
+    final imagePath = playlistArtworkPath ?? imagePaths?.$1;
     final secondaryImagePath = imagePaths?.$2;
     final fallback = ThumbBox(
       seed: widget.seed,
@@ -145,6 +185,9 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
       radius: widget.radius,
       expand: widget.expand,
     );
+    if (playlistArtworkPath == null && playlistMedia.isNotEmpty) {
+      return _playlistCollage(context, playlistMedia);
+    }
     if (imagePath != null) {
       final art = Image.file(
         File(imagePath),
@@ -196,6 +239,62 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
           child: SizedBox(width: widget.size, height: widget.size, child: img),
         );
       },
+    );
+  }
+
+  Widget _playlistCollage(BuildContext context, List<MediaItem> media) {
+    Widget tile(MediaItem item) => ThumbImage(
+      seed: item.id,
+      mediaId: item.id,
+      localPath: item.localPath,
+      size: widget.size / 2,
+      radius: 0,
+      expand: true,
+      imageContext: MediaImageContext.playlist,
+      playlistId: widget.playlistId,
+      enablePlaylistCollage: false,
+    );
+
+    final gap = (widget.size * 0.006).clamp(1.0, 2.0);
+    final firstRow = Row(
+      children: [
+        Expanded(child: tile(media[0])),
+        if (media.length > 1) ...[
+          SizedBox(width: gap),
+          Expanded(child: tile(media[1])),
+        ],
+      ],
+    );
+    final Widget collage;
+    if (media.length == 1) {
+      collage = tile(media.first);
+    } else if (media.length == 2) {
+      collage = firstRow;
+    } else {
+      collage = Column(
+        children: [
+          Expanded(child: firstRow),
+          SizedBox(height: gap),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: tile(media[2])),
+                if (media.length > 3) ...[
+                  SizedBox(width: gap),
+                  Expanded(child: tile(media[3])),
+                ],
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(widget.radius),
+      child: widget.expand
+          ? SizedBox.expand(child: collage)
+          : SizedBox(width: widget.size, height: widget.size, child: collage),
     );
   }
 }

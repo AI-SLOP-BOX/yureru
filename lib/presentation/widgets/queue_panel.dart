@@ -8,6 +8,7 @@ import '../../playback/playback_controller.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import 'duration_text.dart';
+import 'app_svg_icon.dart';
 import 'frosted_panel.dart';
 import 'thumb_image.dart';
 import 'queue_lyrics_tabs.dart';
@@ -43,6 +44,7 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
   static const double _queueRowExtent = 68;
   final ScrollController _scrollController = ScrollController();
   String? _lastCurrentId;
+  String? _editingLyricsMediaId;
 
   @override
   void dispose() {
@@ -55,6 +57,13 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
     final q = ref.watch(queueProvider);
     final lib = ref.watch(libraryProvider);
     final engine = ref.watch(engineProvider);
+    final currentMedia = lib.byId(q.currentId ?? '');
+    final showLyricsTab =
+        currentMedia != null && !currentMedia.lyricsButtonHidden;
+    final requestedLyrics = ref.watch(lyricsPanelProvider);
+    final showLyrics = showLyricsTab && requestedLyrics;
+    final editingLyrics =
+        q.currentId != null && _editingLyricsMediaId == q.currentId;
     final displayIndices = List<int>.generate(q.queue.length, (index) => index);
     if (q.hasCurrent && q.currentId != _lastCurrentId) {
       _lastCurrentId = q.currentId;
@@ -181,7 +190,9 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                   child: Row(
                     children: [
                       QueueLyricsTabs(
-                        showLyrics: ref.watch(lyricsPanelProvider),
+                        showLyrics: showLyrics,
+                        showLyricsTab: showLyricsTab,
+                        showQueueTab: !editingLyrics,
                         onQueue: () {
                           ref.read(lyricsPanelProvider.notifier).state = false;
                           ref.read(queueVisibleProvider.notifier).state = true;
@@ -191,25 +202,26 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                           ref.read(lyricsPanelProvider.notifier).state = true;
                         },
                       ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: themeCard(context),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '${q.queue.length}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: themeTextSub(context),
-                            fontWeight: FontWeight.w600,
+                      if (!editingLyrics) const SizedBox(width: 8),
+                      if (!editingLyrics)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: themeCard(context),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            '${q.queue.length}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: themeTextSub(context),
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
-                      ),
                       if (widget.onClose != null) ...[
                         const Spacer(),
                         IconButton(
@@ -226,12 +238,20 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
               ],
             ),
             Expanded(
-              child: ref.watch(lyricsPanelProvider)
+              child: showLyrics
                   ? (q.currentId != null && lib.byId(q.currentId!) != null
                         ? LyricsPanel(
                             key: ValueKey('lyrics-${q.currentId}'),
                             media: lib.byId(q.currentId!)!,
                             engine: engine,
+                            viewMode: ref.watch(playerViewModeProvider),
+                            onEditingChanged: (editing) {
+                              setState(() {
+                                _editingLyricsMediaId = editing
+                                    ? q.currentId
+                                    : null;
+                              });
+                            },
                           )
                         : Center(
                             child: Text(
@@ -466,10 +486,12 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                                           horizontal: 4,
                                           vertical: 8,
                                         ),
-                                        child: Icon(
-                                          Icons.drag_indicator_rounded,
-                                          size: 18,
-                                          color: textSub.withValues(alpha: 0.6),
+                                        child: AppSvgIcon(
+                                          'drag',
+                                          size: 20,
+                                          color: textSub.withValues(
+                                            alpha: 0.75,
+                                          ),
                                         ),
                                       ),
                                     ),

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yureru/domain/models.dart';
 import 'package:yureru/playback/fake_engine.dart';
+import 'package:yureru/playback/playback_engine.dart';
 import 'package:yureru/presentation/theme.dart';
 import 'package:yureru/presentation/widgets/lyrics_editor_dialog.dart';
 
@@ -78,5 +79,58 @@ void main() {
     );
     await tester.tap(find.byTooltip('Seek to this time').first);
     expect(engine.seeks.single, const Duration(seconds: 11));
+  });
+
+  testWidgets('LRC editor applies offset when seeking and stamping', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(420, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final engine = FakePlaybackEngine();
+    final media = MediaItem(
+      id: 'offset-track',
+      title: 'Offset track',
+      localPath: '/music/track.mp4',
+      lyricsOffsetMs: 5000,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: yureruLightTheme(),
+          home: Scaffold(
+            body: LyricsEditorDialog(
+              media: media,
+              engine: engine,
+              initialText: '[00:12.00]Line',
+              inline: true,
+              onCancel: () {},
+              onSaved: (_) async {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Seek to this time'));
+    await tester.pump();
+    expect(engine.seeks.single, const Duration(seconds: 17));
+
+    engine.snap = const PlaybackSnapshot(
+      position: Duration(seconds: 20),
+      duration: Duration(seconds: 100),
+      isPlaying: true,
+      initialized: true,
+    );
+    await tester.tap(find.byTooltip('Use current playback position'));
+    await tester.pump();
+    final timestampField = tester.widget<TextField>(
+      find.byWidgetPredicate(
+        (widget) => widget is TextField && widget.controller?.text == '0:15.00',
+      ),
+    );
+    expect(timestampField.controller!.text, '0:15.00');
   });
 }

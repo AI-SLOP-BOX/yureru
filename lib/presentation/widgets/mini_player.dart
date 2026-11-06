@@ -6,6 +6,7 @@ import '../../playback/playback_controller.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import 'thumb_image.dart';
+import 'pip_video_surface.dart';
 import 'frosted_panel.dart';
 
 /// Compact now-playing strip (used by the narrow fallback layout).
@@ -47,7 +48,7 @@ class MiniPlayer extends ConsumerWidget {
                               child: SizedBox(
                                 width: 160,
                                 height: 90,
-                                child: engine.buildVideoView(),
+                                child: PipVideoSurface(engine: engine),
                               ),
                             )
                           : ThumbImage(
@@ -95,11 +96,6 @@ class MiniPlayer extends ConsumerWidget {
                 ],
               ),
             ),
-          ),
-          IconButton(
-            tooltip: ref.tr('return_to_player'),
-            icon: const Icon(Icons.open_in_full_rounded),
-            onPressed: onExpand,
           ),
           IconButton(
             tooltip: ref.tr('next_video'),

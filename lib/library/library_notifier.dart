@@ -114,20 +114,52 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     ]);
   }
 
-  Future<void> recordPlayback(String id, {DateTime? at}) async {
+  Future<void> recordPlayback(
+    String id, {
+    DateTime? at,
+    bool countAsPlay = true,
+  }) async {
     final item = state.byId(id);
     if (item == null || item.isTemporary) return;
+    final playedAt = at ?? DateTime.now();
+    final dayKey =
+        '${playedAt.year.toString().padLeft(4, '0')}-'
+        '${playedAt.month.toString().padLeft(2, '0')}-'
+        '${playedAt.day.toString().padLeft(2, '0')}';
+    final daily = Map<String, int>.from(item.playCountsByDay);
+    if (countAsPlay) {
+      daily.update(dayKey, (count) => count + 1, ifAbsent: () => 1);
+    }
     await _updateMedia(
       id,
-      (current) => current.copyWith(lastPlayedAt: at ?? DateTime.now()),
+      (current) => current.copyWith(
+        lastPlayedAt: playedAt,
+        playCount: current.playCount + (countAsPlay ? 1 : 0),
+        playCountsByDay: daily,
+      ),
     );
   }
 
   Future<void> clearPlaybackHistory() async {
-    if (!state.media.any((item) => item.lastPlayedAt != null)) return;
+    if (!state.media.any(
+      (item) =>
+          item.lastPlayedAt != null ||
+          item.playCount > 0 ||
+          item.playCountsByDay.isNotEmpty,
+    )) {
+      return;
+    }
     await _setMedia([
       for (final item in state.media)
-        item.lastPlayedAt == null ? item : item.copyWith(lastPlayedAt: null),
+        item.lastPlayedAt == null &&
+                item.playCount == 0 &&
+                item.playCountsByDay.isEmpty
+            ? item
+            : item.copyWith(
+                lastPlayedAt: null,
+                playCount: 0,
+                playCountsByDay: const {},
+              ),
     ]);
   }
 
@@ -160,6 +192,12 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     required String? artworkPath,
     required String? thumbnailPath,
     required int lyricsOffsetMs,
+    bool? separateLyricsByView,
+    int? videoLyricsOffsetMs,
+    int? artworkLyricsOffsetMs,
+    bool artworkLyricsOffsetFollowsVideo = true,
+    String? artworkAudioMediaId,
+    String? artworkAudioPath,
   }) async {
     final current = state.byId(id);
     if (current == null) return;
@@ -175,10 +213,35 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         artworkPath: artworkPath,
         thumbnailPath: thumbnailPath,
         lyricsOffsetMs: lyricsOffsetMs,
+        separateLyricsByView: separateLyricsByView,
+        videoLyricsOffsetMs: videoLyricsOffsetMs,
+        artworkLyricsOffsetMs: artworkLyricsOffsetMs,
+        artworkLyricsOffsetFollowsVideo: artworkLyricsOffsetFollowsVideo,
+        artworkAudioMediaId: artworkAudioMediaId,
+        artworkAudioPath: artworkAudioPath,
       ),
     );
     await _deleteManagedImageIfReplaced(current.artworkPath, artworkPath);
     await _deleteManagedImageIfReplaced(current.thumbnailPath, thumbnailPath);
+    await _deleteManagedAudioIfReplaced(
+      current.artworkAudioPath,
+      artworkAudioPath,
+    );
+  }
+
+  Future<void> _deleteManagedAudioIfReplaced(
+    String? oldPath,
+    String? newPath,
+  ) async {
+    if (oldPath == null ||
+        oldPath == newPath ||
+        !oldPath.contains('yureru_audio_sources')) {
+      return;
+    }
+    try {
+      final file = File(oldPath);
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
   }
 
   Future<void> _deleteManagedImageIfReplaced(
@@ -285,14 +348,139 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
 
   Future<void> updateMediaLyrics(String id, String? path) async {
     final current = state.byId(id);
-    if (current == null || current.lyricsPath == path) return;
-    await _updateMedia(id, (item) => item.copyWith(lyricsPath: path));
+    if (current == null ||
+        (current.lyricsPath == path &&
+            (path == null || !current.lyricsButtonHidden))) {
+      return;
+    }
+    await _updateMedia(
+      id,
+      (item) => item.copyWith(
+        lyricsPath: path,
+        lyricsButtonHidden: path == null ? item.lyricsButtonHidden : false,
+      ),
+    );
+  }
+
+  Future<void> updateTranslatedLyrics(String id, String? path) async {
+    final current = state.byId(id);
+    if (current == null || current.translatedLyricsPath == path) return;
+    await _updateMedia(id, (item) => item.copyWith(translatedLyricsPath: path));
+  }
+
+  Future<void> setLyricsEditingFinalized(String id, bool finalized) async {
+    final current = state.byId(id);
+    if (current == null || current.lyricsEditingFinalized == finalized) return;
+    await _updateMedia(
+      id,
+      (item) => item.copyWith(lyricsEditingFinalized: finalized),
+    );
+  }
+
+  Future<void> setLyricsButtonHidden(String id, bool hidden) async {
+    final current = state.byId(id);
+    if (current == null || current.lyricsButtonHidden == hidden) return;
+    await _updateMedia(id, (item) => item.copyWith(lyricsButtonHidden: hidden));
   }
 
   Future<void> updateMediaLyricsOffset(String id, int offsetMs) async {
     final current = state.byId(id);
     if (current == null || current.lyricsOffsetMs == offsetMs) return;
     await _updateMedia(id, (item) => item.copyWith(lyricsOffsetMs: offsetMs));
+  }
+
+  Future<void> setSeparateLyricsByView(String id, bool separate) async {
+    final current = state.byId(id);
+    if (current == null || current.separateLyricsByView == separate) return;
+    await _updateMedia(
+      id,
+      (item) => item.copyWith(
+        separateLyricsByView: separate,
+        // Start both views at the existing shared timing. The user can then
+        // adjust artwork and video independently without separate LRC files.
+        videoLyricsOffsetMs: separate
+            ? item.lyricsOffsetMs
+            : item.videoLyricsOffsetMs,
+        artworkLyricsOffsetMs: separate
+            ? item.lyricsOffsetMs
+            : item.artworkLyricsOffsetMs,
+        artworkLyricsOffsetFollowsVideo: true,
+      ),
+    );
+  }
+
+  Future<void> updateMediaLyricsForView(
+    String id, {
+    required bool artwork,
+    required String? path,
+  }) async {
+    final current = state.byId(id);
+    if (current == null) return;
+    if (!current.separateLyricsByView) {
+      await updateMediaLyrics(id, path);
+      return;
+    }
+    await _updateMedia(
+      id,
+      (item) => artwork
+          ? item.copyWith(
+              artworkLyricsPath: path,
+              lyricsButtonHidden: path == null
+                  ? item.lyricsButtonHidden
+                  : false,
+            )
+          : item.copyWith(
+              videoLyricsPath: path,
+              lyricsButtonHidden: path == null
+                  ? item.lyricsButtonHidden
+                  : false,
+            ),
+    );
+  }
+
+  Future<void> updateMediaLyricsOffsetForView(
+    String id, {
+    required bool artwork,
+    required int offsetMs,
+  }) async {
+    final current = state.byId(id);
+    if (current == null) return;
+    if (!current.separateLyricsByView &&
+        current.artworkAudioMediaId == null &&
+        current.artworkAudioPath == null &&
+        current.artworkLyricsOffsetFollowsVideo) {
+      await updateMediaLyricsOffset(id, offsetMs);
+      return;
+    }
+    await _updateMedia(
+      id,
+      (item) => artwork
+          ? item.copyWith(
+              artworkLyricsOffsetMs: offsetMs,
+              artworkLyricsOffsetFollowsVideo: false,
+            )
+          : item.copyWith(videoLyricsOffsetMs: offsetMs),
+    );
+  }
+
+  Future<void> setArtworkLyricsOffsetFollowsVideo(
+    String id,
+    bool followsVideo,
+  ) async {
+    final current = state.byId(id);
+    if (current == null ||
+        current.artworkLyricsOffsetFollowsVideo == followsVideo) {
+      return;
+    }
+    await _updateMedia(
+      id,
+      (item) => item.copyWith(
+        artworkLyricsOffsetFollowsVideo: followsVideo,
+        artworkLyricsOffsetMs: followsVideo
+            ? item.lyricsOffsetForView(artwork: false)
+            : item.artworkLyricsOffsetMs,
+      ),
+    );
   }
 
   Future<void> removeMedia(String id) async {
@@ -367,6 +555,34 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     await repo.savePlaylists(playlists);
   }
 
+  Future<void> setPlaylistArtworkPath(String id, String? path) async {
+    final current = state.playlistById(id);
+    if (current == null || current.artworkPath == path) return;
+    final playlists = state.playlists
+        .map(
+          (playlist) => playlist.id == id
+              ? playlist.copyWith(artworkPath: path)
+              : playlist,
+        )
+        .toList();
+    state = LibraryState(
+      media: state.media,
+      playlists: playlists,
+      loaded: true,
+    );
+    await repo.savePlaylists(playlists);
+    final oldPath = current.artworkPath;
+    if (oldPath == null ||
+        oldPath == path ||
+        !oldPath.contains('yureru_playlist_artwork')) {
+      return;
+    }
+    try {
+      final file = File(oldPath);
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
+  }
+
   /// Persist a probed duration so lists show it instantly next launch.
   /// No-op when unknown or unchanged (avoids prefs churn).
   Future<void> setDurationMs(String id, int ms) async {
@@ -377,9 +593,17 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   }
 
   Future<void> deletePlaylist(String id) async {
+    final removed = state.playlistById(id);
     final p = state.playlists.where((e) => e.id != id).toList();
     state = LibraryState(media: state.media, playlists: p, loaded: true);
     await repo.savePlaylists(p);
+    final path = removed?.artworkPath;
+    if (path != null && path.contains('yureru_playlist_artwork')) {
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
   }
 
   Future<void> addToPlaylist(String playlistId, String mediaId) async {

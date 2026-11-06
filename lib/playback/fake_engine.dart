@@ -122,7 +122,16 @@ class FakePlaybackEngine implements PlaybackEngine {
   bool get supportsPictureInPicture => false;
 
   @override
-  Future<bool> enterPictureInPicture() async => false;
+  String? get pictureInPictureFailure => null;
+
+  @override
+  bool get supportsVolumeNormalization => false;
+
+  @override
+  Future<void> setVolumeNormalizationEnabled(bool enabled) async {}
+
+  @override
+  Future<bool> enterPictureInPicture({double? aspectRatio}) async => false;
 
   @override
   Stream<Duration> get positionStream => Stream.value(snap.position);

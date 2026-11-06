@@ -148,6 +148,7 @@ class Sidebar extends ConsumerWidget {
                           : lib.byId(pl.mediaIds.first);
                       return _PlaylistItem(
                         title: pl.name,
+                        maxTitleWidth: (width - 102).clamp(96.0, width),
                         count: pl.mediaIds.length,
                         countLabel: ref.tracksCount(pl.mediaIds.length),
                         seed: pl.id,
@@ -402,6 +403,7 @@ class _NavItem extends StatelessWidget {
 
 class _PlaylistItem extends StatelessWidget {
   final String title;
+  final double maxTitleWidth;
   final int count;
   final String countLabel;
   final String seed;
@@ -411,6 +413,7 @@ class _PlaylistItem extends StatelessWidget {
   final VoidCallback onTap;
   const _PlaylistItem({
     required this.title,
+    required this.maxTitleWidth,
     required this.count,
     required this.countLabel,
     required this.seed,
@@ -448,6 +451,7 @@ class _PlaylistItem extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
                     decoration: BoxDecoration(
@@ -470,7 +474,8 @@ class _PlaylistItem extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Expanded(
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxTitleWidth),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [

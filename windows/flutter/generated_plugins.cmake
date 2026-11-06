@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  ffmpeg_kit_flutter_new_full
   media_kit_libs_windows_video
   media_kit_video
   nsd_windows

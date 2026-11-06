@@ -10,7 +10,11 @@ List<String> splitCreatorNames(String? credit) {
         ),
       )
       .map((name) => name.trim())
-      .where((name) => name.isNotEmpty)
+      // Media tags commonly use a dash as a placeholder for an absent credit.
+      // Treat it as missing so player metadata never presents it as a name.
+      .where(
+        (name) => name.isNotEmpty && !RegExp(r'^[\-‐‑‒–—―]+$').hasMatch(name),
+      )
       .toList();
 }
 

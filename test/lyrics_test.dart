@@ -82,4 +82,26 @@ void main() {
     final restored = MediaItem.fromJson(media.toJson());
     expect(restored.lyricsOffsetMs, -1250);
   });
+
+  test('lyric seeking and timing stamps respect the track offset', () {
+    const offset = Duration(seconds: 5);
+    expect(
+      playbackPositionForLyric(const Duration(seconds: 12), offset: offset),
+      const Duration(seconds: 17),
+    );
+    expect(
+      lyricTimestampAtPlaybackPosition(
+        const Duration(seconds: 20),
+        offset: offset,
+      ),
+      const Duration(seconds: 15),
+    );
+    expect(
+      playbackPositionForLyric(
+        Duration.zero,
+        offset: const Duration(seconds: -5),
+      ),
+      Duration.zero,
+    );
+  });
 }

@@ -13,6 +13,7 @@ import 'data/importer.dart';
 import 'playback/playback_engine.dart';
 import 'playback/media_kit_engine.dart';
 import 'playback/ios_playback_engine.dart';
+import 'playback/audio_settings.dart';
 
 // Preserve existing imports while features can depend on their own modules.
 export 'library/library_notifier.dart';
@@ -29,6 +30,10 @@ final engineProvider = Provider<PlaybackEngine>(
 final volumeProvider = StateProvider<double>(
   (ref) => ref.read(engineProvider).volume,
 );
+final audioSettingsProvider =
+    StateNotifierProvider<AudioSettingsNotifier, AsyncValue<bool>>(
+      (ref) => AudioSettingsNotifier(ref.watch(engineProvider)),
+    );
 
 final libraryProvider = StateNotifierProvider<LibraryNotifier, LibraryState>((
   ref,
@@ -377,11 +382,13 @@ final immersiveModeProvider = StateProvider<bool>((_) => false);
 
 /// macOS floating picture-in-picture window state.
 final pictureInPictureProvider = StateProvider<bool>((_) => false);
+final nativeSystemPictureInPictureProvider = StateProvider<bool>((_) => false);
 
 /// Queue panel visibility. Hidden by default; auto-shown on the player
 /// screen, auto-hidden when browsing. Manual toggle respected in between.
 final queueVisibleProvider = StateProvider<bool>((_) => false);
 final lyricsPanelProvider = StateProvider<bool>((_) => false);
+final lyricsEditorRequestProvider = StateProvider<String?>((_) => null);
 
 /// Sidebar collapsed to an icon rail.
 final sidebarCollapsedProvider = StateProvider<bool>((_) => false);
