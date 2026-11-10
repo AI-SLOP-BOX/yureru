@@ -13,6 +13,7 @@ import 'frosted_panel.dart';
 import 'thumb_image.dart';
 import 'queue_lyrics_tabs.dart';
 import 'lyrics_panel.dart';
+import 'track_actions.dart';
 
 /// Right panel: reorderable play queue (number, thumb, title, duration).
 class QueuePanel extends ConsumerStatefulWidget {
@@ -45,6 +46,53 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
   final ScrollController _scrollController = ScrollController();
   String? _lastCurrentId;
   String? _editingLyricsMediaId;
+
+  void _removeQueueItem(int queueIndex, String id) {
+    final removesCurrent = ref.read(queueProvider).currentId == id;
+    ref.read(queueProvider.notifier).removeAt(queueIndex);
+    if (!removesCurrent) return;
+    final next = ref.read(queueProvider);
+    if (next.hasCurrent) {
+      unawaited(ref.read(playbackControllerProvider).openCurrent());
+    } else {
+      unawaited(ref.read(engineProvider).pause());
+    }
+  }
+
+  Widget _queueSwipeBackground({
+    required String icon,
+    required Alignment alignment,
+    required Color color,
+  }) => Container(
+    alignment: alignment,
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(10),
+    ),
+    padding: const EdgeInsets.symmetric(horizontal: 18),
+    child: AppSvgIcon(icon, size: 24, color: Colors.white),
+  );
+
+  Widget _queueReorderHandle({
+    required int index,
+    required bool compact,
+    required Color color,
+  }) {
+    final child = MouseRegion(
+      cursor: SystemMouseCursors.grab,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        child: AppSvgIcon(
+          'playlist_reorder',
+          size: 20,
+          color: color.withValues(alpha: 0.75),
+        ),
+      ),
+    );
+    return compact
+        ? ReorderableDelayedDragStartListener(index: index, child: child)
+        : ReorderableDragStartListener(index: index, child: child);
+  }
 
   @override
   void dispose() {
@@ -300,203 +348,221 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                             Theme.of(context).brightness == Brightness.dark;
                         final textPrimary = themeTextPrimary(context);
                         final textSub = themeTextSub(context);
-                        return Container(
-                          key: ValueKey('queue-$id'),
-                          margin: const EdgeInsets.only(bottom: 3),
-                          decoration: BoxDecoration(
-                            color: cur
-                                ? (isDark
-                                      ? kAccent.withValues(alpha: 0.18)
-                                      : kAccent.withValues(alpha: 0.10))
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
+                        return Dismissible(
+                          key: ValueKey('queue-dismiss-$id'),
+                          direction: m == null
+                              ? DismissDirection.endToStart
+                              : DismissDirection.horizontal,
+                          confirmDismiss: (direction) async {
+                            if (direction == DismissDirection.startToEnd) {
+                              await runTrackAction(
+                                context,
+                                ref,
+                                m!,
+                                'add_playlist',
+                              );
+                              return false;
+                            }
+                            return true;
+                          },
+                          onDismissed: (_) => _removeQueueItem(queueIndex, id),
+                          background: _queueSwipeBackground(
+                            icon: 'playlist_add',
+                            alignment: Alignment.centerLeft,
+                            color: themeAccent(context),
+                          ),
+                          secondaryBackground: _queueSwipeBackground(
+                            icon: 'delete',
+                            alignment: Alignment.centerRight,
+                            color: Colors.red,
+                          ),
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 3),
+                            decoration: BoxDecoration(
                               color: cur
                                   ? (isDark
-                                        ? kAccent.withValues(alpha: 0.4)
-                                        : kAccent.withValues(alpha: 0.25))
+                                        ? themeAccent(
+                                            context,
+                                          ).withValues(alpha: 0.18)
+                                        : themeAccent(
+                                            context,
+                                          ).withValues(alpha: 0.10))
                                   : Colors.transparent,
-                            ),
-                          ),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(10),
-                            hoverColor: isDark
-                                ? Colors.white.withValues(alpha: 0.05)
-                                : Colors.black.withValues(alpha: 0.04),
-                            onTap: () {
-                              showPlayerView(ref);
-                              ref
-                                  .read(queueProvider.notifier)
-                                  .jumpTo(queueIndex);
-                              ref
-                                  .read(playbackControllerProvider)
-                                  .openCurrent();
-                            },
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 7,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: cur
+                                    ? (isDark
+                                          ? themeAccent(
+                                              context,
+                                            ).withValues(alpha: 0.4)
+                                          : themeAccent(
+                                              context,
+                                            ).withValues(alpha: 0.25))
+                                    : Colors.transparent,
                               ),
-                              child: Row(
-                                children: [
-                                  SizedBox(
-                                    width: 22,
-                                    child: cur
-                                        ? Icon(
-                                            Icons.equalizer_rounded,
-                                            size: 16,
-                                            color: isDark
-                                                ? kAccentLight
-                                                : kAccent,
-                                          )
-                                        : Text(
-                                            '${queueIndex + 1}',
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              fontSize: 12.5,
-                                              fontWeight: FontWeight.w500,
-                                              color: textSub,
+                            ),
+                            child: TrackContextMenuRegion(
+                              ref: ref,
+                              media: m,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(10),
+                                hoverColor: isDark
+                                    ? Colors.white.withValues(alpha: 0.05)
+                                    : Colors.black.withValues(alpha: 0.04),
+                                onTap: () {
+                                  showPlayerView(ref);
+                                  ref
+                                      .read(queueProvider.notifier)
+                                      .jumpTo(queueIndex);
+                                  ref
+                                      .read(playbackControllerProvider)
+                                      .openCurrent();
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 7,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      SizedBox(
+                                        width: 22,
+                                        child: cur
+                                            ? Icon(
+                                                Icons.equalizer_rounded,
+                                                size: 16,
+                                                color: isDark
+                                                    ? themeAccentHighlight(
+                                                        context,
+                                                      )
+                                                    : themeAccent(context),
+                                              )
+                                            : Text(
+                                                '${queueIndex + 1}',
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  fontSize: 12.5,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: textSub,
+                                                ),
+                                              ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withValues(
+                                                alpha: 0.3,
+                                              ),
+                                              blurRadius: 4,
+                                              offset: const Offset(0, 1),
                                             ),
-                                          ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(6),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withValues(
-                                            alpha: 0.3,
-                                          ),
-                                          blurRadius: 4,
-                                          offset: const Offset(0, 1),
+                                          ],
                                         ),
-                                      ],
-                                    ),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: ThumbImage(
-                                      seed: id,
-                                      mediaId: m?.id,
-                                      localPath: m?.localPath,
-                                      imageContext: MediaImageContext.home,
-                                      size: 40,
-                                      radius: 6,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          m == null
-                                              ? ref.tr('unknown_video')
-                                              : displayTitle(m.title),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 13.5,
-                                            fontWeight: cur
-                                                ? FontWeight.w600
-                                                : FontWeight.w400,
-                                            color: cur
-                                                ? (isDark
-                                                      ? Colors.white
-                                                      : kAccent)
-                                                : textPrimary,
-                                          ),
-                                        ),
-                                        m?.artist?.trim().isNotEmpty == true
-                                            ? Text(
-                                                formatCreatorNames(m!.artist),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                  fontSize: 11.5,
-                                                  color: textSub,
-                                                ),
-                                              )
-                                            : knownDur != null
-                                            ? Text(
-                                                fmtDuration(knownDur),
-                                                style: TextStyle(
-                                                  fontSize: 11.5,
-                                                  color: textSub,
-                                                ),
-                                              )
-                                            : (m == null
-                                                  ? Text(
-                                                      '—',
-                                                      style: TextStyle(
-                                                        fontSize: 11.5,
-                                                        color: textSub,
-                                                      ),
-                                                    )
-                                                  : DurationText(
-                                                      mediaId: m.id,
-                                                      localPath: m.localPath,
-                                                      style: TextStyle(
-                                                        fontSize: 11.5,
-                                                        color: textSub,
-                                                      ),
-                                                    )),
-                                      ],
-                                    ),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(
-                                      Icons.close_rounded,
-                                      size: 16,
-                                    ),
-                                    color: textSub,
-                                    splashRadius: 14,
-                                    visualDensity: VisualDensity.compact,
-                                    tooltip: ref.tr('remove_from_queue'),
-                                    onPressed: () {
-                                      final removesCurrent =
-                                          ref.read(queueProvider).currentId ==
-                                          id;
-                                      ref
-                                          .read(queueProvider.notifier)
-                                          .removeAt(queueIndex);
-                                      if (!removesCurrent) return;
-
-                                      final next = ref.read(queueProvider);
-                                      if (next.hasCurrent) {
-                                        unawaited(
-                                          ref
-                                              .read(playbackControllerProvider)
-                                              .openCurrent(),
-                                        );
-                                      } else {
-                                        unawaited(
-                                          ref.read(engineProvider).pause(),
-                                        );
-                                      }
-                                    },
-                                  ),
-                                  const SizedBox(width: 2),
-                                  ReorderableDragStartListener(
-                                    index: i,
-                                    child: MouseRegion(
-                                      cursor: SystemMouseCursors.grab,
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 4,
-                                          vertical: 8,
-                                        ),
-                                        child: AppSvgIcon(
-                                          'drag',
-                                          size: 20,
-                                          color: textSub.withValues(
-                                            alpha: 0.75,
-                                          ),
+                                        clipBehavior: Clip.antiAlias,
+                                        child: ThumbImage(
+                                          seed: id,
+                                          mediaId: m?.id,
+                                          localPath: m?.localPath,
+                                          imageContext: MediaImageContext.home,
+                                          size: 40,
+                                          radius: 6,
                                         ),
                                       ),
-                                    ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              m == null
+                                                  ? ref.tr('unknown_video')
+                                                  : displayTitle(m.title),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 13.5,
+                                                fontWeight: cur
+                                                    ? FontWeight.w600
+                                                    : FontWeight.w400,
+                                                color: cur
+                                                    ? (isDark
+                                                          ? Colors.white
+                                                          : themeAccent(
+                                                              context,
+                                                            ))
+                                                    : textPrimary,
+                                              ),
+                                            ),
+                                            m?.artist?.trim().isNotEmpty == true
+                                                ? Text(
+                                                    formatCreatorNames(
+                                                      m!.artist,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      fontSize: 11.5,
+                                                      color: textSub,
+                                                    ),
+                                                  )
+                                                : knownDur != null
+                                                ? Text(
+                                                    fmtDuration(knownDur),
+                                                    style: TextStyle(
+                                                      fontSize: 11.5,
+                                                      color: textSub,
+                                                    ),
+                                                  )
+                                                : (m == null
+                                                      ? Text(
+                                                          '—',
+                                                          style: TextStyle(
+                                                            fontSize: 11.5,
+                                                            color: textSub,
+                                                          ),
+                                                        )
+                                                      : DurationText(
+                                                          mediaId: m.id,
+                                                          localPath:
+                                                              m.localPath,
+                                                          style: TextStyle(
+                                                            fontSize: 11.5,
+                                                            color: textSub,
+                                                          ),
+                                                        )),
+                                          ],
+                                        ),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.close_rounded,
+                                          size: 16,
+                                        ),
+                                        color: textSub,
+                                        splashRadius: 14,
+                                        visualDensity: VisualDensity.compact,
+                                        tooltip: ref.tr('remove_from_queue'),
+                                        onPressed: () =>
+                                            _removeQueueItem(queueIndex, id),
+                                      ),
+                                      const SizedBox(width: 2),
+                                      _queueReorderHandle(
+                                        index: i,
+                                        compact:
+                                            MediaQuery.sizeOf(context).width <
+                                            560,
+                                        color: textSub,
+                                      ),
+                                    ],
                                   ),
-                                ],
+                                ),
                               ),
                             ),
                           ),

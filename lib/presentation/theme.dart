@@ -24,31 +24,47 @@ const kLightText = Color(0xFF242424);
 const kLightSub = Color(0xFF626262);
 
 ThemeData yureruTheme({bool isDark = true}) => _theme(isDark);
-ThemeData yureruDarkTheme() => _theme(true);
-ThemeData yureruLightTheme() => _theme(false);
+ThemeData yureruDarkTheme({Color? accentColor, Color? backgroundColor}) =>
+    _theme(true, accentColor: accentColor, backgroundColor: backgroundColor);
+ThemeData yureruLightTheme({Color? accentColor, Color? backgroundColor}) =>
+    _theme(false, accentColor: accentColor, backgroundColor: backgroundColor);
 
-ThemeData _theme(bool dark) {
+ThemeData _theme(bool dark, {Color? accentColor, Color? backgroundColor}) {
+  final bg = backgroundColor ?? (dark ? kBg : kLightBg);
+  final accent = accentColor ?? kAccent;
+  final accentHighlight = accent == kAccent
+      ? kAccentLight
+      : Color.lerp(accent, Colors.white, dark ? 0.34 : 0)!;
+  final panel = dark ? Color.lerp(bg, Colors.white, 0.045)! : kLightPanel;
+  final panelAlt = dark ? Color.lerp(bg, Colors.white, 0.074)! : kLightPanel;
+  final card = dark ? Color.lerp(bg, Colors.white, 0.104)! : kLightCard;
+  final cardHover = dark
+      ? Color.lerp(bg, Colors.white, 0.152)!
+      : const Color(0xFFE6E6E6);
+  final accentContainer = Color.lerp(
+    dark ? bg : Colors.white,
+    accent,
+    dark ? 0.32 : 0.13,
+  )!;
   final scheme =
       ColorScheme.fromSeed(
-        seedColor: kAccent,
+        seedColor: accent,
         dynamicSchemeVariant: DynamicSchemeVariant.tonalSpot,
         brightness: dark ? Brightness.dark : Brightness.light,
       ).copyWith(
-        primary: dark ? kAccentLight : kAccent,
+        primary: dark ? accentHighlight : accent,
         onPrimary: dark ? const Color(0xFF242424) : Colors.white,
-        primaryContainer: dark
-            ? const Color(0xFF4B3029)
-            : const Color(0xFFF5E1D9),
-        onPrimaryContainer: dark
-            ? const Color(0xFFFFE6DE)
-            : const Color(0xFF542F24),
+        primaryContainer: accentContainer,
+        onPrimaryContainer: accentContainer.computeLuminance() > 0.45
+            ? const Color(0xFF242424)
+            : Colors.white,
         secondary: dark ? kTextSub : kLightSub,
-        surface: dark ? kPanelSolid : kLightCard,
-        surfaceContainerLowest: dark ? kBg : kLightBg,
-        surfaceContainerLow: dark ? kPanelSolid : kLightPanel,
-        surfaceContainer: dark ? kPanelAlt : kLightPanel,
-        surfaceContainerHigh: dark ? kCard : const Color(0xFFF0F0F0),
-        surfaceContainerHighest: dark ? kCardHover : const Color(0xFFE6E6E6),
+        surface: dark ? panel : kLightCard,
+        surfaceContainerLowest: bg,
+        surfaceContainerLow: panel,
+        surfaceContainer: panelAlt,
+        surfaceContainerHigh: card,
+        surfaceContainerHighest: cardHover,
         onSurface: dark ? kTextPrimary : kLightText,
         onSurfaceVariant: dark ? kTextSub : kLightSub,
         outline: dark ? const Color(0xFF787878) : const Color(0xFF858585),
@@ -60,14 +76,23 @@ ThemeData _theme(bool dark) {
     borderRadius: BorderRadius.circular(12),
   );
   return base.copyWith(
-    scaffoldBackgroundColor: dark ? kBg : kLightBg,
+    scaffoldBackgroundColor: bg,
+    extensions: [
+      YureruColors(
+        accent: accent,
+        accentHighlight: accentHighlight,
+        background: bg,
+        panel: panel,
+        card: card,
+      ),
+    ],
     dividerColor: scheme.outlineVariant,
     textTheme: base.textTheme.apply(
       bodyColor: scheme.onSurface,
       displayColor: scheme.onSurface,
     ),
     cardTheme: CardThemeData(
-      color: dark ? kCard : kLightCard,
+      color: card,
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -89,7 +114,7 @@ ThemeData _theme(bool dark) {
       textStyle: TextStyle(color: scheme.onSurface),
     ),
     chipTheme: base.chipTheme.copyWith(
-      backgroundColor: dark ? kPanelSolid : kLightCard,
+      backgroundColor: panel,
       selectedColor: scheme.primaryContainer,
       side: BorderSide(color: scheme.outlineVariant),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -127,7 +152,7 @@ ThemeData _theme(bool dark) {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: dark ? kPanelAlt : kLightPanel,
+      fillColor: panelAlt,
       hintStyle: TextStyle(
         color: dark ? kTextMuted : kLightSub,
         fontSize: 13.5,
@@ -217,17 +242,74 @@ ThemeData _theme(bool dark) {
 }
 
 Color themePanel(BuildContext context) =>
-    Theme.of(context).brightness == Brightness.dark ? kPanel : kLightBg;
+    Theme.of(context).extension<YureruColors>()?.panel ??
+    (Theme.of(context).brightness == Brightness.dark ? kPanel : kLightBg);
 Color themePanelSolid(BuildContext context) =>
     Theme.of(context).colorScheme.surfaceContainerLow;
 Color themeCard(BuildContext context) =>
-    Theme.of(context).brightness == Brightness.dark ? kCard : kLightCard;
+    Theme.of(context).extension<YureruColors>()?.card ??
+    (Theme.of(context).brightness == Brightness.dark ? kCard : kLightCard);
+Color themeCardHover(BuildContext context) =>
+    Theme.of(context).colorScheme.surfaceContainerHighest;
 Color themeBorder(BuildContext context) =>
     Theme.of(context).colorScheme.outlineVariant;
 Color themeTextPrimary(BuildContext context) =>
     Theme.of(context).colorScheme.onSurface;
 Color themeTextSub(BuildContext context) =>
     Theme.of(context).colorScheme.onSurfaceVariant;
+Color playerTransportColor(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFFA9A9A9)
+    : const Color(0xFF5D5D5D);
+
+class YureruColors extends ThemeExtension<YureruColors> {
+  const YureruColors({
+    required this.accent,
+    required this.accentHighlight,
+    required this.background,
+    required this.panel,
+    required this.card,
+  });
+
+  final Color accent;
+  final Color accentHighlight;
+  final Color background;
+  final Color panel;
+  final Color card;
+
+  @override
+  YureruColors copyWith({
+    Color? accent,
+    Color? accentHighlight,
+    Color? background,
+    Color? panel,
+    Color? card,
+  }) => YureruColors(
+    accent: accent ?? this.accent,
+    accentHighlight: accentHighlight ?? this.accentHighlight,
+    background: background ?? this.background,
+    panel: panel ?? this.panel,
+    card: card ?? this.card,
+  );
+
+  @override
+  YureruColors lerp(ThemeExtension<YureruColors>? other, double t) {
+    if (other is! YureruColors) return this;
+    return YureruColors(
+      accent: Color.lerp(accent, other.accent, t)!,
+      accentHighlight: Color.lerp(accentHighlight, other.accentHighlight, t)!,
+      background: Color.lerp(background, other.background, t)!,
+      panel: Color.lerp(panel, other.panel, t)!,
+      card: Color.lerp(card, other.card, t)!,
+    );
+  }
+}
+
+Color themeAccent(BuildContext context) =>
+    Theme.of(context).extension<YureruColors>()?.accent ?? kAccent;
+Color themeAccentHighlight(BuildContext context) =>
+    Theme.of(context).extension<YureruColors>()?.accentHighlight ??
+    kAccentLight;
 
 /// Deterministic music-cover gradient for items without usable artwork.
 LinearGradient thumbGradient(String seed) {

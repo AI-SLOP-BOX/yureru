@@ -82,12 +82,47 @@ class MainFlutterWindow: NSWindow {
       Task { @MainActor in
         do {
           let appURL = Bundle.main.bundleURL
-          try await NSWorkspace.shared.setDefaultApplication(
-            at: appURL,
-            toOpen: UTType.movie)
-          try await NSWorkspace.shared.setDefaultApplication(
-            at: appURL,
-            toOpen: UTType.audio)
+          // Setting only public.movie/public.audio does not override a user's
+          // more specific choice (for example public.mpeg-4 -> IINA). Register
+          // every stable media UTI supported by the importer, then verify the
+          // resulting Launch Services handlers before reporting success.
+          let extensions = [
+            "mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "m2ts",
+            "mpg", "mpeg", "flv", "wmv", "3gp", "3g2", "ogv", "vob",
+            "divx", "mp3", "opus", "ogg", "oga", "m4a", "aac", "wav",
+            "flac", "aiff", "alac", "caf",
+          ]
+          var types: [UTType] = [.movie, .video, .audio]
+          for fileExtension in extensions {
+            if let type = UTType(filenameExtension: fileExtension),
+               !type.identifier.hasPrefix("dyn.") {
+              types.append(type)
+            }
+          }
+          var uniqueTypes: [UTType] = []
+          var seen = Set<String>()
+          for type in types where seen.insert(type.identifier).inserted {
+            uniqueTypes.append(type)
+          }
+          for type in uniqueTypes {
+            try await NSWorkspace.shared.setDefaultApplication(
+              at: appURL,
+              toOpen: type)
+          }
+          try await Task.sleep(nanoseconds: 350_000_000)
+          let unresolved = uniqueTypes.filter { type in
+            guard let handler = NSWorkspace.shared.urlForApplication(toOpen: type)
+            else { return true }
+            return handler.standardizedFileURL != appURL.standardizedFileURL
+          }
+          guard unresolved.isEmpty else {
+            let names = unresolved.map(\.identifier).joined(separator: ", ")
+            throw NSError(
+              domain: "YureruDefaultMediaPlayer",
+              code: 1,
+              userInfo: [NSLocalizedDescriptionKey:
+                "macOS did not assign Yureru to: \(names)"])
+          }
           result(nil)
         } catch {
           result(FlutterError(
@@ -101,6 +136,12 @@ class MainFlutterWindow: NSWindow {
 
   func openSettingsFromMenu() {
     nativeMenuChannel?.invokeMethod("openSettings", arguments: nil)
+    NSApp.activate(ignoringOtherApps: true)
+    makeKeyAndOrderFront(nil)
+  }
+
+  func openSearchFromMenu() {
+    nativeMenuChannel?.invokeMethod("openSearch", arguments: nil)
     NSApp.activate(ignoringOtherApps: true)
     makeKeyAndOrderFront(nil)
   }
@@ -626,7 +667,22 @@ private final class NativeSystemPictureInPicture: NSObject, AVPictureInPictureCo
     player.actionAtItemEnd = .pause
     let layer = AVPlayerLayer(player: player)
     layer.videoGravity = .resizeAspect
-    layer.frame = hostLayer.bounds
+    if let sourceRect = arguments["sourceRect"] as? [String: NSNumber] {
+      let left = CGFloat(sourceRect["left"]?.doubleValue ?? 0)
+      let top = CGFloat(sourceRect["top"]?.doubleValue ?? 0)
+      let width = CGFloat(sourceRect["width"]?.doubleValue ?? 0)
+      let height = CGFloat(sourceRect["height"]?.doubleValue ?? 0)
+      let bounds = hostLayer.bounds
+      let frame = CGRect(
+        x: left * bounds.width,
+        y: bounds.height - (top + height) * bounds.height,
+        width: width * bounds.width,
+        height: height * bounds.height
+      ).intersection(bounds)
+      layer.frame = frame.isEmpty ? bounds : frame
+    } else {
+      layer.frame = hostLayer.bounds
+    }
     layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
     layer.opacity = 0.01
     hostLayer.addSublayer(layer)

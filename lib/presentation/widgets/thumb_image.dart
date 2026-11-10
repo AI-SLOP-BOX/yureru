@@ -56,6 +56,7 @@ class ThumbImage extends ConsumerStatefulWidget {
 
 class _ThumbImageState extends ConsumerState<ThumbImage> {
   Future<File?>? _future;
+  Future<File?>? _jacketFuture;
   String? _key;
 
   @override
@@ -69,7 +70,8 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
     super.didUpdateWidget(old);
     if (old.mediaId != widget.mediaId ||
         old.localPath != widget.localPath ||
-        old.highRes != widget.highRes) {
+        old.highRes != widget.highRes ||
+        old.forceArtwork != widget.forceArtwork) {
       _pin();
     }
   }
@@ -80,8 +82,16 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
     _key = widget.highRes ? '$id@hi' : id;
     if (id == null || path == null) {
       _future = null;
+      _jacketFuture = null;
     } else {
       _future = _loadThumbnail(id, path, highRes: widget.highRes);
+      _jacketFuture = widget.forceArtwork
+          ? ThumbnailService.jacketArtworkForMedia(
+              mediaId: id,
+              localPath: path,
+              highRes: widget.highRes,
+            )
+          : null;
     }
   }
 
@@ -216,7 +226,7 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
       return fallback;
     }
     return FutureBuilder<File?>(
-      future: f,
+      future: widget.forceArtwork ? (_jacketFuture ?? f) : f,
       builder: (c, snap) {
         final file = snap.data;
         if (file == null) {

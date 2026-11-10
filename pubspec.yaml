@@ -26,6 +26,8 @@ dependencies:
   video_player: ^2.11.1
   video_player_pip: ^0.0.10
   ffmpeg_kit_flutter_new_full: ^2.5.8
+  archive: ^4.3.0
+  quickjs_engine: ^0.1.7
 dev_dependencies:
   flutter_test:
     sdk: flutter

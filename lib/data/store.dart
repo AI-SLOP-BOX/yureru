@@ -37,11 +37,19 @@ class PrefsLibraryRepository implements LibraryRepository {
       return [];
     }
   }
+
   @override
   Future<void> saveMedia(List<MediaItem> items) async {
     final p = await SharedPreferences.getInstance();
-    await p.setString(_kMedia, jsonEncode(items.map((e) => e.toJson()).toList()));
+    final saved = await p.setString(
+      _kMedia,
+      jsonEncode(items.map((e) => e.toJson()).toList()),
+    );
+    if (!saved) {
+      throw StateError('The media library could not be written to storage.');
+    }
   }
+
   @override
   Future<List<Playlist>> loadPlaylists() async {
     try {
@@ -65,10 +73,14 @@ class PrefsLibraryRepository implements LibraryRepository {
       return [];
     }
   }
+
   @override
   Future<void> savePlaylists(List<Playlist> items) async {
     final p = await SharedPreferences.getInstance();
-    await p.setString(_kPlaylists, jsonEncode(items.map((e) => e.toJson()).toList()));
+    await p.setString(
+      _kPlaylists,
+      jsonEncode(items.map((e) => e.toJson()).toList()),
+    );
   }
 }
 
@@ -79,9 +91,14 @@ class InMemoryLibraryRepository implements LibraryRepository {
   @override
   Future<List<MediaItem>> loadMedia() async => List.of(media);
   @override
-  Future<void> saveMedia(List<MediaItem> items) async { media = List.of(items); }
+  Future<void> saveMedia(List<MediaItem> items) async {
+    media = List.of(items);
+  }
+
   @override
   Future<List<Playlist>> loadPlaylists() async => List.of(playlists);
   @override
-  Future<void> savePlaylists(List<Playlist> items) async { playlists = List.of(items); }
+  Future<void> savePlaylists(List<Playlist> items) async {
+    playlists = List.of(items);
+  }
 }

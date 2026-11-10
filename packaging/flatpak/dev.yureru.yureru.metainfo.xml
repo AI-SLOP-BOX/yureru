@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.yureru.yureru</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Yureru</name>
+  <summary>Local video and music player</summary>
+  <description>
+    <p>Play local videos and music as a personal media library.</p>
+  </description>
+  <launchable type="desktop-id">dev.yureru.yureru.desktop</launchable>
+  <developer id="dev.yureru">
+    <name>Yureru contributors</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+  <provides>
+    <id>dev.yureru.yureru.desktop</id>
+  </provides>
+</component>

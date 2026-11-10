@@ -221,12 +221,14 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                     return Container(
                       decoration: BoxDecoration(
                         color: isSelected
-                            ? kAccent.withValues(alpha: 0.18)
+                            ? themeAccent(context).withValues(alpha: 0.18)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
                         border: isSelected
                             ? Border.all(
-                                color: kAccentLight.withValues(alpha: 0.5),
+                                color: themeAccentHighlight(
+                                  context,
+                                ).withValues(alpha: 0.5),
                                 width: 1,
                               )
                             : null,
@@ -263,10 +265,10 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                             ),
                           ),
                           trailing: isSelected
-                              ? const Icon(
+                              ? Icon(
                                   Icons.keyboard_return_rounded,
                                   size: 16,
-                                  color: kAccentLight,
+                                  color: themeAccentHighlight(context),
                                 )
                               : null,
                           onTap: () {
@@ -304,12 +306,14 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                     return Container(
                       decoration: BoxDecoration(
                         color: isSelected
-                            ? kAccent.withValues(alpha: 0.18)
+                            ? themeAccent(context).withValues(alpha: 0.18)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
                         border: isSelected
                             ? Border.all(
-                                color: kAccentLight.withValues(alpha: 0.5),
+                                color: themeAccentHighlight(
+                                  context,
+                                ).withValues(alpha: 0.5),
                                 width: 1,
                               )
                             : null,
@@ -361,10 +365,10 @@ class _SearchOverlayState extends ConsumerState<SearchOverlay> {
                                   ),
                                 ),
                               if (isSelected)
-                                const Icon(
+                                Icon(
                                   Icons.arrow_forward_rounded,
                                   size: 18,
-                                  color: kAccentLight,
+                                  color: themeAccentHighlight(context),
                                 ),
                             ],
                           ),

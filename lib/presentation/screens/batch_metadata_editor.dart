@@ -4,6 +4,7 @@ import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../../library/media_metadata_patch.dart';
 import '../i18n.dart';
+import '../widgets/unsaved_changes_guard.dart';
 
 Future<bool> showBatchMetadataEditor(
   BuildContext context,
@@ -134,8 +135,16 @@ class _BatchMetadataDialogState extends State<_BatchMetadataDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final hasDraft = _enabled.any((value) => value) || _numberTracks;
     return PopScope(
-      canPop: !_saving,
+      canPop: !_saving && !hasDraft,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop || _saving || !hasDraft) return;
+        if (await confirmDiscardUnsavedChanges(context, tr) &&
+            context.mounted) {
+          Navigator.pop(context, false);
+        }
+      },
       child: AlertDialog(
         title: Text(tr('batch_metadata')),
         content: SizedBox(
@@ -243,7 +252,15 @@ class _BatchMetadataDialogState extends State<_BatchMetadataDialog> {
         ),
         actions: [
           TextButton(
-            onPressed: _saving ? null : () => Navigator.pop(context, false),
+            onPressed: _saving
+                ? null
+                : () async {
+                    if (hasDraft &&
+                        !await confirmDiscardUnsavedChanges(context, tr)) {
+                      return;
+                    }
+                    if (context.mounted) Navigator.pop(context, false);
+                  },
             child: Text(tr('cancel')),
           ),
           FilledButton(

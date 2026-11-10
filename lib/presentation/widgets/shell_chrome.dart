@@ -37,14 +37,14 @@ class ShellCompactDrawerItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final color = selected
-        ? (isDark ? kAccentLight : Colors.black87)
+        ? (isDark ? themeAccentHighlight(context) : Colors.black87)
         : (isDark ? kTextSub : Colors.black54);
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 12, vertical: compact ? 1 : 3),
       child: Material(
         color: selected
             ? (isDark
-                  ? kAccent.withValues(alpha: 0.13)
+                  ? themeAccent(context).withValues(alpha: 0.13)
                   : Colors.black.withValues(alpha: 0.07))
             : Colors.transparent,
         borderRadius: BorderRadius.circular(13),
@@ -58,14 +58,18 @@ class ShellCompactDrawerItem extends StatelessWidget {
                 const SizedBox(width: 15),
                 leading ?? Icon(icon, size: 21, color: color),
                 const SizedBox(width: 14),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: selected
-                        ? (isDark ? kTextPrimary : Colors.black87)
-                        : color,
-                    fontSize: 14,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected
+                          ? (isDark ? kTextPrimary : Colors.black87)
+                          : color,
+                      fontSize: 14,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    ),
                   ),
                 ),
               ],
@@ -269,9 +273,13 @@ class ShellPictureInPictureViewState
             reportedAspectRatio > 0
         ? reportedAspectRatio
         : 16 / 9;
-    _videoAspectRatio = videoAspectRatio;
     final showArtwork =
         ref.watch(playerViewModeProvider) == PlayerViewMode.image;
+    // Jacket PiP is a square still image. Keeping the underlying video's
+    // aspect ratio here made the compact window stretch back to the video's
+    // shape after the user resized it.
+    final pictureInPictureAspectRatio = showArtwork ? 1.0 : videoAspectRatio;
+    _videoAspectRatio = pictureInPictureAspectRatio;
     if (ref.watch(nativeSystemPictureInPictureProvider)) {
       return ColoredBox(
         color: Colors.black,
@@ -291,7 +299,7 @@ class ShellPictureInPictureViewState
               )
             : Center(
                 child: AspectRatio(
-                  aspectRatio: videoAspectRatio,
+                  aspectRatio: pictureInPictureAspectRatio,
                   child: PipVideoSurface(engine: engine),
                 ),
               ),
@@ -330,139 +338,148 @@ class ShellPictureInPictureViewState
               else
                 Center(
                   child: AspectRatio(
-                    aspectRatio: videoAspectRatio,
+                    aspectRatio: pictureInPictureAspectRatio,
                     child: PipVideoSurface(engine: engine),
                   ),
                 ),
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: Container(
-                  height: 58,
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, Color(0xCC000000)],
+              if (!showArtwork)
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Container(
+                    height: 58,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Color(0xCC000000)],
+                      ),
                     ),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final compact = constraints.maxWidth < 200;
-                      final buttonWidth = compact ? 32.0 : 44.0;
-                      return Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              media?.title ?? ref.tr('playing'),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: compact ? 10 : 12,
-                                fontWeight: FontWeight.w600,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final compact = constraints.maxWidth < 200;
+                        final veryCompact = constraints.maxWidth < 96;
+                        final buttonWidth = compact ? 26.0 : 44.0;
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            if (!compact)
+                              Expanded(
+                                child: Text(
+                                  media?.title ?? ref.tr('playing'),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                               ),
+                            StreamBuilder<bool>(
+                              stream: engine.playingStream,
+                              initialData: engine.snapshot.isPlaying,
+                              builder: (context, state) {
+                                final playing = state.data ?? false;
+                                return IconButton(
+                                  tooltip: ref.tr(playing ? 'pause' : 'play'),
+                                  color: Colors.white,
+                                  constraints: BoxConstraints.tightFor(
+                                    width: buttonWidth,
+                                    height: 44,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero,
+                                  // Use the state shown by this StreamBuilder.
+                                  // PlaybackController.toggle() reads its cached
+                                  // snapshot, which can lag behind the platform
+                                  // stream during the PiP surface transition and
+                                  // issue pause again when the button shows Play.
+                                  onPressed: () =>
+                                      playing ? engine.pause() : engine.play(),
+                                  icon: Icon(
+                                    playing
+                                        ? Icons.pause_rounded
+                                        : Icons.play_arrow_rounded,
+                                  ),
+                                );
+                              },
                             ),
-                          ),
-                          StreamBuilder<bool>(
-                            stream: engine.playingStream,
-                            initialData: engine.snapshot.isPlaying,
-                            builder: (context, state) {
-                              final playing = state.data ?? false;
-                              return IconButton(
-                                tooltip: ref.tr(playing ? 'pause' : 'play'),
+                            if (!veryCompact)
+                              IconButton(
+                                tooltip: ref.tr('next_video'),
                                 color: Colors.white,
                                 constraints: BoxConstraints.tightFor(
                                   width: buttonWidth,
                                   height: 44,
                                 ),
+                                visualDensity: VisualDensity.compact,
                                 padding: EdgeInsets.zero,
-                                // Use the state shown by this StreamBuilder.
-                                // PlaybackController.toggle() reads its cached
-                                // snapshot, which can lag behind the platform
-                                // stream during the PiP surface transition and
-                                // issue pause again when the button shows Play.
-                                onPressed: () =>
-                                    playing ? engine.pause() : engine.play(),
-                                icon: Icon(
-                                  playing
-                                      ? Icons.pause_rounded
-                                      : Icons.play_arrow_rounded,
-                                ),
-                              );
-                            },
-                          ),
-                          IconButton(
-                            tooltip: ref.tr('next_video'),
-                            color: Colors.white,
-                            constraints: BoxConstraints.tightFor(
-                              width: buttonWidth,
-                              height: 44,
+                                onPressed: queue.hasCurrent
+                                    ? () => ref
+                                          .read(playbackControllerProvider)
+                                          .playNext()
+                                    : null,
+                                icon: const Icon(Icons.skip_next_rounded),
+                              ),
+                            IconButton(
+                              tooltip: ref.tr('restore_window'),
+                              color: Colors.white,
+                              constraints: BoxConstraints.tightFor(
+                                width: buttonWidth,
+                                height: 44,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              padding: EdgeInsets.zero,
+                              onPressed: () async {
+                                if (ref.read(
+                                  nativeSystemPictureInPictureProvider,
+                                )) {
+                                  await const MethodChannel(
+                                    'yureru/native_pip',
+                                  ).invokeMethod<void>('stop');
+                                  return;
+                                }
+                                ref
+                                        .read(pictureInPictureProvider.notifier)
+                                        .state =
+                                    false;
+                                await WidgetsBinding.instance.endOfFrame;
+                                await restorePictureInPictureWindow(
+                                  engine: engine,
+                                );
+                              },
+                              icon: const Icon(Icons.open_in_full_rounded),
                             ),
-                            padding: EdgeInsets.zero,
-                            onPressed: queue.hasCurrent
-                                ? () => ref
-                                      .read(playbackControllerProvider)
-                                      .playNext()
-                                : null,
-                            icon: const Icon(Icons.skip_next_rounded),
-                          ),
-                          IconButton(
-                            tooltip: ref.tr('restore_window'),
-                            color: Colors.white,
-                            constraints: BoxConstraints.tightFor(
-                              width: buttonWidth,
-                              height: 44,
-                            ),
-                            padding: EdgeInsets.zero,
-                            onPressed: () async {
-                              if (ref.read(
-                                nativeSystemPictureInPictureProvider,
-                              )) {
-                                await const MethodChannel(
-                                  'yureru/native_pip',
-                                ).invokeMethod<void>('stop');
-                                return;
-                              }
-                              ref
-                                      .read(pictureInPictureProvider.notifier)
-                                      .state =
-                                  false;
-                              await WidgetsBinding.instance.endOfFrame;
-                              await restorePictureInPictureWindow(
-                                engine: engine,
-                              );
-                            },
-                            icon: const Icon(Icons.open_in_full_rounded),
-                          ),
-                        ],
-                      );
-                    },
+                          ],
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
-              Positioned(
-                right: 0,
-                top: 0,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 30,
-                    height: 30,
-                    decoration: const BoxDecoration(
-                      color: Color(0x66000000),
-                      borderRadius: BorderRadius.only(
-                        bottomLeft: Radius.circular(8),
+              if (!showArtwork)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 30,
+                      height: 30,
+                      decoration: const BoxDecoration(
+                        color: Color(0x66000000),
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(8),
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.drag_handle_rounded,
+                        color: Colors.white,
+                        size: 18,
                       ),
                     ),
-                    alignment: Alignment.center,
-                    child: const Icon(
-                      Icons.drag_handle_rounded,
-                      color: Colors.white,
-                      size: 18,
-                    ),
                   ),
                 ),
-              ),
               Positioned.fill(
                 child: defaultTargetPlatform == TargetPlatform.macOS
                     ? const SizedBox.expand()
@@ -530,13 +547,13 @@ class ShellHorizontalSplitterState extends State<ShellHorizontalSplitter> {
               width: _hover ? 2 : (widget.ambient ? 0 : 1),
               decoration: BoxDecoration(
                 color: _hover
-                    ? kAccentLight
+                    ? themeAccentHighlight(context)
                     : Colors.white.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(1),
                 boxShadow: _hover
                     ? [
                         BoxShadow(
-                          color: kAccent.withValues(alpha: 0.5),
+                          color: themeAccent(context).withValues(alpha: 0.5),
                           blurRadius: 6,
                         ),
                       ]

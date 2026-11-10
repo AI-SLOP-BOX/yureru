@@ -1,4 +1,10 @@
 const Map<String, String> jaShortcuts = {
+  'menu_edit': '編集',
+  'menu_find': '検索…',
+  'menu_window': 'ウィンドウ',
+  'menu_minimize': '最小化',
+  'menu_toggle_zoom': '拡大／元に戻す',
+  'menu_fullscreen': 'フルスクリーン',
   'settings_shortcuts': 'キーボードショートカット',
   'settings_shortcuts_hint': 'キー割り当てを変更できます',
   'shortcut_global_search': '全体検索を開く',
@@ -14,6 +20,12 @@ const Map<String, String> jaShortcuts = {
 };
 
 const Map<String, String> enShortcuts = {
+  'menu_edit': 'Edit',
+  'menu_find': 'Find…',
+  'menu_window': 'Window',
+  'menu_minimize': 'Minimize',
+  'menu_toggle_zoom': 'Zoom / Restore',
+  'menu_fullscreen': 'Enter / Exit Full Screen',
   'settings_shortcuts': 'Keyboard shortcuts',
   'settings_shortcuts_hint': 'Customize key bindings',
   'shortcut_global_search': 'Open global search',
@@ -29,6 +41,12 @@ const Map<String, String> enShortcuts = {
 };
 
 const Map<String, String> zhHansShortcuts = {
+  'menu_edit': '编辑',
+  'menu_find': '查找…',
+  'menu_window': '窗口',
+  'menu_minimize': '最小化',
+  'menu_toggle_zoom': '缩放／还原',
+  'menu_fullscreen': '进入／退出全屏',
   'settings_shortcuts': '键盘快捷键',
   'settings_shortcuts_hint': '自定义按键绑定',
   'shortcut_global_search': '打开全局搜索',
@@ -44,6 +62,12 @@ const Map<String, String> zhHansShortcuts = {
 };
 
 const Map<String, String> zhHantShortcuts = {
+  'menu_edit': '編輯',
+  'menu_find': '尋找…',
+  'menu_window': '視窗',
+  'menu_minimize': '最小化',
+  'menu_toggle_zoom': '縮放／還原',
+  'menu_fullscreen': '進入／退出全螢幕',
   'settings_shortcuts': '鍵盤快速鍵',
   'settings_shortcuts_hint': '自訂按鍵綁定',
   'shortcut_global_search': '開啟全域搜尋',
@@ -59,6 +83,12 @@ const Map<String, String> zhHantShortcuts = {
 };
 
 const Map<String, String> koShortcuts = {
+  'menu_edit': '편집',
+  'menu_find': '검색…',
+  'menu_window': '창',
+  'menu_minimize': '최소화',
+  'menu_toggle_zoom': '확대／복원',
+  'menu_fullscreen': '전체 화면 전환',
   'settings_shortcuts': '키보드 단축키',
   'settings_shortcuts_hint': '키 바인딩 사용자 지정',
   'shortcut_global_search': '전체 검색 열기',
@@ -74,6 +104,12 @@ const Map<String, String> koShortcuts = {
 };
 
 const Map<String, String> esShortcuts = {
+  'menu_edit': 'Editar',
+  'menu_find': 'Buscar…',
+  'menu_window': 'Ventana',
+  'menu_minimize': 'Minimizar',
+  'menu_toggle_zoom': 'Ampliar / Restaurar',
+  'menu_fullscreen': 'Activar / salir de pantalla completa',
   'settings_shortcuts': 'Atajos de teclado',
   'settings_shortcuts_hint': 'Personaliza las teclas',
   'shortcut_global_search': 'Abrir búsqueda global',
@@ -89,6 +125,12 @@ const Map<String, String> esShortcuts = {
 };
 
 const Map<String, String> ptShortcuts = {
+  'menu_edit': 'Editar',
+  'menu_find': 'Buscar…',
+  'menu_window': 'Janela',
+  'menu_minimize': 'Minimizar',
+  'menu_toggle_zoom': 'Ampliar / Restaurar',
+  'menu_fullscreen': 'Entrar / sair da tela cheia',
   'settings_shortcuts': 'Atalhos de teclado',
   'settings_shortcuts_hint': 'Personalize as teclas',
   'shortcut_global_search': 'Abrir pesquisa global',
@@ -104,6 +146,12 @@ const Map<String, String> ptShortcuts = {
 };
 
 const Map<String, String> frShortcuts = {
+  'menu_edit': 'Édition',
+  'menu_find': 'Rechercher…',
+  'menu_window': 'Fenêtre',
+  'menu_minimize': 'Réduire',
+  'menu_toggle_zoom': 'Agrandir / Restaurer',
+  'menu_fullscreen': 'Activer / quitter le plein écran',
   'settings_shortcuts': 'Raccourcis clavier',
   'settings_shortcuts_hint': 'Personnaliser les touches',
   'shortcut_global_search': 'Ouvrir la recherche globale',
@@ -119,6 +167,12 @@ const Map<String, String> frShortcuts = {
 };
 
 const Map<String, String> deShortcuts = {
+  'menu_edit': 'Bearbeiten',
+  'menu_find': 'Suchen…',
+  'menu_window': 'Fenster',
+  'menu_minimize': 'Minimieren',
+  'menu_toggle_zoom': 'Vergrößern / Wiederherstellen',
+  'menu_fullscreen': 'Vollbild umschalten',
   'settings_shortcuts': 'Tastenkürzel',
   'settings_shortcuts_hint': 'Tastenbelegung anpassen',
   'shortcut_global_search': 'Globale Suche öffnen',
@@ -134,6 +188,12 @@ const Map<String, String> deShortcuts = {
 };
 
 const Map<String, String> arShortcuts = {
+  'menu_edit': 'تحرير',
+  'menu_find': 'بحث…',
+  'menu_window': 'نافذة',
+  'menu_minimize': 'تصغير',
+  'menu_toggle_zoom': 'تكبير / استعادة',
+  'menu_fullscreen': 'تبديل ملء الشاشة',
   'settings_shortcuts': 'اختصارات لوحة المفاتيح',
   'settings_shortcuts_hint': 'تخصيص تعيينات المفاتيح',
   'shortcut_global_search': 'فتح البحث العام',

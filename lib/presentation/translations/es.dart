@@ -18,6 +18,7 @@ const Map<String, String> esBase = {
   'new_playlist': 'Nueva lista',
   'play': 'Reproducir',
   'pause': 'Pausar',
+  'stop': 'Detener',
   'playing': 'Reproduciendo',
   'paused': 'En pausa',
   'preview': 'Vista previa',
@@ -261,8 +262,12 @@ const Map<String, String> esScreen = {
   'remove_media_confirm':
       '¿Quitar “{title}” de la biblioteca?\n(El archivo no se eliminará.)',
   'added_to_playlist': 'Añadido a “{name}”',
+  'add_to_playlist_failed':
+      'No se pudieron añadir los vídeos seleccionados a la lista',
   'add_queue': 'Añadir a la cola',
   'add_playlist': 'Añadir a la lista',
+  'open_artist_videos': 'Ir al artista',
+  'remove_from_playlist': 'Quitar de la lista',
   'change_thumbnail': 'Cambiar miniatura',
   'thumbnail_label': 'Miniatura',
   'delete_from_library': 'Quitar de la biblioteca',

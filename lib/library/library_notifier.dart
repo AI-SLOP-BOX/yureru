@@ -34,7 +34,9 @@ class LibraryState {
 
 class LibraryNotifier extends StateNotifier<LibraryState> {
   final LibraryRepository repo;
-  LibraryNotifier(this.repo) : super(const LibraryState());
+  final Future<List<MediaItem>> Function(List<MediaItem>)? transformImports;
+  LibraryNotifier(this.repo, {this.transformImports})
+    : super(const LibraryState());
   Future<void> load() async {
     final m = await repo.loadMedia();
     final p = await repo.loadPlaylists();
@@ -56,7 +58,10 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
           m,
     ];
     if (fresh.isEmpty) return;
-    final m = [...state.media, ...fresh];
+    final transformed = transformImports == null
+        ? fresh
+        : await transformImports!(fresh);
+    final m = [...state.media, ...transformed];
     await _setMedia(m);
   }
 
@@ -190,6 +195,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     required int? trackNumber,
     required int? discNumber,
     required String? artworkPath,
+    MediaViewAvailability? viewAvailability,
     required String? thumbnailPath,
     required int lyricsOffsetMs,
     bool? separateLyricsByView,
@@ -198,6 +204,8 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     bool artworkLyricsOffsetFollowsVideo = true,
     String? artworkAudioMediaId,
     String? artworkAudioPath,
+    int artworkAudioOffsetMs = 0,
+    int artworkAudioEndMs = 0,
   }) async {
     final current = state.byId(id);
     if (current == null) return;
@@ -211,6 +219,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         trackNumber: trackNumber,
         discNumber: discNumber,
         artworkPath: artworkPath,
+        viewAvailability: viewAvailability,
         thumbnailPath: thumbnailPath,
         lyricsOffsetMs: lyricsOffsetMs,
         separateLyricsByView: separateLyricsByView,
@@ -219,6 +228,8 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         artworkLyricsOffsetFollowsVideo: artworkLyricsOffsetFollowsVideo,
         artworkAudioMediaId: artworkAudioMediaId,
         artworkAudioPath: artworkAudioPath,
+        artworkAudioOffsetMs: artworkAudioOffsetMs,
+        artworkAudioEndMs: artworkAudioEndMs,
       ),
     );
     await _deleteManagedImageIfReplaced(current.artworkPath, artworkPath);
@@ -251,6 +262,11 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     if (oldPath == null || oldPath == newPath) return;
     if (!oldPath.contains('yureru_artwork') &&
         !oldPath.contains('yureru_thumbnails')) {
+      return;
+    }
+    if (state.savedMedia.any(
+      (item) => item.artworkPath == oldPath || item.thumbnailPath == oldPath,
+    )) {
       return;
     }
     try {
@@ -312,6 +328,40 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       discNumber: discNumber,
     ),
   );
+
+  /// Applies one album identity and optional shared cover to selected media.
+  Future<void> updateMediaAlbumBatch(
+    Iterable<String> ids, {
+    required String album,
+    required String albumArtist,
+    String? artworkPath,
+  }) async {
+    final selected = ids.toSet();
+    if (selected.isEmpty) return;
+    final oldArtworkPaths = state.media
+        .where((item) => selected.contains(item.id))
+        .map((item) => item.artworkPath)
+        .whereType<String>()
+        .toSet();
+    await _setMedia([
+      for (final item in state.media)
+        if (!item.isTemporary && selected.contains(item.id))
+          artworkPath == null
+              ? item.copyWith(album: album, albumArtist: albumArtist)
+              : item.copyWith(
+                  album: album,
+                  albumArtist: albumArtist,
+                  artworkPath: artworkPath,
+                )
+        else
+          item,
+    ]);
+    if (artworkPath != null) {
+      for (final oldPath in oldArtworkPaths) {
+        await _deleteManagedImageIfReplaced(oldPath, artworkPath);
+      }
+    }
+  }
 
   Future<void> updateMediaArtists(List<String> ids, String? artist) async {
     final selectedIds = ids.toSet();
@@ -504,7 +554,9 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         } catch (_) {}
       }
       final art = r.artworkPath;
-      if (art != null && art.contains('yureru_artwork')) {
+      if (art != null &&
+          art.contains('yureru_artwork') &&
+          !state.savedMedia.any((item) => item.artworkPath == art)) {
         try {
           await File(art).delete();
         } catch (_) {}
@@ -625,12 +677,22 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   }
 
   Future<void> removeFromPlaylist(String playlistId, String mediaId) async {
+    await removeMediaFromPlaylist(playlistId, [mediaId]);
+  }
+
+  Future<void> removeMediaFromPlaylist(
+    String playlistId,
+    Iterable<String> mediaIds,
+  ) async {
+    final toRemove = mediaIds.toSet();
     final p = state.playlists
         .map(
           (pl) => pl.id != playlistId
               ? pl
               : pl.copyWith(
-                  mediaIds: pl.mediaIds.where((x) => x != mediaId).toList(),
+                  mediaIds: pl.mediaIds
+                      .where((x) => !toRemove.contains(x))
+                      .toList(),
                 ),
         )
         .toList();

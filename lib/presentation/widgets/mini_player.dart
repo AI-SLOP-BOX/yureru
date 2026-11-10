@@ -97,11 +97,6 @@ class MiniPlayer extends ConsumerWidget {
               ),
             ),
           ),
-          IconButton(
-            tooltip: ref.tr('next_video'),
-            icon: const Icon(Icons.skip_next_rounded),
-            onPressed: q.hasCurrent ? () => ctl.playNext() : null,
-          ),
           StreamBuilder(
             stream: engine.snapshots,
             initialData: engine.snapshot,
@@ -117,6 +112,11 @@ class MiniPlayer extends ConsumerWidget {
                 },
               );
             },
+          ),
+          IconButton(
+            tooltip: ref.tr('next_video'),
+            icon: const Icon(Icons.skip_next_rounded),
+            onPressed: q.hasCurrent ? () => ctl.playNext() : null,
           ),
         ],
       ),

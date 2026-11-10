@@ -32,6 +32,16 @@ class LicensesScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           _LicenseEntry(
+            title: 'quickjs_engine / QuickJS-NG',
+            license: 'MIT',
+            details: ref.tr('license_extension_runtime_details'),
+            action: const SelectableText(
+              'https://pub.dev/packages/quickjs_engine\n'
+              'https://github.com/quickjs-ng/quickjs',
+            ),
+          ),
+          const SizedBox(height: 12),
+          _LicenseEntry(
             title: 'ffmpeg_kit_flutter_new_full',
             license: 'LGPL-3.0',
             details: ref.tr('license_ffmpeg_pip_details'),

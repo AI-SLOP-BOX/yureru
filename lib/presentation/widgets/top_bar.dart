@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -144,11 +143,22 @@ class _TopBarState extends ConsumerState<TopBar> {
     });
 
     final iconColor = themeTextSub(context);
-    final searchBgColor = theme.colorScheme.surfaceContainer;
+    // Keep the global search available while playing, but don't paint an
+    // opaque surface over the sampled ambient glow. That solid pill made the
+    // toolbar look like two unrelated color bands in ambient mode.
+    final searchBgColor = widget.ambient
+        ? (isDark
+              ? Colors.white.withValues(alpha: 0.035)
+              : Colors.black.withValues(alpha: 0.025))
+        : theme.colorScheme.surfaceContainer;
     final searchBorderColor = _searchHasFocus
         ? (isDark
-              ? kAccentLight.withValues(alpha: 0.7)
-              : kAccent.withValues(alpha: 0.6))
+              ? themeAccentHighlight(context).withValues(alpha: 0.7)
+              : themeAccent(context).withValues(alpha: 0.6))
+        : widget.ambient
+        ? (isDark
+              ? Colors.white.withValues(alpha: 0.13)
+              : Colors.black.withValues(alpha: 0.10))
         : (isDark ? kGlassBorder : const Color(0x1A000000));
 
     final hintColor = themeTextSub(context);
@@ -359,9 +369,10 @@ class _TopBarState extends ConsumerState<TopBar> {
                                       borderRadius: BorderRadius.circular(24),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: kAccent.withValues(
-                                            alpha: isDark ? 0.28 : 0.18,
-                                          ),
+                                          color: themeAccent(context)
+                                              .withValues(
+                                                alpha: isDark ? 0.28 : 0.18,
+                                              ),
                                           blurRadius: 10,
                                           spreadRadius: 1,
                                         ),
@@ -422,6 +433,12 @@ class _TopBarState extends ConsumerState<TopBar> {
                                             hintText: isVeryCompact
                                                 ? ref.tr('search')
                                                 : ref.tr('search_hint'),
+                                            // Do not inherit the platform's
+                                            // filled text-field surface here:
+                                            // it becomes a white rectangle over
+                                            // the ambient glass search pill.
+                                            filled: false,
+                                            fillColor: Colors.transparent,
                                             hintStyle: TextStyle(
                                               fontSize: 14,
                                               color: hintColor,
@@ -647,30 +664,7 @@ class _TopBarState extends ConsumerState<TopBar> {
               left: -8,
               right: 0,
               child: widget.ambient
-                  ? ClipRect(
-                      child: BackdropFilter(
-                        filter: ui.ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                        // Keep the ambient tint identical in both themes.
-                        // A theme-colored panel created a visible horizontal
-                        // seam: dark mode heavily dimmed the glow while light
-                        // mode added a bright white band. Fade the shared
-                        // neutral tint out at the bottom of the toolbar.
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              stops: const [0, 0.72, 1],
-                              colors: [
-                                Colors.black.withValues(alpha: 0.12),
-                                Colors.black.withValues(alpha: 0.08),
-                                Colors.transparent,
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    )
+                  ? const SizedBox.expand()
                   : ColoredBox(color: chromeSurface),
             ),
             content,

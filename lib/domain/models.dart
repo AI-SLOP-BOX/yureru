@@ -6,6 +6,8 @@ const _unchanged = Object();
 
 enum PlaybackRankingPeriod { threeDays, week, month, olderPopular, allTime }
 
+enum MediaViewAvailability { both, mediaOnly, artworkOnly }
+
 /// A single media item in the library. Identity = [id], never path.
 class MediaItem {
   final String id;
@@ -36,6 +38,9 @@ class MediaItem {
   /// User-selected artwork, stored in the app's support directory.
   final String? artworkPath;
 
+  /// Which visual surfaces this item may use in the player.
+  final MediaViewAvailability viewAvailability;
+
   /// User-selected thumbnail, stored separately from jacket artwork.
   final String? thumbnailPath;
 
@@ -64,8 +69,8 @@ class MediaItem {
   final String? artworkLyricsPath;
   final int artworkLyricsOffsetMs;
 
-  /// When true, jacket lyrics follow the video timing correction unless a
-  /// separate jacket audio source is configured.
+  /// When true, jacket lyrics follow the video timing correction and account
+  /// for the jacket audio's position offset on the shared playback timeline.
   final bool artworkLyricsOffsetFollowsVideo;
 
   /// Optional library media whose audio is used in jacket mode.
@@ -73,6 +78,15 @@ class MediaItem {
 
   /// Optional copied audio file used in jacket mode.
   final String? artworkAudioPath;
+
+  /// Jacket audio trim point relative to the video timeline.
+  /// A positive value trims that much from the audio head and makes the
+  /// remaining source time zero align with that position in the MV.
+  final int artworkAudioOffsetMs;
+
+  /// Absolute source timestamp where jacket audio playback stops; zero means
+  /// play through the source end.
+  final int artworkAudioEndMs;
 
   /// User explicitly marked the current item as having no lyrics, hiding the
   /// player lyrics entry until lyrics are added again.
@@ -97,6 +111,7 @@ class MediaItem {
     this.sourceFolderId,
     this.sourcePath,
     this.artworkPath,
+    this.viewAvailability = MediaViewAvailability.both,
     this.thumbnailPath,
     this.lyricsPath,
     this.translatedLyricsPath,
@@ -110,6 +125,8 @@ class MediaItem {
     this.artworkLyricsOffsetFollowsVideo = true,
     this.artworkAudioMediaId,
     this.artworkAudioPath,
+    this.artworkAudioOffsetMs = 0,
+    this.artworkAudioEndMs = 0,
     this.lyricsButtonHidden = false,
   }) : id = id ?? _uuid.v4(),
        createdAt = createdAt ?? DateTime.now();
@@ -165,10 +182,10 @@ class MediaItem {
         ? videoLyricsOffsetMs
         : lyricsOffsetMs;
     if (!artwork) return videoOffset;
-    if (artworkLyricsOffsetFollowsVideo &&
-        artworkAudioMediaId == null &&
-        artworkAudioPath == null) {
-      return videoOffset;
+    if (artworkLyricsOffsetFollowsVideo) {
+      // Artwork audio is trimmed at its head, so timeline 0 in artwork mode
+      // corresponds to this many milliseconds into the shared video/LRC time.
+      return videoOffset - artworkAudioOffsetMs;
     }
     return artworkLyricsOffsetMs;
   }
@@ -192,6 +209,7 @@ class MediaItem {
     Object? sourceFolderId = _unchanged,
     Object? sourcePath = _unchanged,
     Object? artworkPath = _unchanged,
+    MediaViewAvailability? viewAvailability,
     Object? thumbnailPath = _unchanged,
     Object? lyricsPath = _unchanged,
     Object? translatedLyricsPath = _unchanged,
@@ -205,6 +223,8 @@ class MediaItem {
     bool? artworkLyricsOffsetFollowsVideo,
     Object? artworkAudioMediaId = _unchanged,
     Object? artworkAudioPath = _unchanged,
+    int? artworkAudioOffsetMs,
+    int? artworkAudioEndMs,
     bool? lyricsButtonHidden,
   }) => MediaItem(
     id: id,
@@ -241,6 +261,7 @@ class MediaItem {
     artworkPath: identical(artworkPath, _unchanged)
         ? this.artworkPath
         : artworkPath as String?,
+    viewAvailability: viewAvailability ?? this.viewAvailability,
     thumbnailPath: identical(thumbnailPath, _unchanged)
         ? this.thumbnailPath
         : thumbnailPath as String?,
@@ -270,6 +291,8 @@ class MediaItem {
     artworkAudioPath: identical(artworkAudioPath, _unchanged)
         ? this.artworkAudioPath
         : artworkAudioPath as String?,
+    artworkAudioOffsetMs: artworkAudioOffsetMs ?? this.artworkAudioOffsetMs,
+    artworkAudioEndMs: artworkAudioEndMs ?? this.artworkAudioEndMs,
     lyricsButtonHidden: lyricsButtonHidden ?? this.lyricsButtonHidden,
   );
 
@@ -300,6 +323,10 @@ class MediaItem {
     sourceFolderId: j['sourceFolderId'] as String?,
     sourcePath: j['sourcePath'] as String?,
     artworkPath: j['artworkPath'] as String?,
+    viewAvailability: MediaViewAvailability.values.firstWhere(
+      (value) => value.name == j['viewAvailability'],
+      orElse: () => MediaViewAvailability.both,
+    ),
     thumbnailPath: j['thumbnailPath'] as String?,
     lyricsPath: j['lyricsPath'] as String?,
     translatedLyricsPath: j['translatedLyricsPath'] as String?,
@@ -322,6 +349,8 @@ class MediaItem {
         j['artworkLyricsOffsetFollowsVideo'] as bool? ?? true,
     artworkAudioMediaId: j['artworkAudioMediaId'] as String?,
     artworkAudioPath: j['artworkAudioPath'] as String?,
+    artworkAudioOffsetMs: (j['artworkAudioOffsetMs'] as num?)?.toInt() ?? 0,
+    artworkAudioEndMs: (j['artworkAudioEndMs'] as num?)?.toInt() ?? 0,
     lyricsButtonHidden: j['lyricsButtonHidden'] as bool? ?? false,
   );
 
@@ -344,6 +373,7 @@ class MediaItem {
     'sourceFolderId': sourceFolderId,
     'sourcePath': sourcePath,
     'artworkPath': artworkPath,
+    'viewAvailability': viewAvailability.name,
     'thumbnailPath': thumbnailPath,
     'lyricsPath': lyricsPath,
     'translatedLyricsPath': translatedLyricsPath,
@@ -357,6 +387,8 @@ class MediaItem {
     'artworkLyricsOffsetFollowsVideo': artworkLyricsOffsetFollowsVideo,
     'artworkAudioMediaId': artworkAudioMediaId,
     'artworkAudioPath': artworkAudioPath,
+    'artworkAudioOffsetMs': artworkAudioOffsetMs,
+    'artworkAudioEndMs': artworkAudioEndMs,
     'lyricsButtonHidden': lyricsButtonHidden,
   };
 }

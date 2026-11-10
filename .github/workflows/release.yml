@@ -101,6 +101,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libjson-glib-dev libmpv-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev
 
+      - name: Install Flatpak build tools
+        run: sudo apt-get install -y flatpak flatpak-builder
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -116,22 +119,53 @@ jobs:
       - name: Build Linux Release
         run: flutter build linux --release
 
+      - name: Include Linux package license texts
+        run: |
+          flutter_root="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")"
+          python3 tools/collect_linux_licenses.py --bundle build/linux/x64/release/bundle --flutter-root "$flutter_root"
+
       - name: Archive Linux Release
         run: |
-          tar -czvf build/Yureru-linux-x64.tar.gz -C build/linux/x64/release/bundle .
+          tar -czvf build/yureru-linux-x64.tar.gz -C build/linux/x64/release/bundle .
+
+      - name: Build cross-distro Flatpak
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive -y flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08 org.freedesktop.Platform.ffmpeg-full//26.08
+          rm -rf packaging/flatpak/bundle build/flatpak
+          cp -R build/linux/x64/release/bundle packaging/flatpak/bundle
+          flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=build/flatpak/repo build/flatpak/app packaging/flatpak/dev.yureru.yureru.yml
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo build/flatpak/repo build/yureru-linux-x86_64.flatpak dev.yureru.yureru stable
+
+      - name: Prepare version-pinned Homebrew formula
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 tools/render_homebrew_formula.py --version "${GITHUB_REF_NAME#v}" --archive build/yureru-linux-x64.tar.gz --output build/yureru.rb
 
       - name: Upload Linux build artifact
         uses: actions/upload-artifact@v4
         with:
           name: Yureru-linux-x64
-          path: build/Yureru-linux-x64.tar.gz
+          path: |
+            build/yureru-linux-x64.tar.gz
+            build/yureru-linux-x86_64.flatpak
+          if-no-files-found: error
+
+      - name: Upload version-pinned Homebrew formula artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yureru-homebrew-formula
+          path: build/yureru.rb
           if-no-files-found: error
 
       - name: Upload Linux Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: build/Yureru-linux-x64.tar.gz
+          files: |
+            build/yureru-linux-x64.tar.gz
+            build/yureru-linux-x86_64.flatpak
+            build/yureru.rb
 
   build-android:
     runs-on: ubuntu-latest

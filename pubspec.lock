@@ -2,7 +2,7 @@
 # See https://dart.dev/tools/pub/glossary#lockfile
 packages:
   archive:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: archive
       sha256: "6c5bcd986e06b94e3c40244af471750840a3d2341d1f9763a1100a14add517b4"
@@ -616,6 +616,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.1"
+  quickjs_engine:
+    dependency: "direct main"
+    description:
+      name: quickjs_engine
+      sha256: "76fd249a53e5505111596231d4667c464bb8f19d029dde53f5d13f37b6a6bffb"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.7"
   record_use:
     dependency: transitive
     description:
@@ -781,6 +789,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
+  sync_http:
+    dependency: transitive
+    description:
+      name: sync_http
+      sha256: "7f0cd72eca000d2e026bcd6f990b81d0ca06022ef4e32fb257b30d3d1014a961"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.1"
   synchronized:
     dependency: transitive
     description:

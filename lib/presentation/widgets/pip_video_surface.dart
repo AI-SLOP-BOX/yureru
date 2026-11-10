@@ -26,33 +26,52 @@ class PipVideoSurface extends ConsumerWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final shortestSide = constraints.biggest.shortestSide;
-        final iconSize = (shortestSide * 0.19).clamp(56.0, 136.0);
-        final fontSize = (constraints.maxWidth * 0.05).clamp(26.0, 34.0);
+        final size = constraints.biggest;
+        final shortestSide = size.shortestSide;
+        final iconSize = (shortestSide * 0.17).clamp(40.0, 112.0);
+        // PiP windows can be short even when they are fairly wide. Scale the
+        // notice from both dimensions so translated text stays inside the
+        // visible video surface instead of being clipped at the bottom.
+        final fontSize = (shortestSide * 0.055).clamp(14.0, 25.0);
         return ColoredBox(
           color: const Color(0xFF101010),
           child: Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.picture_in_picture_alt_rounded,
-                    color: Colors.white,
-                    size: iconSize,
-                  ),
-                  const SizedBox(height: 28),
-                  Text(
-                    ref.tr('pip_playing_message'),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: fontSize,
-                      height: 1.35,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: size.width,
+                maxHeight: size.height,
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: SizedBox(
+                  width: (size.width - 32).clamp(1.0, double.infinity),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 12,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.picture_in_picture_alt_rounded,
+                          color: Colors.white,
+                          size: iconSize,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          ref.tr('pip_playing_message'),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: fontSize,
+                            height: 1.25,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
+                ),
               ),
             ),
           ),

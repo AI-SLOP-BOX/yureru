@@ -20,6 +20,8 @@ import 'imported_media_screen.dart';
 import 'settings_library_screen.dart';
 import 'settings_lyrics_screen.dart';
 import 'licenses_screen.dart';
+import 'extensions_screen.dart';
+import 'appearance_colors_screen.dart';
 
 /// Settings page (center-pane body; shell owns chrome).
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -626,6 +628,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         description: ref.tr('settings_display_hint'),
         title: ref.tr('settings_display'),
         children: [
+          ListTile(
+            leading: const AppSvgIcon('settings_palette'),
+            title: Text(ref.tr('appearance_colors')),
+            subtitle: Text(ref.tr('appearance_colors_hint')),
+            trailing: const AppSvgIcon('chevron_right', size: 20),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            onTap: () => SettingsScreenActions.openAppearanceColors(context),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
             child: Column(
@@ -807,14 +817,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ],
           ),
-        ],
-      ),
-      _SettingsGroup(
-        id: 'settings_audio',
-        icon: 'settings_tune',
-        description: ref.tr('settings_audio_hint'),
-        title: ref.tr('settings_audio'),
-        children: [
           SwitchListTile.adaptive(
             key: const ValueKey('volume-normalization'),
             secondary: const Icon(Icons.equalizer_rounded),
@@ -823,7 +825,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               !supportsNormalization
                   ? ref.tr('normalization_unsupported')
                   : normalization.hasError
-                  ? '${ref.tr('normalization_failed')}\n${normalization.error}'
+                  ? ref.tr('normalization_failed')
                   : ref.tr('normalization_desc'),
             ),
             value: normalization.valueOrNull ?? false,
@@ -873,36 +875,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ],
       ),
-      _SettingsGroup(
-        id: 'settings_shortcuts',
-        icon: 'settings_tune',
-        description: ref.tr('settings_shortcuts_hint'),
-        title: ref.tr('settings_shortcuts'),
-        children: [
-          for (final action in AppShortcutAction.values)
-            ListTile(
-              title: Text(ref.tr(shortcutActionName(action))),
-              subtitle: Text(
-                ref
-                    .watch(keyboardShortcutsProvider)[action]!
-                    .label(macOS: Platform.isMacOS),
+      if (Platform.isMacOS || Platform.isWindows || Platform.isLinux)
+        _SettingsGroup(
+          id: 'settings_shortcuts',
+          icon: 'settings_tune',
+          description: ref.tr('settings_shortcuts_hint'),
+          title: ref.tr('settings_shortcuts'),
+          children: [
+            for (final action in AppShortcutAction.values)
+              ListTile(
+                title: Text(ref.tr(shortcutActionName(action))),
+                subtitle: Text(
+                  ref
+                      .watch(keyboardShortcutsProvider)[action]!
+                      .label(macOS: Platform.isMacOS),
+                ),
+                trailing: TextButton(
+                  onPressed: () => _editShortcut(action),
+                  child: Text(ref.tr('shortcut_change')),
+                ),
+                onTap: () => _editShortcut(action),
               ),
-              trailing: TextButton(
-                onPressed: () => _editShortcut(action),
-                child: Text(ref.tr('shortcut_change')),
+            const Divider(height: 1, indent: 16, endIndent: 16),
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: TextButton(
+                onPressed: ref.read(keyboardShortcutsProvider.notifier).reset,
+                child: Text(ref.tr('shortcut_reset')),
               ),
-              onTap: () => _editShortcut(action),
             ),
-          const Divider(height: 1, indent: 16, endIndent: 16),
-          Align(
-            alignment: AlignmentDirectional.centerEnd,
-            child: TextButton(
-              onPressed: ref.read(keyboardShortcutsProvider.notifier).reset,
-              child: Text(ref.tr('shortcut_reset')),
-            ),
-          ),
-        ],
-      ),
+          ],
+        ),
       _SettingsGroup(
         id: 'settings_app',
         icon: 'settings_info',
@@ -973,6 +976,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             trailing: const AppSvgIcon('chevron_right', size: 20),
             contentPadding: const EdgeInsets.symmetric(horizontal: 16),
             onTap: () => SettingsScreenActions.openLicenses(context),
+          ),
+          ListTile(
+            leading: const Icon(Icons.extension_outlined),
+            title: Text(ref.tr('extensions')),
+            subtitle: Text(ref.tr('extensions_intro')),
+            trailing: const AppSvgIcon('chevron_right', size: 20),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            onTap: () => SettingsScreenActions.openExtensions(context),
           ),
         ],
       ),
@@ -1260,7 +1271,7 @@ class _SettingsDropdown<T> extends StatelessWidget {
         items: items,
         onChanged: onChanged,
         borderRadius: BorderRadius.circular(12),
-        dropdownColor: isDark ? kPanelSolid : Colors.white,
+        dropdownColor: Theme.of(context).colorScheme.surfaceContainerLow,
         style: TextStyle(color: isDark ? kTextPrimary : Colors.black87),
         icon: const AppSvgIcon('chevron_down', size: 20),
       ),
@@ -1600,5 +1611,17 @@ class SettingsScreenActions {
     Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const LicensesScreen()));
+  }
+
+  static void openExtensions(BuildContext context) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const ExtensionsScreen()));
+  }
+
+  static void openAppearanceColors(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const AppearanceColorsScreen()),
+    );
   }
 }

@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../../library/media_order.dart';
@@ -13,6 +16,8 @@ import '../widgets/duration_text.dart';
 import '../widgets/app_svg_icon.dart';
 import '../widgets/page_header.dart';
 import '../widgets/thumb_image.dart';
+import '../widgets/track_actions.dart';
+import '../widgets/unsaved_changes_guard.dart';
 
 bool _sharesCreator(String? mediaCredit, String selectedCredit) {
   final selectedNames = splitCreatorNames(
@@ -23,6 +28,26 @@ bool _sharesCreator(String? mediaCredit, String selectedCredit) {
     mediaCredit,
   ).map((name) => name.toLowerCase()).toSet();
   return mediaNames.intersection(selectedNames).isNotEmpty;
+}
+
+/// Keep repeated records for the same library file out of the all-tracks list.
+/// Use paths/IDs only: distinct files with the same title remain separate.
+List<MediaItem> _uniqueLibraryTracks(Iterable<MediaItem> media) {
+  final seenIds = <String>{};
+  final seenPaths = <String>{};
+  final unique = <MediaItem>[];
+  for (final item in media) {
+    final paths = [item.sourcePath, item.localPath]
+        .whereType<String>()
+        .map((path) => path.trim())
+        .where((path) => path.isNotEmpty)
+        .toSet();
+    if (seenIds.contains(item.id) || paths.any(seenPaths.contains)) continue;
+    seenIds.add(item.id);
+    seenPaths.addAll(paths);
+    unique.add(item);
+  }
+  return unique;
 }
 
 /// "すべての動画": Clean modern table view with track index, hover play preview,
@@ -61,6 +86,8 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
   Timer? _highlightTimer;
   String? _highlightedId;
   String? _scheduledRequestId;
+  bool _selectionMode = false;
+  final Set<String> _selectedMediaIds = <String>{};
 
   @override
   void dispose() {
@@ -76,6 +103,333 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
     ref.read(playbackControllerProvider).openCurrent();
   }
 
+  void _toggleSelection(String mediaId) {
+    setState(() {
+      _selectionMode = true;
+      if (!_selectedMediaIds.add(mediaId)) {
+        _selectedMediaIds.remove(mediaId);
+      }
+    });
+  }
+
+  void _selectAllVisible(List<MediaItem> items) {
+    setState(() {
+      _selectionMode = true;
+      _selectedMediaIds.addAll(items.map((media) => media.id));
+    });
+  }
+
+  void _leaveSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedMediaIds.clear();
+    });
+  }
+
+  Future<void> _addSelectionToPlaylist(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final library = ref.read(libraryProvider);
+    if (_selectedMediaIds.isEmpty) return;
+    if (library.playlists.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(ref.tr('empty_playlist'))));
+      return;
+    }
+    final playlist = await showModalBottomSheet<Playlist>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
+              child: Text(
+                ref.tr('add_playlist'),
+                style: Theme.of(
+                  sheetContext,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            for (final item in library.playlists)
+              ListTile(
+                leading: const Icon(Icons.playlist_play_rounded),
+                title: Text(displayTitle(item.name)),
+                onTap: () => Navigator.pop(sheetContext, item),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (playlist == null || !context.mounted) return;
+    try {
+      final currentLibrary = ref.read(libraryProvider);
+      final selectedIds = _selectedMediaIds
+          .where(
+            (id) => currentLibrary.savedMedia.any((media) => media.id == id),
+          )
+          .toList(growable: false);
+      if (selectedIds.isEmpty) {
+        _leaveSelectionMode();
+        return;
+      }
+      final count = selectedIds.length;
+      await ref
+          .read(libraryProvider.notifier)
+          .addMediaToPlaylist(playlist.id, selectedIds);
+      if (!context.mounted) return;
+      _leaveSelectionMode();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${ref.tr('added_to_playlist').replaceAll('{name}', displayTitle(playlist.name))} · ${ref.tracksCount(count)}',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(ref.tr('add_to_playlist_failed'))));
+    }
+  }
+
+  Future<void> _addSelectionToAlbum(BuildContext context, WidgetRef ref) async {
+    final library = ref.read(libraryProvider);
+    final selectedIds = _selectedMediaIds
+        .where((id) => library.savedMedia.any((media) => media.id == id))
+        .toList(growable: false);
+    if (selectedIds.isEmpty) return;
+    final selectedMedia = library.savedMedia
+        .where((media) => selectedIds.contains(media.id))
+        .toList(growable: false);
+    final creators = selectedMedia
+        .map((media) => (media.albumArtist ?? media.artist ?? '').trim())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final albumController = TextEditingController();
+    final initialAlbumArtist = creators.length == 1
+        ? creators.first
+        : ref.tr('various_artists');
+    final albumArtistController = TextEditingController(
+      text: initialAlbumArtist,
+    );
+    String? artworkSourcePath;
+    final result = await showDialog<(String, String, String?)>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final hasDraft =
+              albumController.text.isNotEmpty ||
+              albumArtistController.text != initialAlbumArtist ||
+              artworkSourcePath != null;
+          return PopScope<Object?>(
+            canPop: !hasDraft,
+            onPopInvokedWithResult: (didPop, _) async {
+              if (!didPop &&
+                  hasDraft &&
+                  await confirmDiscardUnsavedChanges(context, ref.tr) &&
+                  dialogContext.mounted) {
+                Navigator.pop(dialogContext);
+              }
+            },
+            child: AlertDialog(
+              title: Text(ref.tr('add_to_album')),
+              content: SizedBox(
+                width: 420,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        ref
+                            .tr('batch_count')
+                            .replaceAll('{count}', '${selectedIds.length}'),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        autofocus: true,
+                        controller: albumController,
+                        onChanged: (_) => setDialogState(() {}),
+                        decoration: InputDecoration(
+                          labelText: ref.tr('album'),
+                          border: const OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: albumArtistController,
+                        onChanged: (_) => setDialogState(() {}),
+                        decoration: InputDecoration(
+                          labelText: ref.tr('album_artist'),
+                          border: const OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked = await FilePicker.platform.pickFiles(
+                            type: FileType.image,
+                            allowMultiple: false,
+                          );
+                          final path = picked?.files.single.path;
+                          if (path == null) return;
+                          setDialogState(() => artworkSourcePath = path);
+                        },
+                        icon: const Icon(Icons.image_outlined),
+                        label: Text(
+                          artworkSourcePath == null
+                              ? ref.tr('choose_album_artwork')
+                              : File(artworkSourcePath!).uri.pathSegments.last,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        ref.tr('album_artwork_hint'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    if (hasDraft &&
+                        !await confirmDiscardUnsavedChanges(context, ref.tr)) {
+                      return;
+                    }
+                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                  },
+                  child: Text(ref.tr('cancel')),
+                ),
+                FilledButton(
+                  onPressed:
+                      albumController.text.trim().isEmpty ||
+                          albumArtistController.text.trim().isEmpty
+                      ? null
+                      : () {
+                          final album = albumController.text.trim();
+                          final artist = albumArtistController.text.trim();
+                          Navigator.pop(dialogContext, (
+                            album,
+                            artist,
+                            artworkSourcePath,
+                          ));
+                        },
+                  child: Text(ref.tr('save')),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    albumController.dispose();
+    albumArtistController.dispose();
+    if (result == null || !context.mounted) return;
+
+    String? managedArtworkPath;
+    try {
+      if (result.$3 != null) {
+        final support = await getApplicationSupportDirectory();
+        final artworkDirectory = Directory('${support.path}/yureru_artwork');
+        await artworkDirectory.create(recursive: true);
+        final extension = result.$3!.split('.').last.toLowerCase();
+        managedArtworkPath =
+            '${artworkDirectory.path}/album_${DateTime.now().microsecondsSinceEpoch}.$extension';
+        await File(result.$3!).copy(managedArtworkPath);
+      }
+      await ref
+          .read(libraryProvider.notifier)
+          .updateMediaAlbumBatch(
+            selectedIds,
+            album: result.$1,
+            albumArtist: result.$2,
+            artworkPath: managedArtworkPath,
+          );
+      if (!context.mounted) return;
+      _leaveSelectionMode();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${ref.tr('album_added')} · ${ref.tracksCount(selectedIds.length)}',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (managedArtworkPath != null) {
+        try {
+          await File(managedArtworkPath).delete();
+        } catch (_) {}
+      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(ref.tr('batch_save_failed'))));
+    }
+  }
+
+  Future<void> _addMediaToPlaylist(
+    BuildContext context,
+    WidgetRef ref,
+    MediaItem media,
+  ) async {
+    final playlists = ref.read(libraryProvider).playlists;
+    if (playlists.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(ref.tr('empty_playlist'))));
+      return;
+    }
+    final playlist = await showModalBottomSheet<Playlist>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Text(
+                ref.tr('add_playlist'),
+                style: Theme.of(sheetContext).textTheme.titleMedium,
+              ),
+            ),
+            for (final item in playlists)
+              ListTile(
+                leading: const Icon(Icons.playlist_play_rounded),
+                title: Text(displayTitle(item.name)),
+                onTap: () => Navigator.pop(sheetContext, item),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (playlist == null || !context.mounted) return;
+    await ref
+        .read(libraryProvider.notifier)
+        .addToPlaylist(playlist.id, media.id);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ref
+                .tr('added_to_playlist')
+                .replaceAll('{name}', displayTitle(playlist.name)),
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ref = this.ref;
@@ -86,7 +440,7 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
     final favoritesOnly = ref.watch(favoritesOnlyProvider);
     final currentId = ref.watch(queueProvider.select((q) => q.currentId));
     if (!lib.loaded) return const Center(child: CircularProgressIndicator());
-    final items = lib.savedMedia
+    final items = _uniqueLibraryTracks(lib.savedMedia)
         .where(
           (m) =>
               (!favoritesOnly || m.isFavorite) &&
@@ -224,6 +578,71 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
                       ),
                     ),
                   ),
+                  IconButton(
+                    tooltip: ref.tr('shuffle'),
+                    icon: const Icon(Icons.shuffle_rounded, size: 20),
+                    onPressed: ids.isEmpty
+                        ? null
+                        : () {
+                            showPlayerView(ref);
+                            ref
+                                .read(queueProvider.notifier)
+                                .start(ids, shuffle: true);
+                            ref.read(playbackControllerProvider).openCurrent();
+                          },
+                  ),
+                  IconButton(
+                    tooltip: ref.tr('play'),
+                    icon: const Icon(Icons.play_arrow_rounded),
+                    onPressed: ids.isEmpty
+                        ? null
+                        : () => _playFromHere(ref, ids, 0),
+                  ),
+                  IconButton(
+                    tooltip: ref.tr(
+                      _selectionMode ? 'select_all' : 'select_multiple',
+                    ),
+                    icon: _selectionMode
+                        ? const Icon(Icons.select_all_rounded)
+                        : AppSvgIcon(
+                            'collection_select',
+                            size: 20,
+                            color: themeTextSub(context),
+                          ),
+                    onPressed: _selectionMode
+                        ? () => _selectAllVisible(items)
+                        : () => setState(() => _selectionMode = true),
+                  ),
+                  if (_selectionMode) ...[
+                    Chip(
+                      label: Text(
+                        ref
+                            .tr('selected_count')
+                            .replaceAll(
+                              '{count}',
+                              '${_selectedMediaIds.length}',
+                            ),
+                      ),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: _selectedMediaIds.isEmpty
+                          ? null
+                          : () => _addSelectionToPlaylist(context, ref),
+                      icon: const Icon(Icons.playlist_add_rounded, size: 18),
+                      label: Text(ref.tr('add_playlist')),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: _selectedMediaIds.isEmpty
+                          ? null
+                          : () => _addSelectionToAlbum(context, ref),
+                      icon: const Icon(Icons.album_outlined, size: 18),
+                      label: Text(ref.tr('add_to_album')),
+                    ),
+                    TextButton(
+                      onPressed: _leaveSelectionMode,
+                      child: Text(ref.tr('cancel')),
+                    ),
+                  ],
                   if (creatorFilter != null)
                     InputChip(
                       label: Text(
@@ -258,7 +677,10 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
                 ],
               ),
             ),
-            if (sort == VideosSort.manual && !filtered && items.isNotEmpty)
+            if (sort == VideosSort.manual &&
+                !filtered &&
+                items.isNotEmpty &&
+                !_selectionMode)
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
                 child: Text(
@@ -311,7 +733,9 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 48), // menu space
+                    SizedBox(
+                      width: sort == VideosSort.manual ? 104 : 48,
+                    ), // reorder and menu space
                   ],
                 ),
               ),
@@ -367,9 +791,11 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
                   : sort == VideosSort.manual &&
                         !favoritesOnly &&
                         query.isEmpty &&
-                        creatorFilter == null
+                        creatorFilter == null &&
+                        !_selectionMode
                   ? ReorderableListView.builder(
                       scrollController: _scrollController,
+                      buildDefaultDragHandles: false,
                       padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
                       itemCount: items.length,
                       onReorder: (oldIndex, newIndex) {
@@ -428,19 +854,30 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
         playing: playing,
         highlighted: m.id == _highlightedId,
         reorderable: reorderable,
+        selectionMode: _selectionMode,
+        selected: _selectedMediaIds.contains(m.id),
+        onToggleSelection: () => _toggleSelection(m.id),
         onPlay: () => _playFromHere(ref, ids, i),
         onPlayNext: () {
           final wasEmpty = !ref.read(queueProvider).hasCurrent;
           ref.read(queueProvider.notifier).playNext(m.id);
           if (wasEmpty) ref.read(playbackControllerProvider).openCurrent();
         },
+        onAddToPlaylist: () => _addMediaToPlaylist(context, ref, m),
+        onOpenArtist: () {
+          final artist = m.artist?.trim();
+          if (artist == null || artist.isEmpty) return;
+          ref.read(creatorVideosRequestProvider.notifier).state = artist;
+        },
       ),
     );
-    if (!reorderable) return row;
-    return KeyedSubtree(
-      key: ValueKey('video-${m.id}'),
-      child: ReorderableDelayedDragStartListener(index: i, child: row),
+    final contextualRow = TrackContextMenuRegion(
+      ref: ref,
+      media: m,
+      child: row,
     );
+    if (!reorderable) return contextualRow;
+    return KeyedSubtree(key: ValueKey('video-${m.id}'), child: contextualRow);
   }
 }
 
@@ -450,16 +887,26 @@ class _TrackRow extends ConsumerStatefulWidget {
   final MediaItem media;
   final bool playing;
   final bool highlighted;
+  final bool selectionMode;
+  final bool selected;
   final VoidCallback onPlay;
   final VoidCallback onPlayNext;
+  final VoidCallback onAddToPlaylist;
+  final VoidCallback onOpenArtist;
+  final VoidCallback onToggleSelection;
 
   const _TrackRow({
     required this.index,
     required this.media,
     required this.playing,
     required this.highlighted,
+    required this.selectionMode,
+    required this.selected,
     required this.onPlay,
     required this.onPlayNext,
+    required this.onAddToPlaylist,
+    required this.onOpenArtist,
+    required this.onToggleSelection,
     this.reorderable = false,
   });
 
@@ -469,6 +916,18 @@ class _TrackRow extends ConsumerStatefulWidget {
 
 class _TrackRowState extends ConsumerState<_TrackRow> {
   bool _hover = false;
+
+  Widget _reorderHandle(BuildContext context) => SizedBox(
+    width: 44,
+    height: 44,
+    child: Center(
+      child: AppSvgIcon(
+        'playlist_reorder',
+        size: 16,
+        color: themeTextSub(context).withValues(alpha: 0.72),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -481,16 +940,51 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 560;
+        final thumbnail = ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: SizedBox(
+            width: compact ? 44 : 54,
+            height: compact ? 44 : 34,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ThumbImage(
+                  seed: widget.media.title,
+                  mediaId: widget.media.id,
+                  localPath: widget.media.localPath,
+                  imageContext: MediaImageContext.home,
+                ),
+                if (widget.playing)
+                  Container(
+                    color: Colors.black.withValues(alpha: 0.3),
+                    child: const Center(
+                      child: AppSvgIcon(
+                        'volume',
+                        size: 16,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
         return MouseRegion(
           onEnter: (_) => setState(() => _hover = true),
           onExit: (_) => setState(() => _hover = false),
           cursor: SystemMouseCursors.click,
           child: Semantics(
             button: true,
-            selected: widget.playing,
-            label: widget.playing ? ref.tr('videos_current_track') : null,
+            selected: widget.selectionMode ? widget.selected : widget.playing,
+            label: widget.selectionMode
+                ? ref.tr('select_multiple')
+                : widget.playing
+                ? ref.tr('videos_current_track')
+                : null,
             child: GestureDetector(
-              onTap: widget.onPlay,
+              onTap: widget.selectionMode
+                  ? widget.onToggleSelection
+                  : widget.onPlay,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 padding: const EdgeInsets.symmetric(
@@ -498,19 +992,29 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                   vertical: 8,
                 ),
                 decoration: BoxDecoration(
-                  color: _hover
+                  color: widget.selected
+                      ? themeAccent(
+                          context,
+                        ).withValues(alpha: isDark ? 0.2 : 0.12)
+                      : _hover
                       ? rowHoverColor
                       : (widget.highlighted
-                            ? kAccent.withValues(alpha: isDark ? 0.24 : 0.18)
+                            ? themeAccent(
+                                context,
+                              ).withValues(alpha: isDark ? 0.24 : 0.18)
                             : (widget.playing
                                   ? (isDark
-                                        ? kAccent.withValues(alpha: 0.12)
-                                        : kAccent.withValues(alpha: 0.08))
+                                        ? themeAccent(
+                                            context,
+                                          ).withValues(alpha: 0.12)
+                                        : themeAccent(
+                                            context,
+                                          ).withValues(alpha: 0.08))
                                   : Colors.transparent)),
                   boxShadow: widget.highlighted
                       ? [
                           BoxShadow(
-                            color: kAccent.withValues(alpha: 0.28),
+                            color: themeAccent(context).withValues(alpha: 0.28),
                             blurRadius: 16,
                             spreadRadius: 1,
                           ),
@@ -521,21 +1025,26 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                 child: Row(
                   children: [
                     // Index stays on wide rows; artwork identifies compact rows.
-                    if (!compact) ...[
+                    if (widget.selectionMode)
+                      Checkbox(
+                        value: widget.selected,
+                        onChanged: (_) => widget.onToggleSelection(),
+                      )
+                    else if (!compact) ...[
                       SizedBox(
                         width: 32,
                         child: Center(
                           child: widget.playing
-                              ? const AppSvgIcon(
+                              ? AppSvgIcon(
                                   'equalizer',
                                   size: 20,
-                                  color: kAccent,
+                                  color: themeAccent(context),
                                 )
                               : (_hover
-                                    ? const AppSvgIcon(
+                                    ? AppSvgIcon(
                                         'play',
                                         size: 24,
-                                        color: kAccent,
+                                        color: themeAccent(context),
                                       )
                                     : Text(
                                         '${widget.index}',
@@ -551,36 +1060,7 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                       ),
                       const SizedBox(width: 12),
                     ],
-                    // Thumbnail
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: SizedBox(
-                        width: compact ? 44 : 54,
-                        height: compact ? 44 : 34,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            ThumbImage(
-                              seed: widget.media.title,
-                              mediaId: widget.media.id,
-                              localPath: widget.media.localPath,
-                              imageContext: MediaImageContext.home,
-                            ),
-                            if (widget.playing)
-                              Container(
-                                color: Colors.black.withValues(alpha: 0.3),
-                                child: const Center(
-                                  child: AppSvgIcon(
-                                    'volume',
-                                    size: 16,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    thumbnail,
                     const SizedBox(width: 14),
                     // Title & details
                     Expanded(
@@ -602,7 +1082,7 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                                         : FontWeight.w500,
                                     color: widget.playing
                                         ? (isDark
-                                              ? kAccentLight
+                                              ? themeAccentHighlight(context)
                                               : const Color(0xFF333333))
                                         : (isDark
                                               ? Colors.white
@@ -666,74 +1146,107 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                       ),
                       const SizedBox(width: 8),
                     ],
-                    if (widget.reorderable && !compact)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: AppSvgIcon(
-                          'drag',
+                    if (widget.reorderable)
+                      Tooltip(
+                        message: ref.tr('drag_to_reorder'),
+                        child: compact
+                            ? ReorderableDelayedDragStartListener(
+                                index: widget.index - 1,
+                                child: _reorderHandle(context),
+                              )
+                            : ReorderableDragStartListener(
+                                index: widget.index - 1,
+                                child: _reorderHandle(context),
+                              ),
+                      ),
+                    if (!widget.selectionMode) ...[
+                      if (widget.reorderable) const SizedBox(width: 12),
+                      // Action menu
+                      PopupMenuButton<String>(
+                        tooltip: ref.tr('menu'),
+                        icon: AppSvgIcon(
+                          'more_horizontal',
                           size: 20,
-                          color: isDark ? kTextMuted : Colors.black38,
+                          color: _hover
+                              ? (isDark ? Colors.white : Colors.black87)
+                              : themeTextSub(context),
                         ),
-                      ),
-                    IconButton(
-                      key: ValueKey('video-play-next-${widget.media.id}'),
-                      tooltip: ref.tr('add_next'),
-                      visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
-                      ),
-                      padding: EdgeInsets.zero,
-                      icon: Icon(
-                        Icons.arrow_forward_rounded,
-                        size: 20,
-                        color: _hover
-                            ? (isDark ? Colors.white : Colors.black87)
-                            : themeTextSub(context),
-                      ),
-                      onPressed: widget.onPlayNext,
-                    ),
-                    // Action menu
-                    PopupMenuButton<String>(
-                      tooltip: ref.tr('menu'),
-                      icon: AppSvgIcon(
-                        'more_horizontal',
-                        size: 20,
-                        color: _hover
-                            ? (isDark ? Colors.white : Colors.black87)
-                            : themeTextSub(context),
-                      ),
-                      onSelected: (v) {
-                        if (v == 'favorite') {
-                          ref
-                              .read(libraryProvider.notifier)
-                              .toggleFavorite(widget.media.id);
-                        }
-                      },
-                      itemBuilder: (_) => [
-                        PopupMenuItem(
-                          value: 'favorite',
-                          child: Row(
-                            children: [
-                              AppSvgIcon(
-                                widget.media.isFavorite
-                                    ? 'favorite_filled'
-                                    : 'favorite',
-                                size: 20,
-                              ),
-                              const SizedBox(width: 10),
-                              Text(
-                                ref.tr(
-                                  widget.media.isFavorite
-                                      ? 'remove_favorite'
-                                      : 'add_favorite',
-                                ),
-                              ),
-                            ],
+                        onSelected: (v) {
+                          if (v == 'play_next') {
+                            widget.onPlayNext();
+                          } else if (v == 'add_playlist') {
+                            widget.onAddToPlaylist();
+                          } else if (v == 'open_artist') {
+                            widget.onOpenArtist();
+                          } else if (v == 'favorite') {
+                            ref
+                                .read(libraryProvider.notifier)
+                                .toggleFavorite(widget.media.id);
+                          }
+                        },
+                        itemBuilder: (_) => [
+                          PopupMenuItem(
+                            value: 'play_next',
+                            child: Row(
+                              children: [
+                                const AppSvgIcon('play_next', size: 20),
+                                const SizedBox(width: 10),
+                                Text(ref.tr('add_next')),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
+                          PopupMenuItem(
+                            value: 'add_playlist',
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.playlist_add_rounded,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 10),
+                                Text(ref.tr('add_playlist')),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuDivider(),
+                          PopupMenuItem(
+                            value: 'favorite',
+                            child: Row(
+                              children: [
+                                AppSvgIcon(
+                                  widget.media.isFavorite
+                                      ? 'favorite_filled'
+                                      : 'favorite',
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  ref.tr(
+                                    widget.media.isFavorite
+                                        ? 'remove_favorite'
+                                        : 'add_favorite',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (widget.media.artist?.trim().isNotEmpty == true)
+                            PopupMenuItem(
+                              value: 'open_artist',
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.person_outline_rounded,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Text(ref.tr('open_artist_videos')),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

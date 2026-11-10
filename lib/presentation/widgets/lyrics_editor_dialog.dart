@@ -14,6 +14,7 @@ import '../../app_state.dart';
 import '../../data/lyrics.dart';
 import '../../data/importer.dart' show isVideoPath;
 import '../../domain/models.dart';
+import '../../playback/playback_controller.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
 import '../theme.dart';
@@ -32,6 +33,7 @@ class LyricsEditorDialog extends ConsumerStatefulWidget {
     this.initialSynchronized = true,
     this.inline = false,
     this.advancedLrcTools = false,
+    this.fullScreen = false,
     this.onCancel,
   });
 
@@ -45,6 +47,7 @@ class LyricsEditorDialog extends ConsumerStatefulWidget {
   final bool initialSynchronized;
   final bool inline;
   final bool advancedLrcTools;
+  final bool fullScreen;
   final VoidCallback? onCancel;
 
   @override
@@ -90,16 +93,21 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
   late final TextEditingController _plainText;
   late bool _synchronized;
   bool _saving = false;
+  bool _allowRoutePop = false;
   double? _seekSliderPositionMs;
   int _selectedRowIndex = 0;
+  bool _initialWideScrollPending = true;
   final List<_LyricsSnapshot> _undoHistory = [];
   final List<_LyricsSnapshot> _redoHistory = [];
   Timer? _historyTimer;
+  final ScrollController _lyricsScrollController = ScrollController();
+  StreamSubscription<PlaybackSnapshot>? _lyricsFollowSubscription;
   late _LyricsSnapshot _lastHistorySnapshot;
+  late String _savedDraftFingerprint;
   bool _restoringHistory = false;
   String? _waveformPath;
   bool _waveformLoading = false;
-  int _timeNudgeMs = 10;
+  int _timeNudgeMs = 100;
   double _waveformZoom = 1;
   double? _waveformCenterMs;
 
@@ -112,16 +120,24 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
       text: _rows.map((row) => row.lyric.text).join('\n'),
     );
     if (_rows.isEmpty) _rows.add(_LyricDraft(null, ''));
+    _savedDraftFingerprint = _draftFingerprint();
     _lastHistorySnapshot = _takeHistorySnapshot();
     if (widget.advancedLrcTools) _attachHistoryListeners(_rows);
     if (_synchronized && widget.advancedLrcTools) {
       unawaited(_loadWaveform());
+    }
+    if (widget.fullScreen) {
+      _lyricsFollowSubscription = widget.engine.snapshots.listen(
+        _followPlaybackTime,
+      );
     }
   }
 
   @override
   void dispose() {
     _historyTimer?.cancel();
+    unawaited(_lyricsFollowSubscription?.cancel());
+    _lyricsScrollController.dispose();
     for (final row in _rows) {
       row.dispose();
     }
@@ -135,6 +151,57 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     ),
     _selectedRowIndex,
   );
+
+  String _draftFingerprint() => jsonEncode([
+    _synchronized,
+    _synchronized
+        ? _rows.map((row) => [row.time.text, row.lyric.text]).toList()
+        : _plainText.text,
+  ]);
+
+  bool get _hasUnsavedChanges => _draftFingerprint() != _savedDraftFingerprint;
+
+  Future<void> _requestClose({bool popRouteAfterClose = false}) async {
+    if (_saving) return;
+    if (_hasUnsavedChanges) {
+      final discard = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(ref.tr('unsaved_changes_title')),
+          content: Text(ref.tr('unsaved_changes_message')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(ref.tr('keep_editing')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(ref.tr('discard_changes')),
+            ),
+          ],
+        ),
+      );
+      if (discard != true || !mounted) return;
+    }
+    if (widget.inline) {
+      if (popRouteAfterClose) {
+        setState(() => _allowRoutePop = true);
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
+      }
+      final navigator = Navigator.of(context);
+      widget.onCancel?.call();
+      if (popRouteAfterClose) {
+        await WidgetsBinding.instance.endOfFrame;
+        await navigator.maybePop();
+      }
+      return;
+    }
+    setState(() => _allowRoutePop = true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) Navigator.of(context).pop();
+  }
 
   void _attachHistoryListeners(Iterable<_LyricDraft> rows) {
     if (!widget.advancedLrcTools) return;
@@ -246,7 +313,7 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
       await cache.create(recursive: true);
       final safeId = widget.media.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
       final output = File(
-        '${cache.path}/${safeId}_${stat.size}_${stat.modified.millisecondsSinceEpoch}.png',
+        '${cache.path}/${safeId}_${stat.size}_${stat.modified.millisecondsSinceEpoch}_waveform_v2.png',
       );
       if (!await output.exists()) {
         final session = await FFmpegKit.executeWithArguments([
@@ -255,7 +322,7 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
           '-i',
           inputPath,
           '-filter_complex',
-          '[0:a:0]aformat=channel_layouts=mono,showwavespic=s=1600x88:colors=0xB05D48:scale=sqrt:filter=peak,format=rgba,colorkey=0x000000:0.01:0.0[v]',
+          '[0:a:0]aformat=channel_layouts=mono,showwavespic=s=2400x160:colors=0xE58165:scale=lin:filter=average,format=rgba,colorkey=0x000000:0.01:0.0[v]',
           '-map',
           '[v]',
           '-frames:v',
@@ -277,12 +344,24 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     }
   }
 
-  void _nudgeRowTime(_LyricDraft row, int milliseconds) {
+  Future<void> _nudgeRowTime(_LyricDraft row, int milliseconds) async {
     final current = parseLyricsTimestamp(row.time.text);
     if (current == null) return;
     _flushHistoryCapture();
     final next = current + Duration(milliseconds: milliseconds);
     row.time.text = _formatTime(next.isNegative ? Duration.zero : next);
+    await _seekToRow(row);
+    if (mounted) setState(() {});
+  }
+
+  String _formatNudgeDuration(int milliseconds) {
+    if (milliseconds < 1000) {
+      return milliseconds % 100 == 0
+          ? '${(milliseconds / 1000).toStringAsFixed(1)}秒'
+          : '${milliseconds}ms';
+    }
+    final seconds = milliseconds / 1000;
+    return '${seconds.toStringAsFixed(seconds == seconds.roundToDouble() ? 0 : 1)}秒';
   }
 
   Future<void> _seekToRow(_LyricDraft row) async {
@@ -355,6 +434,16 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     if (latestBeforeCurrent != -1) targetIndex = latestBeforeCurrent;
     final row = _rows[targetIndex];
     setState(() => _selectedRowIndex = targetIndex);
+    if (_lyricsScrollController.hasClients) {
+      _lyricsScrollController.animateTo(
+        (targetIndex * 208.0)
+            .clamp(0.0, _lyricsScrollController.position.maxScrollExtent)
+            .toDouble(),
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+      );
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final rowContext = row.rowKey.currentContext;
       if (rowContext != null) {
@@ -365,6 +454,48 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
           alignment: 0.25,
         );
       }
+    });
+  }
+
+  void _followPlaybackTime(PlaybackSnapshot playback) {
+    if (!mounted || !_synchronized || _rows.isEmpty) return;
+    final media =
+        ref.read(libraryProvider).byId(widget.media.id) ?? widget.media;
+    final currentTime = lyricTimestampAtPlaybackPosition(
+      playback.position,
+      offset: Duration(
+        milliseconds: media.lyricsOffsetForView(
+          artwork: widget.viewMode == PlayerViewMode.image,
+        ),
+      ),
+    );
+    var nextIndex = -1;
+    Duration? latestTime;
+    for (var index = 0; index < _rows.length; index++) {
+      final time = parseLyricsTimestamp(_rows[index].time.text);
+      if (time == null || time > currentTime) continue;
+      if (latestTime == null || time > latestTime) {
+        latestTime = time;
+        nextIndex = index;
+      }
+    }
+    if (nextIndex == -1 && playback.position <= Duration.zero) {
+      nextIndex = _rows.indexWhere(
+        (row) => parseLyricsTimestamp(row.time.text) != null,
+      );
+    }
+    if (nextIndex < 0 || nextIndex == _selectedRowIndex) return;
+    setState(() => _selectedRowIndex = nextIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_lyricsScrollController.hasClients) return;
+      final target = (nextIndex * 208.0)
+          .clamp(0.0, _lyricsScrollController.position.maxScrollExtent)
+          .toDouble();
+      _lyricsScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
     });
   }
 
@@ -391,6 +522,93 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     });
     _commitStructuralChange();
     _focusRow(next);
+  }
+
+  void _splitLyricAtCursor(int index) {
+    if (index < 0 || index >= _rows.length) return;
+    _flushHistoryCapture();
+
+    final current = _rows[index];
+    final text = current.lyric.text;
+    final selection = current.lyric.selection.isValid
+        ? current.lyric.selection
+        : TextSelection.collapsed(offset: text.length);
+    final start = selection.start.clamp(0, text.length);
+    final end = selection.end.clamp(start, text.length);
+    final next = _LyricDraft(null, text.substring(end));
+
+    // Keep Enter from becoming another keystroke in the current lyric after
+    // splitting it; the next edit target is the newly inserted row.
+    current.lyric.removeListener(_scheduleHistoryCapture);
+    current.lyric.value = TextEditingValue(
+      text: text.substring(0, start),
+      selection: TextSelection.collapsed(offset: start),
+    );
+    current.lyric.addListener(_scheduleHistoryCapture);
+    _attachHistoryListeners([next]);
+    setState(() {
+      _rows.insert(index + 1, next);
+      _selectedRowIndex = index + 1;
+    });
+    _commitStructuralChange();
+    _focusRow(next);
+  }
+
+  void _splitInsertedNewlines(int index, String value) {
+    if (index < 0 || index >= _rows.length || !value.contains('\n')) return;
+    final current = _rows[index];
+    final editingValue = current.lyric.value;
+    if (editingValue.composing.isValid && !editingValue.composing.isCollapsed) {
+      return;
+    }
+
+    final normalized = value.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final parts = normalized.split('\n');
+    if (parts.length < 2) return;
+    final cursor = editingValue.selection.isValid
+        ? editingValue.selection.extentOffset.clamp(0, normalized.length)
+        : normalized.length;
+    var cursorRow = 0;
+    var cursorColumn = cursor;
+    var consumed = 0;
+    for (var i = 0; i < parts.length; i++) {
+      final nextConsumed = consumed + parts[i].length;
+      if (cursor <= nextConsumed || i == parts.length - 1) {
+        cursorRow = i;
+        cursorColumn = (cursor - consumed).clamp(0, parts[i].length);
+        break;
+      }
+      consumed = nextConsumed + 1;
+    }
+
+    _historyTimer?.cancel();
+    if (widget.advancedLrcTools) _pushUndo(_lastHistorySnapshot);
+    current.lyric.removeListener(_scheduleHistoryCapture);
+    current.lyric.value = TextEditingValue(
+      text: parts.first,
+      selection: TextSelection.collapsed(offset: parts.first.length),
+    );
+    current.lyric.addListener(_scheduleHistoryCapture);
+
+    final inserted = parts
+        .skip(1)
+        .map((part) => _LyricDraft(null, part))
+        .toList();
+    _attachHistoryListeners(inserted);
+    setState(() {
+      _rows.insertAll(index + 1, inserted);
+      _selectedRowIndex = index + cursorRow;
+    });
+    _lastHistorySnapshot = _takeHistorySnapshot();
+    final target = _rows[_selectedRowIndex];
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      target.lyric.selection = TextSelection.collapsed(
+        offset: cursorColumn.clamp(0, target.lyric.text.length),
+      );
+      target.focusNode.requestFocus();
+      _scrollRowIntoView(target);
+    });
   }
 
   void _selectRow(int index, {bool focusLyrics = false}) {
@@ -465,6 +683,11 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     await widget.engine.seekTo(target);
   }
 
+  Future<void> _stopPreview() async {
+    await widget.engine.pause();
+    await widget.engine.seekTo(Duration.zero);
+  }
+
   void _switchMode(bool synchronized) {
     if (synchronized == _synchronized) return;
     if (synchronized) {
@@ -493,7 +716,7 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     setState(() => _synchronized = synchronized);
   }
 
-  Future<String?> _writeLyricsFile({bool allowUnstampedLines = false}) async {
+  Future<String?> _writeLyricsFile({bool allowUnstampedLines = true}) async {
     final content = _synchronized
         ? _makeLrc(allowUnstampedLines: allowUnstampedLines)
         : _plainText.text.trim();
@@ -510,16 +733,20 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      final path = await _writeLyricsFile();
+      final path = await _writeLyricsFile(allowUnstampedLines: true);
       if (path == null) {
         if (mounted) setState(() => _saving = false);
         return;
       }
       await widget.onSaved(path);
       if (!mounted) return;
+      _savedDraftFingerprint = _draftFingerprint();
       if (widget.inline) {
         setState(() => _saving = false);
       } else {
+        setState(() => _allowRoutePop = true);
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
         Navigator.of(context).pop();
       }
     } catch (error) {
@@ -543,6 +770,7 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
       }
       await saveDraft(path);
       if (!mounted) return;
+      _savedDraftFingerprint = _draftFingerprint();
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(ref.tr('lyrics_editor_draft_saved'))),
@@ -561,7 +789,7 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     if (finalize == null) return;
     setState(() => _saving = true);
     try {
-      final path = await _writeLyricsFile();
+      final path = await _writeLyricsFile(allowUnstampedLines: true);
       if (path == null) {
         if (mounted) setState(() => _saving = false);
         return;
@@ -569,9 +797,13 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
       await widget.onSaved(path);
       await finalize();
       if (!mounted) return;
+      _savedDraftFingerprint = _draftFingerprint();
       if (widget.inline) {
         setState(() => _saving = false);
       } else {
+        setState(() => _allowRoutePop = true);
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
         Navigator.of(context).pop();
       }
     } catch (error) {
@@ -583,7 +815,7 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     }
   }
 
-  String? _makeLrc({bool allowUnstampedLines = false}) {
+  String? _makeLrc({bool allowUnstampedLines = true}) {
     final entries = <({Duration? time, String text, int order})>[];
     for (var index = 0; index < _rows.length; index++) {
       final row = _rows[index];
@@ -627,7 +859,9 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
   }
 
   Future<void> _export() async {
-    final content = _synchronized ? _makeLrc() : _plainText.text.trim();
+    final content = _synchronized
+        ? _makeLrc(allowUnstampedLines: true)
+        : _plainText.text.trim();
     if (content == null || content.isEmpty) return;
     final extension = _synchronized ? 'lrc' : 'txt';
     try {
@@ -647,19 +881,648 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
     }
   }
 
+  Widget _wideEditorBody(BuildContext context, Color subdued) {
+    final volume = ref.watch(volumeProvider);
+    final hasVideo =
+        widget.advancedLrcTools &&
+        widget.viewMode == PlayerViewMode.media &&
+        isVideoPath(widget.media.localPath);
+    if (_synchronized && _initialWideScrollPending) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_lyricsScrollController.hasClients) return;
+        _initialWideScrollPending = false;
+        final target = (_selectedRowIndex * 208.0)
+            .clamp(0.0, _lyricsScrollController.position.maxScrollExtent)
+            .toDouble();
+        if (target > 0) _lyricsScrollController.jumpTo(target);
+      });
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 8, 18, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            flex: 6,
+            child: Column(
+              children: [
+                SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  segments: [
+                    ButtonSegment(
+                      value: false,
+                      label: Text(ref.tr('lyrics_editor_plain')),
+                    ),
+                    ButtonSegment(
+                      value: true,
+                      label: Text(ref.tr('lyrics_editor_synced')),
+                    ),
+                  ],
+                  selected: {_synchronized},
+                  onSelectionChanged: (selection) =>
+                      _switchMode(selection.single),
+                ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: _synchronized
+                      ? Scrollbar(
+                          controller: _lyricsScrollController,
+                          thumbVisibility: true,
+                          child: ListView.builder(
+                            controller: _lyricsScrollController,
+                            padding: const EdgeInsets.only(right: 10),
+                            itemCount: _rows.length,
+                            itemExtent: 208,
+                            itemBuilder: (context, index) {
+                              final row = _rows[index];
+                              final isSelected = index == _selectedRowIndex;
+                              row.focusNode.onKeyEvent = (node, event) {
+                                if (event is KeyDownEvent &&
+                                    (event.logicalKey ==
+                                            LogicalKeyboardKey.enter ||
+                                        event.logicalKey ==
+                                            LogicalKeyboardKey.numpadEnter) &&
+                                    !HardwareKeyboard.instance.isShiftPressed) {
+                                  final composing = row.lyric.value.composing;
+                                  if (composing.isValid &&
+                                      !composing.isCollapsed) {
+                                    return KeyEventResult.ignored;
+                                  }
+                                  _selectedRowIndex = index;
+                                  _splitLyricAtCursor(index);
+                                  return KeyEventResult.handled;
+                                }
+                                if (event is KeyDownEvent &&
+                                    event.logicalKey ==
+                                        LogicalKeyboardKey.arrowDown &&
+                                    index + 1 < _rows.length) {
+                                  final next = _rows[index + 1];
+                                  next.focusNode.requestFocus();
+                                  setState(() => _selectedRowIndex = index + 1);
+                                  return KeyEventResult.handled;
+                                }
+                                return KeyEventResult.ignored;
+                              };
+                              return Padding(
+                                key: row.rowKey,
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.surfaceContainerLow,
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? Theme.of(
+                                              context,
+                                            ).colorScheme.primary
+                                          : themeBorder(context),
+                                      width: isSelected ? 1.5 : 1,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Row(
+                                        children: [
+                                          SizedBox(
+                                            width: 42,
+                                            child: Text(
+                                              '#${index + 1}',
+                                              style: TextStyle(
+                                                color: subdued,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: 118,
+                                            child: TextField(
+                                              controller: row.time,
+                                              keyboardType:
+                                                  TextInputType.datetime,
+                                              decoration: InputDecoration(
+                                                isDense: true,
+                                                hintText: '00:11.250',
+                                                contentPadding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 9,
+                                                    ),
+                                                border: OutlineInputBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(9),
+                                                ),
+                                              ),
+                                              onSubmitted: (_) =>
+                                                  _seekToRow(row),
+                                              onTap: () => setState(
+                                                () => _selectedRowIndex = index,
+                                              ),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip: ref.tr(
+                                              'lyrics_editor_seek',
+                                            ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            onPressed: () => _seekToRow(row),
+                                            icon: const Icon(
+                                              Icons.play_arrow_rounded,
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip: ref.tr(
+                                              'lyrics_editor_stamp',
+                                            ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            onPressed: () => _stamp(row),
+                                            icon: const Icon(
+                                              Icons.my_location_rounded,
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          IconButton(
+                                            tooltip: ref.tr('remove'),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            onPressed: _rows.length == 1
+                                                ? null
+                                                : () {
+                                                    _flushHistoryCapture();
+                                                    final removed = _rows
+                                                        .removeAt(index);
+                                                    removed.time.removeListener(
+                                                      _scheduleHistoryCapture,
+                                                    );
+                                                    removed.lyric.removeListener(
+                                                      _scheduleHistoryCapture,
+                                                    );
+                                                    removed.dispose();
+                                                    _selectedRowIndex =
+                                                        _selectedRowIndex.clamp(
+                                                          0,
+                                                          _rows.length - 1,
+                                                        );
+                                                    setState(() {});
+                                                    _commitStructuralChange();
+                                                  },
+                                            icon: const Icon(
+                                              Icons.remove_circle_outline,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      if (isSelected && widget.advancedLrcTools)
+                                        Wrap(
+                                          alignment: WrapAlignment.end,
+                                          crossAxisAlignment:
+                                              WrapCrossAlignment.center,
+                                          children: [
+                                            TextButton(
+                                              onPressed: () =>
+                                                  _nudgeRowTime(row, -1000),
+                                              child: const Text('−1s'),
+                                            ),
+                                            TextButton(
+                                              onPressed: () => _nudgeRowTime(
+                                                row,
+                                                -_timeNudgeMs,
+                                              ),
+                                              child: Text(
+                                                '-${_formatNudgeDuration(_timeNudgeMs)}',
+                                              ),
+                                            ),
+                                            PopupMenuButton<int>(
+                                              tooltip: ref.tr(
+                                                'lyrics_editor_adjust_time',
+                                              ),
+                                              initialValue: _timeNudgeMs,
+                                              onSelected: (value) => setState(
+                                                () => _timeNudgeMs = value,
+                                              ),
+                                              itemBuilder: (_) =>
+                                                  [1, 10, 50, 100, 500, 1000]
+                                                      .map(
+                                                        (
+                                                          value,
+                                                        ) => PopupMenuItem(
+                                                          value: value,
+                                                          child: Text(
+                                                            _formatNudgeDuration(
+                                                              value,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      )
+                                                      .toList(),
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                child: Text(
+                                                  '±${_formatNudgeDuration(_timeNudgeMs)}',
+                                                  style: TextStyle(
+                                                    color: subdued,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            TextButton(
+                                              onPressed: () => _nudgeRowTime(
+                                                row,
+                                                _timeNudgeMs,
+                                              ),
+                                              child: Text(
+                                                '+${_formatNudgeDuration(_timeNudgeMs)}',
+                                              ),
+                                            ),
+                                            TextButton(
+                                              onPressed: () =>
+                                                  _nudgeRowTime(row, 1000),
+                                              child: const Text('+1s'),
+                                            ),
+                                          ],
+                                        ),
+                                      TextField(
+                                        key: ValueKey(
+                                          'wide-lyrics-line-input-$index',
+                                        ),
+                                        controller: row.lyric,
+                                        focusNode: row.focusNode,
+                                        textInputAction: TextInputAction.next,
+                                        onChanged: (value) =>
+                                            _splitInsertedNewlines(
+                                              index,
+                                              value,
+                                            ),
+                                        onSubmitted: (_) {
+                                          _splitLyricAtCursor(index);
+                                        },
+                                        onTap: () => setState(
+                                          () => _selectedRowIndex = index,
+                                        ),
+                                        minLines: 2,
+                                        maxLines: 3,
+                                        textAlignVertical:
+                                            TextAlignVertical.top,
+                                        decoration: InputDecoration(
+                                          isDense: false,
+                                          hintText: ref.tr(
+                                            'lyrics_editor_line_hint',
+                                          ),
+                                          contentPadding: const EdgeInsets.all(
+                                            10,
+                                          ),
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              9,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        )
+                      : Padding(
+                          padding: const EdgeInsets.only(right: 10),
+                          child: TextField(
+                            controller: _plainText,
+                            expands: true,
+                            minLines: null,
+                            maxLines: null,
+                            textAlignVertical: TextAlignVertical.top,
+                            style: const TextStyle(fontSize: 20, height: 1.5),
+                            decoration: InputDecoration(
+                              hintText: ref.tr('lyrics_editor_line_hint'),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              contentPadding: const EdgeInsets.all(14),
+                            ),
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  children: [
+                    if (_synchronized)
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          _flushHistoryCapture();
+                          final added = _LyricDraft(null, '');
+                          _rows.add(added);
+                          _attachHistoryListeners([added]);
+                          setState(() => _selectedRowIndex = _rows.length - 1);
+                          _commitStructuralChange();
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (_lyricsScrollController.hasClients) {
+                              _lyricsScrollController.animateTo(
+                                _lyricsScrollController
+                                    .position
+                                    .maxScrollExtent,
+                                duration: const Duration(milliseconds: 220),
+                                curve: Curves.easeOut,
+                              );
+                            }
+                          });
+                        },
+                        icon: const Icon(Icons.add_rounded),
+                        label: Text(ref.tr('lyrics_editor_add_line')),
+                      ),
+                    OutlinedButton.icon(
+                      onPressed: _saving ? null : _export,
+                      icon: const Icon(Icons.file_download_outlined),
+                      label: Text(ref.tr('lyrics_editor_export')),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _saving ? null : _save,
+                      icon: _saving
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save_outlined),
+                      label: Text(ref.tr('save')),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            flex: 5,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 4, bottom: 12),
+              child: SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (hasVideo)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: ColoredBox(
+                          color: Colors.black,
+                          child: AspectRatio(
+                            aspectRatio: 16 / 9,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                widget.engine.buildVideoView(
+                                  fit: BoxFit.contain,
+                                ),
+                                Positioned(
+                                  right: 8,
+                                  bottom: 8,
+                                  child: IconButton.filledTonal(
+                                    tooltip: ref.tr(
+                                      volume == 0 ? 'unmute' : 'volume',
+                                    ),
+                                    onPressed: () => unawaited(
+                                      ref
+                                          .read(playbackControllerProvider)
+                                          .toggleMute(),
+                                    ),
+                                    icon: Icon(
+                                      volume == 0
+                                          ? Icons.volume_off_rounded
+                                          : Icons.volume_up_rounded,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.graphic_eq_rounded),
+                              const SizedBox(width: 10),
+                              Expanded(child: Text(ref.tr('volume'))),
+                              IconButton(
+                                tooltip: ref.tr(
+                                  volume == 0 ? 'unmute' : 'volume',
+                                ),
+                                onPressed: () => unawaited(
+                                  ref
+                                      .read(playbackControllerProvider)
+                                      .toggleMute(),
+                                ),
+                                icon: Icon(
+                                  volume == 0
+                                      ? Icons.volume_off_rounded
+                                      : Icons.volume_up_rounded,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (_synchronized)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: _widePlaybackControls(context),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _widePlaybackControls(
+    BuildContext context,
+  ) => StreamBuilder<PlaybackSnapshot>(
+    stream: widget.engine.snapshots,
+    initialData: widget.engine.snapshot,
+    builder: (context, snapshot) {
+      final playback = snapshot.data ?? widget.engine.snapshot;
+      final durationMs = playback.duration.inMilliseconds;
+      final positionMs =
+          _seekSliderPositionMs ?? playback.position.inMilliseconds.toDouble();
+      final max = durationMs > 0 ? durationMs.toDouble() : 1.0;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(
+                _formatPlaybackTime(Duration(milliseconds: positionMs.round())),
+              ),
+              const Spacer(),
+              Text(_formatPlaybackTime(playback.duration)),
+            ],
+          ),
+          if (widget.advancedLrcTools &&
+              _waveformPath != null &&
+              durationMs > 0)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: LayoutBuilder(
+                builder: (context, constraints) => GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragStart: (_) {
+                    _waveformCenterMs = positionMs;
+                  },
+                  onHorizontalDragUpdate: (details) => _seekFromWaveform(
+                    details.localPosition.dx,
+                    constraints.maxWidth,
+                    durationMs.toDouble(),
+                  ),
+                  onHorizontalDragEnd: (_) => _finishWaveformSeek(),
+                  onTapUp: (details) {
+                    _waveformCenterMs = positionMs;
+                    _seekFromWaveform(
+                      details.localPosition.dx,
+                      constraints.maxWidth,
+                      durationMs.toDouble(),
+                    );
+                    _finishWaveformSeek();
+                  },
+                  child: SizedBox(
+                    height: 100,
+                    width: double.infinity,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.file(
+                          File(_waveformPath!),
+                          fit: BoxFit.fill,
+                          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                        ),
+                        Center(
+                          child: Container(
+                            height: 1,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withValues(alpha: 0.24),
+                          ),
+                        ),
+                        Positioned(
+                          left:
+                              ((positionMs / durationMs) * constraints.maxWidth)
+                                  .clamp(0.0, constraints.maxWidth),
+                          top: 0,
+                          bottom: 0,
+                          child: Container(
+                            width: 2,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Slider.adaptive(
+            value: positionMs.clamp(0.0, max),
+            max: max,
+            onChanged: durationMs <= 0
+                ? null
+                : (value) => setState(() => _seekSliderPositionMs = value),
+            onChangeEnd: durationMs <= 0
+                ? null
+                : (value) {
+                    setState(() => _seekSliderPositionMs = null);
+                    unawaited(
+                      widget.engine.seekTo(
+                        Duration(milliseconds: value.round()),
+                      ),
+                    );
+                  },
+          ),
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 4,
+            children: [
+              IconButton(
+                tooltip: '-10s',
+                onPressed: durationMs <= 0
+                    ? null
+                    : () => unawaited(_seekBy(const Duration(seconds: -10))),
+                icon: const Icon(Icons.replay_10_rounded),
+              ),
+              IconButton(
+                tooltip: ref.tr('stop'),
+                onPressed: durationMs <= 0
+                    ? null
+                    : () => unawaited(_stopPreview()),
+                icon: const Icon(Icons.stop_rounded),
+              ),
+              IconButton.filledTonal(
+                tooltip: playback.isPlaying ? ref.tr('pause') : ref.tr('play'),
+                onPressed: () => unawaited(
+                  playback.isPlaying
+                      ? widget.engine.pause()
+                      : widget.engine.play(),
+                ),
+                icon: Icon(
+                  playback.isPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                ),
+              ),
+              IconButton(
+                tooltip: '+10s',
+                onPressed: durationMs <= 0
+                    ? null
+                    : () => unawaited(_seekBy(const Duration(seconds: 10))),
+                icon: const Icon(Icons.forward_10_rounded),
+              ),
+            ],
+          ),
+          if (widget.advancedLrcTools)
+            Center(
+              child: FilledButton.icon(
+                onPressed: _rows.isEmpty ? null : _recordAndAdvance,
+                icon: const Icon(Icons.keyboard_double_arrow_down_rounded),
+                label: Text(ref.tr('lyrics_editor_record_next')),
+              ),
+            ),
+        ],
+      );
+    },
+  );
+
   @override
   Widget build(BuildContext context) {
     final textColor = themeTextPrimary(context);
     final subdued = themeTextSub(context);
     final screenHeight = MediaQuery.sizeOf(context).height;
-    final isCompact = MediaQuery.sizeOf(context).width < 600;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isCompact = screenWidth < 600;
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final availableEditorHeight = (screenHeight - keyboardInset - 32)
         .clamp(0.0, screenHeight * 0.88)
         .toDouble();
     final editor = Container(
-      width: widget.inline ? double.infinity : 720,
-      height: widget.inline ? double.infinity : availableEditorHeight,
+      width: widget.inline || widget.fullScreen ? double.infinity : 720,
+      height: widget.inline || widget.fullScreen
+          ? double.infinity
+          : availableEditorHeight,
       decoration: widget.inline
           ? BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
@@ -822,753 +1685,956 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
                   ),
                 IconButton(
                   tooltip: ref.tr('close'),
-                  onPressed: () {
-                    if (widget.inline) {
-                      widget.onCancel?.call();
-                    } else {
-                      Navigator.of(context).pop();
-                    }
-                  },
+                  onPressed: _requestClose,
                   icon: const Icon(Icons.close_rounded),
                 ),
               ],
             ),
           ),
           Expanded(
-            child: SingleChildScrollView(
-              primary: true,
-              physics: const ClampingScrollPhysics(),
-              padding: EdgeInsets.only(bottom: keyboardInset + 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: SegmentedButton<bool>(
-                      showSelectedIcon: false,
-                      segments: [
-                        ButtonSegment(
-                          value: false,
-                          label: Text(ref.tr('lyrics_editor_plain')),
-                        ),
-                        ButtonSegment(
-                          value: true,
-                          label: Text(ref.tr('lyrics_editor_synced')),
-                        ),
-                      ],
-                      selected: {_synchronized},
-                      onSelectionChanged: (selection) =>
-                          _switchMode(selection.single),
-                    ),
-                  ),
-                  if (widget.advancedLrcTools &&
-                      widget.viewMode == PlayerViewMode.media &&
-                      isVideoPath(widget.media.localPath))
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: ColoredBox(
-                          color: Colors.black,
-                          child: SizedBox(
-                            width: double.infinity,
-                            height: isCompact ? 164 : 220,
-                            child: widget.engine.buildVideoView(
-                              fit: BoxFit.contain,
-                            ),
+            child: widget.fullScreen && screenWidth >= 900
+                ? _wideEditorBody(context, subdued)
+                : SingleChildScrollView(
+                    primary: true,
+                    physics: const ClampingScrollPhysics(),
+                    padding: EdgeInsets.only(bottom: keyboardInset + 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: SegmentedButton<bool>(
+                            showSelectedIcon: false,
+                            segments: [
+                              ButtonSegment(
+                                value: false,
+                                label: Text(ref.tr('lyrics_editor_plain')),
+                              ),
+                              ButtonSegment(
+                                value: true,
+                                label: Text(ref.tr('lyrics_editor_synced')),
+                              ),
+                            ],
+                            selected: {_synchronized},
+                            onSelectionChanged: (selection) =>
+                                _switchMode(selection.single),
                           ),
                         ),
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  if (_synchronized)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
-                      child: StreamBuilder<PlaybackSnapshot>(
-                        stream: widget.engine.snapshots,
-                        initialData: widget.engine.snapshot,
-                        builder: (context, snapshot) {
-                          final playback =
-                              snapshot.data ?? widget.engine.snapshot;
-                          final durationMs = playback.duration.inMilliseconds;
-                          final currentPositionMs =
-                              _seekSliderPositionMs ??
-                              playback.position.inMilliseconds.toDouble();
-                          final sliderMax = durationMs > 0
-                              ? durationMs.toDouble()
-                              : 1.0;
-                          return Column(
-                            children: [
-                              Row(
-                                children: [
-                                  Text(
-                                    _formatPlaybackTime(
-                                      Duration(
-                                        milliseconds: currentPositionMs.round(),
-                                      ),
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  Text(_formatPlaybackTime(playback.duration)),
-                                ],
-                              ),
-                              if (widget.advancedLrcTools &&
-                                  _waveformPath != null &&
-                                  durationMs > 0)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 4),
-                                  child: LayoutBuilder(
-                                    builder: (context, constraints) {
-                                      final width = constraints.maxWidth;
-                                      final start = _waveformWindowStart(
-                                        durationMs.toDouble(),
-                                        _waveformCenterMs ?? currentPositionMs,
-                                      );
-                                      final visiblePosition =
-                                          ((currentPositionMs / durationMs -
-                                                      start) *
-                                                  _waveformZoom)
-                                              .clamp(0.0, 1.0);
-                                      final windowEnd =
-                                          (start + 1 / _waveformZoom).clamp(
-                                            0.0,
-                                            1.0,
-                                          );
-                                      return Column(
+                        if (widget.advancedLrcTools &&
+                            widget.viewMode == PlayerViewMode.media &&
+                            isVideoPath(widget.media.localPath))
+                          Align(
+                            alignment: widget.fullScreen
+                                ? Alignment.centerRight
+                                : Alignment.center,
+                            child: SizedBox(
+                              width: widget.fullScreen && screenWidth >= 900
+                                  ? (screenWidth * 0.43)
+                                        .clamp(440.0, 680.0)
+                                        .toDouble()
+                                  : null,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  12,
+                                  16,
+                                  4,
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: ColoredBox(
+                                    color: Colors.black,
+                                    child: SizedBox(
+                                      width: double.infinity,
+                                      height: widget.fullScreen && !isCompact
+                                          ? 300
+                                          : isCompact
+                                          ? 164
+                                          : 220,
+                                      child: Stack(
+                                        fit: StackFit.expand,
                                         children: [
-                                          Row(
-                                            children: [
-                                              Text(
-                                                _formatPlaybackTime(
-                                                  Duration(
-                                                    milliseconds:
-                                                        (start * durationMs)
-                                                            .round(),
-                                                  ),
-                                                ),
-                                                style: TextStyle(
-                                                  color: subdued,
-                                                  fontSize: 11,
-                                                ),
-                                              ),
-                                              const Spacer(),
-                                              Text(
-                                                '${_waveformZoom.toStringAsFixed(1)}×',
-                                                style: TextStyle(
-                                                  color: subdued,
-                                                  fontSize: 11,
-                                                  fontFeatures: const [
-                                                    FontFeature.tabularFigures(),
-                                                  ],
-                                                ),
-                                              ),
-                                              IconButton(
-                                                tooltip: ref.tr(
-                                                  'lyrics_editor_waveform_zoom_out',
-                                                ),
-                                                visualDensity:
-                                                    VisualDensity.compact,
-                                                onPressed: _waveformZoom <= 1
-                                                    ? null
-                                                    : () => _setWaveformZoom(
-                                                        _waveformZoom / 2,
-                                                      ),
-                                                icon: const Icon(
-                                                  Icons.remove_rounded,
-                                                ),
-                                              ),
-                                              IconButton(
-                                                tooltip: ref.tr(
-                                                  'lyrics_editor_waveform_zoom_in',
-                                                ),
-                                                visualDensity:
-                                                    VisualDensity.compact,
-                                                onPressed: _waveformZoom >= 16
-                                                    ? null
-                                                    : () => _setWaveformZoom(
-                                                        _waveformZoom * 2,
-                                                      ),
-                                                icon: const Icon(
-                                                  Icons.add_rounded,
-                                                ),
-                                              ),
-                                              Text(
-                                                _formatPlaybackTime(
-                                                  Duration(
-                                                    milliseconds:
-                                                        (windowEnd * durationMs)
-                                                            .round(),
-                                                  ),
-                                                ),
-                                                style: TextStyle(
-                                                  color: subdued,
-                                                  fontSize: 11,
-                                                ),
-                                              ),
-                                            ],
+                                          widget.engine.buildVideoView(
+                                            fit: BoxFit.contain,
                                           ),
-                                          ClipRRect(
-                                            borderRadius: BorderRadius.circular(
-                                              8,
-                                            ),
-                                            child: GestureDetector(
-                                              behavior: HitTestBehavior.opaque,
-                                              onHorizontalDragStart: (_) {
-                                                _waveformCenterMs =
-                                                    currentPositionMs;
-                                              },
-                                              onHorizontalDragUpdate:
-                                                  (
-                                                    details,
-                                                  ) => _seekFromWaveform(
-                                                    details.localPosition.dx,
-                                                    width,
-                                                    durationMs.toDouble(),
-                                                  ),
-                                              onHorizontalDragEnd: (_) =>
-                                                  _finishWaveformSeek(),
-                                              onTapUp: (details) {
-                                                _waveformCenterMs =
-                                                    currentPositionMs;
-                                                _seekFromWaveform(
-                                                  details.localPosition.dx,
-                                                  width,
-                                                  durationMs.toDouble(),
-                                                );
-                                                _finishWaveformSeek();
-                                              },
-                                              child: SizedBox(
-                                                height: 74,
-                                                width: double.infinity,
-                                                child: Stack(
-                                                  clipBehavior: Clip.hardEdge,
-                                                  children: [
-                                                    Positioned(
-                                                      left:
-                                                          -start *
-                                                          _waveformZoom *
-                                                          width,
-                                                      top: 0,
-                                                      bottom: 0,
-                                                      width:
-                                                          width * _waveformZoom,
-                                                      child: Opacity(
-                                                        opacity: 0.9,
-                                                        child: Image.file(
-                                                          File(_waveformPath!),
-                                                          fit: BoxFit.fill,
-                                                          errorBuilder: (_, _, _) =>
-                                                              const SizedBox.shrink(),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    for (final row in _rows)
-                                                      if (parseLyricsTimestamp(
-                                                            row.time.text,
-                                                          )
-                                                          case final time?)
-                                                        if (time.inMilliseconds /
-                                                                    durationMs >=
-                                                                start &&
-                                                            time.inMilliseconds /
-                                                                    durationMs <=
-                                                                windowEnd)
-                                                          Positioned(
-                                                            left:
-                                                                ((time.inMilliseconds /
-                                                                        durationMs -
-                                                                    start) *
-                                                                _waveformZoom *
-                                                                width),
-                                                            top: 0,
-                                                            bottom: 0,
-                                                            child: Container(
-                                                              width: 1,
-                                                              color:
-                                                                  Theme.of(
-                                                                        context,
-                                                                      )
-                                                                      .colorScheme
-                                                                      .primary
-                                                                      .withValues(
-                                                                        alpha:
-                                                                            0.7,
-                                                                      ),
-                                                            ),
-                                                          ),
-                                                    Positioned(
-                                                      left:
-                                                          visiblePosition *
-                                                          width,
-                                                      top: 0,
-                                                      bottom: 0,
-                                                      child: Container(
-                                                        width: 2,
-                                                        color: Theme.of(
-                                                          context,
-                                                        ).colorScheme.primary,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
+                                          Positioned(
+                                            right: 8,
+                                            bottom: 8,
+                                            child: IconButton.filledTonal(
+                                              tooltip: ref.tr(
+                                                ref.watch(volumeProvider) == 0
+                                                    ? 'unmute'
+                                                    : 'volume',
+                                              ),
+                                              onPressed: () => unawaited(
+                                                ref
+                                                    .read(
+                                                      playbackControllerProvider,
+                                                    )
+                                                    .toggleMute(),
+                                              ),
+                                              icon: Icon(
+                                                ref.watch(volumeProvider) == 0
+                                                    ? Icons.volume_off_rounded
+                                                    : Icons.volume_up_rounded,
                                               ),
                                             ),
                                           ),
                                         ],
-                                      );
-                                    },
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              SizedBox(
-                                height: 36,
-                                child: Stack(
-                                  alignment: Alignment.center,
-                                  children: [
-                                    SliderTheme(
-                                      data: SliderTheme.of(
-                                        context,
-                                      ).copyWith(trackHeight: 3),
-                                      child: Slider.adaptive(
-                                        value: currentPositionMs
-                                            .clamp(0, sliderMax)
-                                            .toDouble(),
-                                        max: sliderMax,
-                                        onChanged: durationMs <= 0
-                                            ? null
-                                            : (value) => setState(
-                                                () => _seekSliderPositionMs =
-                                                    value,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        if (_synchronized)
+                          Align(
+                            alignment: widget.fullScreen
+                                ? Alignment.centerRight
+                                : Alignment.center,
+                            child: SizedBox(
+                              width: widget.fullScreen && screenWidth >= 900
+                                  ? (screenWidth * 0.43)
+                                        .clamp(440.0, 680.0)
+                                        .toDouble()
+                                  : null,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  18,
+                                  0,
+                                  18,
+                                  8,
+                                ),
+                                child: StreamBuilder<PlaybackSnapshot>(
+                                  stream: widget.engine.snapshots,
+                                  initialData: widget.engine.snapshot,
+                                  builder: (context, snapshot) {
+                                    final playback =
+                                        snapshot.data ?? widget.engine.snapshot;
+                                    final durationMs =
+                                        playback.duration.inMilliseconds;
+                                    final currentPositionMs =
+                                        _seekSliderPositionMs ??
+                                        playback.position.inMilliseconds
+                                            .toDouble();
+                                    final sliderMax = durationMs > 0
+                                        ? durationMs.toDouble()
+                                        : 1.0;
+                                    return Column(
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Text(
+                                              _formatPlaybackTime(
+                                                Duration(
+                                                  milliseconds:
+                                                      currentPositionMs.round(),
+                                                ),
                                               ),
-                                        onChangeEnd: durationMs <= 0
-                                            ? null
-                                            : (value) {
-                                                setState(
-                                                  () => _seekSliderPositionMs =
-                                                      null,
-                                                );
-                                                unawaited(
-                                                  widget.engine.seekTo(
-                                                    Duration(
-                                                      milliseconds: value
-                                                          .round(),
+                                            ),
+                                            const Spacer(),
+                                            Text(
+                                              _formatPlaybackTime(
+                                                playback.duration,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        if (widget.advancedLrcTools &&
+                                            _waveformPath != null &&
+                                            durationMs > 0)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: 4,
+                                            ),
+                                            child: LayoutBuilder(
+                                              builder: (context, constraints) {
+                                                final width =
+                                                    constraints.maxWidth;
+                                                final start =
+                                                    _waveformWindowStart(
+                                                      durationMs.toDouble(),
+                                                      _waveformCenterMs ??
+                                                          currentPositionMs,
+                                                    );
+                                                final visiblePosition =
+                                                    ((currentPositionMs /
+                                                                    durationMs -
+                                                                start) *
+                                                            _waveformZoom)
+                                                        .clamp(0.0, 1.0);
+                                                final windowEnd =
+                                                    (start + 1 / _waveformZoom)
+                                                        .clamp(0.0, 1.0);
+                                                return Column(
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        Text(
+                                                          _formatPlaybackTime(
+                                                            Duration(
+                                                              milliseconds:
+                                                                  (start *
+                                                                          durationMs)
+                                                                      .round(),
+                                                            ),
+                                                          ),
+                                                          style: TextStyle(
+                                                            color: subdued,
+                                                            fontSize: 11,
+                                                          ),
+                                                        ),
+                                                        const Spacer(),
+                                                        Text(
+                                                          '${_waveformZoom.toStringAsFixed(1)}×',
+                                                          style: TextStyle(
+                                                            color: subdued,
+                                                            fontSize: 11,
+                                                            fontFeatures: const [
+                                                              FontFeature.tabularFigures(),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                        IconButton(
+                                                          tooltip: ref.tr(
+                                                            'lyrics_editor_waveform_zoom_out',
+                                                          ),
+                                                          visualDensity:
+                                                              VisualDensity
+                                                                  .compact,
+                                                          onPressed:
+                                                              _waveformZoom <= 1
+                                                              ? null
+                                                              : () => _setWaveformZoom(
+                                                                  _waveformZoom /
+                                                                      2,
+                                                                ),
+                                                          icon: const Icon(
+                                                            Icons
+                                                                .remove_rounded,
+                                                          ),
+                                                        ),
+                                                        IconButton(
+                                                          tooltip: ref.tr(
+                                                            'lyrics_editor_waveform_zoom_in',
+                                                          ),
+                                                          visualDensity:
+                                                              VisualDensity
+                                                                  .compact,
+                                                          onPressed:
+                                                              _waveformZoom >=
+                                                                  16
+                                                              ? null
+                                                              : () => _setWaveformZoom(
+                                                                  _waveformZoom *
+                                                                      2,
+                                                                ),
+                                                          icon: const Icon(
+                                                            Icons.add_rounded,
+                                                          ),
+                                                        ),
+                                                        Text(
+                                                          _formatPlaybackTime(
+                                                            Duration(
+                                                              milliseconds:
+                                                                  (windowEnd *
+                                                                          durationMs)
+                                                                      .round(),
+                                                            ),
+                                                          ),
+                                                          style: TextStyle(
+                                                            color: subdued,
+                                                            fontSize: 11,
+                                                          ),
+                                                        ),
+                                                      ],
                                                     ),
-                                                  ),
+                                                    ClipRRect(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            8,
+                                                          ),
+                                                      child: GestureDetector(
+                                                        behavior:
+                                                            HitTestBehavior
+                                                                .opaque,
+                                                        onHorizontalDragStart: (_) {
+                                                          _waveformCenterMs =
+                                                              currentPositionMs;
+                                                        },
+                                                        onHorizontalDragUpdate:
+                                                            (
+                                                              details,
+                                                            ) => _seekFromWaveform(
+                                                              details
+                                                                  .localPosition
+                                                                  .dx,
+                                                              width,
+                                                              durationMs
+                                                                  .toDouble(),
+                                                            ),
+                                                        onHorizontalDragEnd: (_) =>
+                                                            _finishWaveformSeek(),
+                                                        onTapUp: (details) {
+                                                          _waveformCenterMs =
+                                                              currentPositionMs;
+                                                          _seekFromWaveform(
+                                                            details
+                                                                .localPosition
+                                                                .dx,
+                                                            width,
+                                                            durationMs
+                                                                .toDouble(),
+                                                          );
+                                                          _finishWaveformSeek();
+                                                        },
+                                                        child: SizedBox(
+                                                          height: 100,
+                                                          width:
+                                                              double.infinity,
+                                                          child: Stack(
+                                                            clipBehavior:
+                                                                Clip.hardEdge,
+                                                            children: [
+                                                              Positioned(
+                                                                left:
+                                                                    -start *
+                                                                    _waveformZoom *
+                                                                    width,
+                                                                top: 0,
+                                                                bottom: 0,
+                                                                width:
+                                                                    width *
+                                                                    _waveformZoom,
+                                                                child: Opacity(
+                                                                  opacity: 0.9,
+                                                                  child: Image.file(
+                                                                    File(
+                                                                      _waveformPath!,
+                                                                    ),
+                                                                    fit: BoxFit
+                                                                        .fill,
+                                                                    errorBuilder:
+                                                                        (
+                                                                          _,
+                                                                          _,
+                                                                          _,
+                                                                        ) =>
+                                                                            const SizedBox.shrink(),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                              Positioned.fill(
+                                                                child: Center(
+                                                                  child: Container(
+                                                                    height: 1,
+                                                                    color: Theme.of(context)
+                                                                        .colorScheme
+                                                                        .onSurface
+                                                                        .withValues(
+                                                                          alpha:
+                                                                              0.24,
+                                                                        ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                              for (final row
+                                                                  in _rows)
+                                                                if (parseLyricsTimestamp(
+                                                                      row
+                                                                          .time
+                                                                          .text,
+                                                                    )
+                                                                    case final time?)
+                                                                  if (time.inMilliseconds /
+                                                                              durationMs >=
+                                                                          start &&
+                                                                      time.inMilliseconds /
+                                                                              durationMs <=
+                                                                          windowEnd)
+                                                                    Positioned(
+                                                                      left:
+                                                                          ((time.inMilliseconds /
+                                                                                  durationMs -
+                                                                              start) *
+                                                                          _waveformZoom *
+                                                                          width),
+                                                                      top: 0,
+                                                                      bottom: 0,
+                                                                      child: Container(
+                                                                        width:
+                                                                            1,
+                                                                        color:
+                                                                            Theme.of(
+                                                                              context,
+                                                                            ).colorScheme.primary.withValues(
+                                                                              alpha: 0.7,
+                                                                            ),
+                                                                      ),
+                                                                    ),
+                                                              Positioned(
+                                                                left:
+                                                                    visiblePosition *
+                                                                    width,
+                                                                top: 0,
+                                                                bottom: 0,
+                                                                child: Container(
+                                                                  width: 2,
+                                                                  color: Theme.of(
+                                                                    context,
+                                                                  ).colorScheme.primary,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
                                                 );
                                               },
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Wrap(
-                                alignment: WrapAlignment.center,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                spacing: 6,
-                                runSpacing: 2,
-                                children: [
-                                  IconButton(
-                                    tooltip: '-5s',
-                                    visualDensity: VisualDensity.compact,
-                                    onPressed: durationMs <= 0
-                                        ? null
-                                        : () => unawaited(
-                                            _seekBy(
-                                              const Duration(seconds: -5),
                                             ),
                                           ),
-                                    icon: const Icon(Icons.replay_5_rounded),
-                                  ),
-                                  IconButton.filledTonal(
-                                    tooltip: playback.isPlaying
-                                        ? ref.tr('pause')
-                                        : ref.tr('play'),
-                                    visualDensity: VisualDensity.compact,
-                                    onPressed: () => unawaited(
-                                      playback.isPlaying
-                                          ? widget.engine.pause()
-                                          : widget.engine.play(),
-                                    ),
-                                    icon: Icon(
-                                      playback.isPlaying
-                                          ? Icons.pause_rounded
-                                          : Icons.play_arrow_rounded,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    tooltip: '+5s',
-                                    visualDensity: VisualDensity.compact,
-                                    onPressed: durationMs <= 0
-                                        ? null
-                                        : () => unawaited(
-                                            _seekBy(const Duration(seconds: 5)),
-                                          ),
-                                    icon: const Icon(Icons.forward_5_rounded),
-                                  ),
-                                  if (widget.advancedLrcTools)
-                                    FilledButton.icon(
-                                      key: const ValueKey(
-                                        'lyrics-editor-record-next',
-                                      ),
-                                      onPressed: _rows.isEmpty
-                                          ? null
-                                          : _recordAndAdvance,
-                                      icon: const Icon(
-                                        Icons
-                                            .keyboard_double_arrow_down_rounded,
-                                      ),
-                                      label: Text(
-                                        ref.tr('lyrics_editor_record_next'),
-                                      ),
-                                    )
-                                  else
-                                    FilledButton.tonalIcon(
-                                      key: const ValueKey(
-                                        'lyrics-editor-record-now',
-                                      ),
-                                      onPressed: _rows.isEmpty
-                                          ? null
-                                          : _recordCurrentTime,
-                                      icon: const Icon(
-                                        Icons.my_location_rounded,
-                                      ),
-                                      label: Text(
-                                        ref.tr('lyrics_editor_record_now'),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                  if (_synchronized)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 4, 14, 12),
-                      child: Column(
-                        children: List.generate(_rows.length, (index) {
-                          final row = _rows[index];
-                          final isSelected = index == _selectedRowIndex;
-                          row.focusNode.onKeyEvent = (node, event) {
-                            if (widget.advancedLrcTools &&
-                                _synchronized &&
-                                event is KeyDownEvent &&
-                                (event.logicalKey == LogicalKeyboardKey.enter ||
-                                    event.logicalKey ==
-                                        LogicalKeyboardKey.numpadEnter) &&
-                                !HardwareKeyboard.instance.isShiftPressed) {
-                              _selectedRowIndex = index;
-                              _recordAndAdvance();
-                              return KeyEventResult.handled;
-                            }
-                            if (event is KeyDownEvent &&
-                                event.logicalKey ==
-                                    LogicalKeyboardKey.arrowDown &&
-                                index + 1 < _rows.length) {
-                              final selection = row.lyric.selection;
-                              if (!selection.isValid ||
-                                  selection.extentOffset >=
-                                      row.lyric.text.length) {
-                                final nextIndex = index + 1;
-                                final nextRow = _rows[nextIndex];
-                                nextRow.focusNode.requestFocus();
-                                setState(() => _selectedRowIndex = nextIndex);
-                                WidgetsBinding.instance.addPostFrameCallback((
-                                  _,
-                                ) {
-                                  final nextContext =
-                                      nextRow.rowKey.currentContext;
-                                  if (nextContext != null) {
-                                    Scrollable.ensureVisible(
-                                      nextContext,
-                                      duration: const Duration(
-                                        milliseconds: 180,
-                                      ),
-                                      alignment: 0.25,
-                                    );
-                                  }
-                                });
-                                return KeyEventResult.handled;
-                              }
-                            }
-                            return KeyEventResult.ignored;
-                          };
-                          return Container(
-                            key: row.rowKey,
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                            decoration: BoxDecoration(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.surfaceContainerLow,
-                              border: Border.all(
-                                color: isSelected
-                                    ? Theme.of(context).colorScheme.primary
-                                    : themeBorder(context),
-                                width: isSelected ? 1.5 : 1,
-                              ),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        '#${index + 1}',
-                                        style: TextStyle(
-                                          color: subdued,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: 104,
-                                      child: TextField(
-                                        controller: row.time,
-                                        keyboardType: TextInputType.datetime,
-                                        decoration: InputDecoration(
-                                          isDense: true,
-                                          hintText: '00:11.250',
-                                          contentPadding:
-                                              const EdgeInsets.symmetric(
-                                                horizontal: 9,
-                                                vertical: 11,
+                                        SizedBox(
+                                          height: 36,
+                                          child: Stack(
+                                            alignment: Alignment.center,
+                                            children: [
+                                              SliderTheme(
+                                                data: SliderTheme.of(
+                                                  context,
+                                                ).copyWith(trackHeight: 3),
+                                                child: Slider.adaptive(
+                                                  value: currentPositionMs
+                                                      .clamp(0, sliderMax)
+                                                      .toDouble(),
+                                                  max: sliderMax,
+                                                  onChanged: durationMs <= 0
+                                                      ? null
+                                                      : (value) => setState(
+                                                          () =>
+                                                              _seekSliderPositionMs =
+                                                                  value,
+                                                        ),
+                                                  onChangeEnd: durationMs <= 0
+                                                      ? null
+                                                      : (value) {
+                                                          setState(
+                                                            () =>
+                                                                _seekSliderPositionMs =
+                                                                    null,
+                                                          );
+                                                          unawaited(
+                                                            widget.engine.seekTo(
+                                                              Duration(
+                                                                milliseconds:
+                                                                    value
+                                                                        .round(),
+                                                              ),
+                                                            ),
+                                                          );
+                                                        },
+                                                ),
                                               ),
+                                            ],
+                                          ),
+                                        ),
+                                        Wrap(
+                                          alignment: WrapAlignment.center,
+                                          crossAxisAlignment:
+                                              WrapCrossAlignment.center,
+                                          spacing: 6,
+                                          runSpacing: 2,
+                                          children: [
+                                            IconButton(
+                                              tooltip: '-10s',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed: durationMs <= 0
+                                                  ? null
+                                                  : () => unawaited(
+                                                      _seekBy(
+                                                        const Duration(
+                                                          seconds: -10,
+                                                        ),
+                                                      ),
+                                                    ),
+                                              icon: const Icon(
+                                                Icons.replay_10_rounded,
+                                              ),
+                                            ),
+                                            IconButton(
+                                              tooltip: ref.tr('stop'),
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed: durationMs <= 0
+                                                  ? null
+                                                  : () => unawaited(
+                                                      _stopPreview(),
+                                                    ),
+                                              icon: const Icon(
+                                                Icons.stop_rounded,
+                                              ),
+                                            ),
+                                            IconButton.filledTonal(
+                                              tooltip: playback.isPlaying
+                                                  ? ref.tr('pause')
+                                                  : ref.tr('play'),
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed: () => unawaited(
+                                                playback.isPlaying
+                                                    ? widget.engine.pause()
+                                                    : widget.engine.play(),
+                                              ),
+                                              icon: Icon(
+                                                playback.isPlaying
+                                                    ? Icons.pause_rounded
+                                                    : Icons.play_arrow_rounded,
+                                              ),
+                                            ),
+                                            IconButton(
+                                              tooltip: '+10s',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed: durationMs <= 0
+                                                  ? null
+                                                  : () => unawaited(
+                                                      _seekBy(
+                                                        const Duration(
+                                                          seconds: 10,
+                                                        ),
+                                                      ),
+                                                    ),
+                                              icon: const Icon(
+                                                Icons.forward_10_rounded,
+                                              ),
+                                            ),
+                                            if (widget.advancedLrcTools)
+                                              FilledButton.icon(
+                                                key: const ValueKey(
+                                                  'lyrics-editor-record-next',
+                                                ),
+                                                onPressed: _rows.isEmpty
+                                                    ? null
+                                                    : _recordAndAdvance,
+                                                icon: const Icon(
+                                                  Icons
+                                                      .keyboard_double_arrow_down_rounded,
+                                                ),
+                                                label: Text(
+                                                  ref.tr(
+                                                    'lyrics_editor_record_next',
+                                                  ),
+                                                ),
+                                              )
+                                            else
+                                              FilledButton.tonalIcon(
+                                                key: const ValueKey(
+                                                  'lyrics-editor-record-now',
+                                                ),
+                                                onPressed: _rows.isEmpty
+                                                    ? null
+                                                    : _recordCurrentTime,
+                                                icon: const Icon(
+                                                  Icons.my_location_rounded,
+                                                ),
+                                                label: Text(
+                                                  ref.tr(
+                                                    'lyrics_editor_record_now',
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (_synchronized)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 4, 14, 12),
+                            child: Column(
+                              children: List.generate(_rows.length, (index) {
+                                final row = _rows[index];
+                                final isSelected = index == _selectedRowIndex;
+                                row.focusNode.onKeyEvent = (node, event) {
+                                  if (widget.advancedLrcTools &&
+                                      _synchronized &&
+                                      event is KeyDownEvent &&
+                                      (event.logicalKey ==
+                                              LogicalKeyboardKey.enter ||
+                                          event.logicalKey ==
+                                              LogicalKeyboardKey.numpadEnter) &&
+                                      !HardwareKeyboard
+                                          .instance
+                                          .isShiftPressed) {
+                                    _selectedRowIndex = index;
+                                    _recordAndAdvance();
+                                    return KeyEventResult.handled;
+                                  }
+                                  if (event is KeyDownEvent &&
+                                      event.logicalKey ==
+                                          LogicalKeyboardKey.arrowDown &&
+                                      index + 1 < _rows.length) {
+                                    final selection = row.lyric.selection;
+                                    if (!selection.isValid ||
+                                        selection.extentOffset >=
+                                            row.lyric.text.length) {
+                                      final nextIndex = index + 1;
+                                      final nextRow = _rows[nextIndex];
+                                      nextRow.focusNode.requestFocus();
+                                      setState(
+                                        () => _selectedRowIndex = nextIndex,
+                                      );
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                            final nextContext =
+                                                nextRow.rowKey.currentContext;
+                                            if (nextContext != null) {
+                                              Scrollable.ensureVisible(
+                                                nextContext,
+                                                duration: const Duration(
+                                                  milliseconds: 180,
+                                                ),
+                                                alignment: 0.25,
+                                              );
+                                            }
+                                          });
+                                      return KeyEventResult.handled;
+                                    }
+                                  }
+                                  return KeyEventResult.ignored;
+                                };
+                                return Container(
+                                  key: row.rowKey,
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  padding: const EdgeInsets.fromLTRB(
+                                    12,
+                                    8,
+                                    12,
+                                    12,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.surfaceContainerLow,
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? Theme.of(
+                                              context,
+                                            ).colorScheme.primary
+                                          : themeBorder(context),
+                                      width: isSelected ? 1.5 : 1,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              '#${index + 1}',
+                                              style: TextStyle(
+                                                color: subdued,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: 104,
+                                            child: TextField(
+                                              controller: row.time,
+                                              keyboardType:
+                                                  TextInputType.datetime,
+                                              decoration: InputDecoration(
+                                                isDense: true,
+                                                hintText: '00:11.250',
+                                                contentPadding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 9,
+                                                      vertical: 11,
+                                                    ),
+                                                border: OutlineInputBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(9),
+                                                ),
+                                              ),
+                                              onSubmitted: (_) =>
+                                                  _seekToRow(row),
+                                              onTap: () => setState(
+                                                () => _selectedRowIndex = index,
+                                              ),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip: ref.tr(
+                                              'lyrics_editor_seek',
+                                            ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            constraints:
+                                                const BoxConstraints.tightFor(
+                                                  width: 36,
+                                                  height: 36,
+                                                ),
+                                            padding: EdgeInsets.zero,
+                                            onPressed: () => _seekToRow(row),
+                                            icon: const Icon(
+                                              Icons.play_arrow_rounded,
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip: ref.tr(
+                                              'lyrics_editor_stamp',
+                                            ),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            constraints:
+                                                const BoxConstraints.tightFor(
+                                                  width: 36,
+                                                  height: 36,
+                                                ),
+                                            padding: EdgeInsets.zero,
+                                            onPressed: () => _stamp(row),
+                                            icon: const Icon(
+                                              Icons.my_location_rounded,
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip: ref.tr('remove'),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            constraints:
+                                                const BoxConstraints.tightFor(
+                                                  width: 36,
+                                                  height: 36,
+                                                ),
+                                            padding: EdgeInsets.zero,
+                                            onPressed: _rows.length == 1
+                                                ? null
+                                                : () {
+                                                    _flushHistoryCapture();
+                                                    final removed = _rows
+                                                        .removeAt(index);
+                                                    removed.time.removeListener(
+                                                      _scheduleHistoryCapture,
+                                                    );
+                                                    removed.lyric.removeListener(
+                                                      _scheduleHistoryCapture,
+                                                    );
+                                                    removed.dispose();
+                                                    if (_selectedRowIndex >=
+                                                        _rows.length) {
+                                                      _selectedRowIndex =
+                                                          _rows.length - 1;
+                                                    }
+                                                    setState(() {});
+                                                    _commitStructuralChange();
+                                                  },
+                                            icon: const Icon(
+                                              Icons.remove_circle_outline,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      if (isSelected && widget.advancedLrcTools)
+                                        Wrap(
+                                          alignment: WrapAlignment.end,
+                                          crossAxisAlignment:
+                                              WrapCrossAlignment.center,
+                                          children: [
+                                            TextButton(
+                                              onPressed: () =>
+                                                  _nudgeRowTime(row, -1000),
+                                              child: const Text('−1s'),
+                                            ),
+                                            TextButton(
+                                              onPressed: () => _nudgeRowTime(
+                                                row,
+                                                -_timeNudgeMs,
+                                              ),
+                                              child: Text(
+                                                '−${_formatNudgeDuration(_timeNudgeMs)}',
+                                              ),
+                                            ),
+                                            PopupMenuButton<int>(
+                                              tooltip: ref.tr(
+                                                'lyrics_editor_adjust_time',
+                                              ),
+                                              initialValue: _timeNudgeMs,
+                                              onSelected: (value) => setState(
+                                                () => _timeNudgeMs = value,
+                                              ),
+                                              itemBuilder: (_) =>
+                                                  [1, 10, 50, 100, 500, 1000]
+                                                      .map(
+                                                        (
+                                                          value,
+                                                        ) => PopupMenuItem(
+                                                          value: value,
+                                                          child: Text(
+                                                            _formatNudgeDuration(
+                                                              value,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      )
+                                                      .toList(),
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                child: Text(
+                                                  '±${_formatNudgeDuration(_timeNudgeMs)}',
+                                                  style: TextStyle(
+                                                    color: subdued,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            TextButton(
+                                              onPressed: () => _nudgeRowTime(
+                                                row,
+                                                _timeNudgeMs,
+                                              ),
+                                              child: Text(
+                                                '+${_formatNudgeDuration(_timeNudgeMs)}',
+                                              ),
+                                            ),
+                                            TextButton(
+                                              onPressed: () =>
+                                                  _nudgeRowTime(row, 1000),
+                                              child: const Text('+1s'),
+                                            ),
+                                          ],
+                                        ),
+                                      const SizedBox(height: 6),
+                                      TextField(
+                                        key: ValueKey(
+                                          'lyrics-line-input-$index',
+                                        ),
+                                        controller: row.lyric,
+                                        focusNode: row.focusNode,
+                                        textInputAction: TextInputAction.next,
+                                        onChanged: (value) =>
+                                            _splitInsertedNewlines(
+                                              index,
+                                              value,
+                                            ),
+                                        onSubmitted: (_) =>
+                                            _splitLyricAtCursor(index),
+                                        onTap: () => setState(
+                                          () => _selectedRowIndex = index,
+                                        ),
+                                        minLines: 2,
+                                        maxLines: 5,
+                                        textAlignVertical:
+                                            TextAlignVertical.top,
+                                        decoration: InputDecoration(
+                                          isDense: false,
+                                          hintText: ref.tr(
+                                            'lyrics_editor_line_hint',
+                                          ),
+                                          alignLabelWithHint: true,
+                                          contentPadding: const EdgeInsets.all(
+                                            12,
+                                          ),
                                           border: OutlineInputBorder(
                                             borderRadius: BorderRadius.circular(
                                               9,
                                             ),
                                           ),
                                         ),
-                                        onSubmitted: (_) => _seekToRow(row),
-                                        onTap: () => setState(
-                                          () => _selectedRowIndex = index,
-                                        ),
-                                      ),
-                                    ),
-                                    IconButton(
-                                      tooltip: ref.tr('lyrics_editor_seek'),
-                                      visualDensity: VisualDensity.compact,
-                                      constraints:
-                                          const BoxConstraints.tightFor(
-                                            width: 36,
-                                            height: 36,
-                                          ),
-                                      padding: EdgeInsets.zero,
-                                      onPressed: () => _seekToRow(row),
-                                      icon: const Icon(
-                                        Icons.play_arrow_rounded,
-                                      ),
-                                    ),
-                                    IconButton(
-                                      tooltip: ref.tr('lyrics_editor_stamp'),
-                                      visualDensity: VisualDensity.compact,
-                                      constraints:
-                                          const BoxConstraints.tightFor(
-                                            width: 36,
-                                            height: 36,
-                                          ),
-                                      padding: EdgeInsets.zero,
-                                      onPressed: () => _stamp(row),
-                                      icon: const Icon(
-                                        Icons.my_location_rounded,
-                                      ),
-                                    ),
-                                    IconButton(
-                                      tooltip: ref.tr('remove'),
-                                      visualDensity: VisualDensity.compact,
-                                      constraints:
-                                          const BoxConstraints.tightFor(
-                                            width: 36,
-                                            height: 36,
-                                          ),
-                                      padding: EdgeInsets.zero,
-                                      onPressed: _rows.length == 1
-                                          ? null
-                                          : () {
-                                              _flushHistoryCapture();
-                                              final removed = _rows.removeAt(
-                                                index,
-                                              );
-                                              removed.time.removeListener(
-                                                _scheduleHistoryCapture,
-                                              );
-                                              removed.lyric.removeListener(
-                                                _scheduleHistoryCapture,
-                                              );
-                                              removed.dispose();
-                                              if (_selectedRowIndex >=
-                                                  _rows.length) {
-                                                _selectedRowIndex =
-                                                    _rows.length - 1;
-                                              }
-                                              setState(() {});
-                                              _commitStructuralChange();
-                                            },
-                                      icon: const Icon(
-                                        Icons.remove_circle_outline,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                if (isSelected && widget.advancedLrcTools)
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            _nudgeRowTime(row, -_timeNudgeMs),
-                                        child: Text('−${_timeNudgeMs}ms'),
-                                      ),
-                                      PopupMenuButton<int>(
-                                        tooltip: ref.tr(
-                                          'lyrics_editor_adjust_time',
-                                        ),
-                                        initialValue: _timeNudgeMs,
-                                        onSelected: (value) => setState(
-                                          () => _timeNudgeMs = value,
-                                        ),
-                                        itemBuilder: (_) =>
-                                            [1, 10, 50, 100, 500, 1000]
-                                                .map(
-                                                  (value) => PopupMenuItem(
-                                                    value: value,
-                                                    child: Text('${value}ms'),
-                                                  ),
-                                                )
-                                                .toList(),
-                                        child: Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                          child: Text(
-                                            '±${_timeNudgeMs}ms',
-                                            style: TextStyle(color: subdued),
-                                          ),
-                                        ),
-                                      ),
-                                      TextButton(
-                                        onPressed: () =>
-                                            _nudgeRowTime(row, _timeNudgeMs),
-                                        child: Text('+${_timeNudgeMs}ms'),
                                       ),
                                     ],
                                   ),
-                                const SizedBox(height: 6),
-                                TextField(
-                                  key: ValueKey('lyrics-line-input-$index'),
-                                  controller: row.lyric,
-                                  focusNode: row.focusNode,
-                                  textInputAction:
-                                      widget.advancedLrcTools && _synchronized
-                                      ? TextInputAction.next
-                                      : TextInputAction.newline,
-                                  onSubmitted:
-                                      widget.advancedLrcTools && _synchronized
-                                      ? (_) {
-                                          _selectedRowIndex = index;
-                                          _recordAndAdvance();
-                                        }
-                                      : null,
-                                  onTap: () =>
-                                      setState(() => _selectedRowIndex = index),
-                                  minLines: 2,
-                                  maxLines: 5,
-                                  textAlignVertical: TextAlignVertical.top,
-                                  decoration: InputDecoration(
-                                    isDense: false,
-                                    hintText: ref.tr('lyrics_editor_line_hint'),
-                                    alignLabelWithHint: true,
-                                    contentPadding: const EdgeInsets.all(12),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(9),
-                                    ),
-                                  ),
-                                ),
-                              ],
+                                );
+                              }),
                             ),
-                          );
-                        }),
-                      ),
-                    )
-                  else
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                      child: TextField(
-                        controller: _plainText,
-                        minLines: 6,
-                        maxLines: 8,
-                        scrollPhysics: const ClampingScrollPhysics(),
-                        textAlignVertical: TextAlignVertical.top,
-                        style: const TextStyle(fontSize: 19, height: 1.45),
-                        decoration: InputDecoration(
-                          hintText: ref.tr('lyrics_editor_line_hint'),
-                          hintStyle: TextStyle(
-                            fontSize: 16,
-                            color: themeTextSub(context),
+                          )
+                        else
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                            child: TextField(
+                              controller: _plainText,
+                              minLines: 6,
+                              maxLines: 8,
+                              scrollPhysics: const ClampingScrollPhysics(),
+                              textAlignVertical: TextAlignVertical.top,
+                              style: const TextStyle(
+                                fontSize: 19,
+                                height: 1.45,
+                              ),
+                              decoration: InputDecoration(
+                                hintText: ref.tr('lyrics_editor_line_hint'),
+                                hintStyle: TextStyle(
+                                  fontSize: 16,
+                                  color: themeTextSub(context),
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                contentPadding: const EdgeInsets.all(12),
+                              ),
+                            ),
                           ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                          child: Wrap(
+                            alignment: WrapAlignment.end,
+                            spacing: 8,
+                            runSpacing: 6,
+                            children: [
+                              if (_synchronized)
+                                OutlinedButton.icon(
+                                  onPressed: () {
+                                    _flushHistoryCapture();
+                                    final added = _LyricDraft(null, '');
+                                    _rows.add(added);
+                                    _attachHistoryListeners([added]);
+                                    setState(() {
+                                      _selectedRowIndex = _rows.length - 1;
+                                    });
+                                    _commitStructuralChange();
+                                  },
+                                  icon: const Icon(Icons.add_rounded),
+                                  label: Text(ref.tr('lyrics_editor_add_line')),
+                                ),
+                              OutlinedButton.icon(
+                                onPressed: _saving ? null : _export,
+                                icon: const Icon(Icons.file_download_outlined),
+                                label: Text(ref.tr('lyrics_editor_export')),
+                              ),
+                              FilledButton.icon(
+                                onPressed: _saving ? null : _save,
+                                icon: _saving
+                                    ? const SizedBox.square(
+                                        dimension: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.save_outlined),
+                                label: Text(ref.tr('save')),
+                              ),
+                            ],
                           ),
-                          contentPadding: const EdgeInsets.all(12),
-                        ),
-                      ),
-                    ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
-                    child: Wrap(
-                      alignment: WrapAlignment.end,
-                      spacing: 8,
-                      runSpacing: 6,
-                      children: [
-                        if (_synchronized)
-                          OutlinedButton.icon(
-                            onPressed: () {
-                              _flushHistoryCapture();
-                              final added = _LyricDraft(
-                                parseLyricsTimestamp(
-                                      _currentLyricTimestamp(),
-                                    ) ??
-                                    Duration.zero,
-                                '',
-                              );
-                              _rows.add(added);
-                              _attachHistoryListeners([added]);
-                              setState(() {
-                                _selectedRowIndex = _rows.length - 1;
-                              });
-                              _commitStructuralChange();
-                            },
-                            icon: const Icon(Icons.add_rounded),
-                            label: Text(ref.tr('lyrics_editor_add_line')),
-                          ),
-                        OutlinedButton.icon(
-                          onPressed: _saving ? null : _export,
-                          icon: const Icon(Icons.file_download_outlined),
-                          label: Text(ref.tr('lyrics_editor_export')),
-                        ),
-                        FilledButton.icon(
-                          onPressed: _saving ? null : _save,
-                          icon: _saving
-                              ? const SizedBox.square(
-                                  dimension: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.save_outlined),
-                          label: Text(ref.tr('save')),
                         ),
                       ],
                     ),
                   ),
-                ],
-              ),
-            ),
           ),
         ],
       ),
@@ -1593,9 +2659,16 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
       },
       child: editor,
     );
-    return widget.inline
-        ? undoShortcuts
-        : Dialog(insetPadding: const EdgeInsets.all(16), child: undoShortcuts);
+    final guardedEditor = PopScope<Object?>(
+      canPop: _allowRoutePop,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_requestClose(popRouteAfterClose: true));
+      },
+      child: undoShortcuts,
+    );
+    return widget.inline || widget.fullScreen
+        ? guardedEditor
+        : Dialog(insetPadding: const EdgeInsets.all(16), child: guardedEditor);
   }
 }
 
@@ -1678,6 +2751,11 @@ List<_LyricDraft> _moveUnstampedRowsToEnd(List<_LyricDraft> rows) {
   for (final row in rows) {
     (parseLyricsTimestamp(row.time.text) == null ? unstamped : timed).add(row);
   }
+  timed.sort((a, b) {
+    final aTime = parseLyricsTimestamp(a.time.text)!;
+    final bTime = parseLyricsTimestamp(b.time.text)!;
+    return aTime.compareTo(bTime);
+  });
   return [...timed, ...unstamped];
 }
 

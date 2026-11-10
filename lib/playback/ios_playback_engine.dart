@@ -12,6 +12,7 @@ import 'package:video_player_pip/index.dart' as vp;
 
 import 'media_kit_engine.dart';
 import 'playback_engine.dart';
+import 'pip_artwork_movie.dart';
 
 /// Uses AVPlayer/AVPlayerLayer on iOS so the system can take over the layer
 /// for PiP. Sources AVPlayer cannot open fall back to media_kit; local WebM
@@ -37,6 +38,7 @@ class IosPlaybackEngine implements PlaybackEngine {
   bool _switchingToFallback = false;
   bool _normalizationEnabled = false;
   int _sourceEpoch = 0;
+  int _timelineOffsetMs = 0;
   String? _pictureInPictureFailure;
   double _volume = 1;
   double _speed = 1;
@@ -68,6 +70,7 @@ class IosPlaybackEngine implements PlaybackEngine {
     await _disposeActive();
     _switchingToFallback = false;
     _activeSource = source;
+    _timelineOffsetMs = source.timelineOffset.inMilliseconds;
     _didComplete = false;
     _endAt = source.end;
     _snapshot = const PlaybackSnapshot();
@@ -153,14 +156,14 @@ class IosPlaybackEngine implements PlaybackEngine {
       unawaited(controller.pause());
       unawaited(controller.seekTo(endAt));
       _snapshot = PlaybackSnapshot(
-        position: endAt,
-        duration: value.duration,
+        position: _toTimelinePosition(endAt),
+        duration: _toTimelineDuration(value.duration),
         isPlaying: false,
         initialized: true,
         completed: true,
       );
       _snapshots.add(_snapshot);
-      _positions.add(endAt);
+      _positions.add(_toTimelinePosition(endAt));
       _playing.add(false);
       _completed.add(null);
       _onEnded?.call();
@@ -176,16 +179,38 @@ class IosPlaybackEngine implements PlaybackEngine {
       _didComplete = false;
     }
     _snapshot = PlaybackSnapshot(
-      position: value.position,
-      duration: value.duration,
+      position: _toTimelinePosition(value.position),
+      duration: _toTimelineDuration(value.duration),
       isPlaying: value.isPlaying,
       initialized: value.isInitialized,
       completed: value.isCompleted,
     );
     _snapshots.add(_snapshot);
-    _positions.add(value.position);
-    _durations.add(value.duration);
+    _positions.add(_toTimelinePosition(value.position));
+    _durations.add(_toTimelineDuration(value.duration));
     _playing.add(value.isPlaying);
+  }
+
+  Duration _toTimelinePosition(Duration sourcePosition) => Duration(
+    milliseconds: (sourcePosition.inMilliseconds - _timelineOffsetMs).clamp(
+      0,
+      _activeSource?.end == null
+          ? (1 << 62)
+          : (_activeSource!.end!.inMilliseconds - _timelineOffsetMs).clamp(
+              0,
+              1 << 62,
+            ),
+    ),
+  );
+
+  Duration _toTimelineDuration(Duration sourceDuration) {
+    final end = _activeSource?.end?.inMilliseconds;
+    final effectiveEnd = end == null
+        ? sourceDuration.inMilliseconds
+        : sourceDuration.inMilliseconds.clamp(0, end);
+    return Duration(
+      milliseconds: (effectiveEnd - _timelineOffsetMs).clamp(0, 1 << 62),
+    );
   }
 
   Future<void> _switchToMediaKit(vp.VideoPlayerController controller) async {
@@ -199,6 +224,8 @@ class IosPlaybackEngine implements PlaybackEngine {
       uri: source.uri,
       start: resumePosition,
       end: source.end,
+      timelineOffset: source.timelineOffset,
+      pipArtworkPath: source.pipArtworkPath,
     );
     controller.removeListener(_onVideoPlayerChanged);
     _controller = null;
@@ -244,7 +271,13 @@ class IosPlaybackEngine implements PlaybackEngine {
   Future<void> seekTo(Duration position) async {
     final fallback = _fallback;
     if (fallback != null) return fallback.seekTo(position);
-    await _controller?.seekTo(position);
+    final sourceMs = position.inMilliseconds + _timelineOffsetMs;
+    final endMs = _activeSource?.end?.inMilliseconds;
+    await _controller?.seekTo(
+      Duration(
+        milliseconds: endMs == null ? sourceMs : sourceMs.clamp(0, endMs),
+      ),
+    );
   }
 
   @override
@@ -342,8 +375,20 @@ class IosPlaybackEngine implements PlaybackEngine {
   String? get pictureInPictureFailure => _pictureInPictureFailure;
 
   @override
-  Future<bool> enterPictureInPicture({double? aspectRatio}) async {
+  Future<bool> enterPictureInPicture({
+    double? aspectRatio,
+    String? artworkPath,
+    Rect? sourceRect,
+  }) async {
     _pictureInPictureFailure = null;
+    if (artworkPath != null) {
+      try {
+        await _switchArtworkToAvPlayer(artworkPath, _sourceEpoch);
+      } catch (error) {
+        _pictureInPictureFailure = error.toString();
+        return false;
+      }
+    }
     if (_controller == null && _fallback != null) {
       final source = _activeSource;
       if (source == null || !_isLocalWebM(source.uri)) return false;
@@ -371,6 +416,87 @@ class IosPlaybackEngine implements PlaybackEngine {
     } catch (error) {
       _pictureInPictureFailure = 'iOS could not start system PiP: $error';
       return false;
+    }
+  }
+
+  Future<void> _switchArtworkToAvPlayer(
+    String artworkPath,
+    int sourceEpoch,
+  ) async {
+    final source = _activeSource;
+    if (source == null) {
+      throw StateError('No active audio is available for PiP.');
+    }
+    final parsed = Uri.tryParse(source.uri);
+    final audioPath = parsed?.scheme == 'file'
+        ? parsed!.toFilePath()
+        : source.uri;
+    final audioFile = File(audioPath);
+    if (!await audioFile.exists()) {
+      throw StateError('The active audio file is unavailable for PiP.');
+    }
+    final extension = audioPath.split('.').last.toLowerCase();
+    final moviePath = await PipArtworkMovie.prepare(
+      mediaId: source.mediaId,
+      artworkPath: artworkPath,
+      audioPath: audioPath,
+      trimEndMs: source.end?.inMilliseconds,
+      forceAac: !const {'aac', 'm4a', 'mp4', 'mov', 'mp3'}.contains(extension),
+    );
+    if (sourceEpoch != _sourceEpoch || !identical(source, _activeSource)) {
+      throw StateError('The current track changed before PiP was ready.');
+    }
+    final fallback = _fallback;
+    final oldController = _controller;
+    final current = fallback?.snapshot ?? snapshot;
+    final wasPlaying = current.isPlaying;
+    final controller = vp.VideoPlayerController.file(
+      File(moviePath),
+      videoPlayerOptions: vp.VideoPlayerOptions(allowBackgroundPlayback: true),
+    );
+    try {
+      await controller.initialize();
+      await controller.setVolume(_volume);
+      await controller.setPlaybackSpeed(_speed);
+      await controller.seekTo(
+        Duration(
+          milliseconds:
+              current.position.inMilliseconds +
+              source.timelineOffset.inMilliseconds,
+        ),
+      );
+      await fallback?.pause();
+      await oldController?.pause();
+      if (oldController != null) {
+        oldController.removeListener(_onVideoPlayerChanged);
+      }
+      _controller = controller;
+      controller.addListener(_onVideoPlayerChanged);
+      _activeSource = PlaybackSource(
+        mediaId: source.mediaId,
+        uri: moviePath,
+        start: source.start,
+        end: source.end,
+        timelineOffset: source.timelineOffset,
+        pipArtworkPath: source.pipArtworkPath,
+      );
+      if (fallback != null) {
+        for (final subscription in _fallbackSubscriptions) {
+          await subscription.cancel();
+        }
+        _fallbackSubscriptions.clear();
+        _fallback = null;
+        await fallback.dispose();
+      }
+      await oldController?.dispose();
+      if (wasPlaying) await controller.play();
+      _onVideoPlayerChanged();
+      // Let the hidden VideoPlayer surface attach its AVPlayerLayer before
+      // the PiP plugin locates it.
+      await WidgetsBinding.instance.endOfFrame;
+    } catch (_) {
+      await controller.dispose();
+      rethrow;
     }
   }
 
@@ -406,7 +532,13 @@ class IosPlaybackEngine implements PlaybackEngine {
       await controller.initialize();
       await controller.setVolume(_volume);
       await controller.setPlaybackSpeed(_speed);
-      await controller.seekTo(current.position);
+      await controller.seekTo(
+        Duration(
+          milliseconds:
+              current.position.inMilliseconds +
+              source.timelineOffset.inMilliseconds,
+        ),
+      );
       await fallback.pause();
       _controller = controller;
       controller.addListener(_onVideoPlayerChanged);
@@ -421,6 +553,8 @@ class IosPlaybackEngine implements PlaybackEngine {
         uri: convertedPath,
         start: source.start,
         end: source.end,
+        timelineOffset: source.timelineOffset,
+        pipArtworkPath: source.pipArtworkPath,
       );
       if (current.isPlaying) await controller.play();
       _onVideoPlayerChanged();

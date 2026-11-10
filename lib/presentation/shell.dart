@@ -32,6 +32,7 @@ import 'widgets/search_overlay.dart';
 import 'widgets/sidebar.dart';
 import 'widgets/shell_chrome.dart';
 import 'widgets/top_bar.dart';
+import 'widgets/desktop_menu_bar.dart';
 import 'widgets/transport_bar.dart';
 import 'widgets/thumb_image.dart';
 import 'widgets/yureru_logo.dart';
@@ -123,6 +124,10 @@ class _AppShellState extends ConsumerState<AppShell>
     _nativeMenuChannel.setMethodCallHandler((call) async {
       if (call.method == 'openSettings') {
         _setNav(Nav.settings);
+        return null;
+      }
+      if (call.method == 'openSearch') {
+        _openSearch();
         return null;
       }
       throw MissingPluginException(
@@ -596,6 +601,7 @@ class _AppShellState extends ConsumerState<AppShell>
                       children: [
                         Column(
                           children: [
+                            DesktopMenuBar(onFind: _openSearch),
                             TopBar(
                               onOpenSearch: _openSearch,
                               onSubmitSearch: _submitSearch,
@@ -753,7 +759,10 @@ class _AppShellState extends ConsumerState<AppShell>
                     TransportBar(
                       queueVisible: showQueue,
                       onToggleQueue: _toggleQueue,
-                      transportOnly: viewing,
+                      // Keep the full transport row in artwork player view
+                      // too. Its controls stay centered while now-playing,
+                      // volume and speed remain anchored to the sides.
+                      transportOnly: false,
                       ambient: showAmbient,
                     ),
                 ],
@@ -772,6 +781,7 @@ class _AppShellState extends ConsumerState<AppShell>
   Widget _narrow() {
     final library = ref.watch(libraryProvider);
     final playlists = library.playlists;
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final compactDrawer = MediaQuery.sizeOf(context).height < 620;
     final pages = [
       HomeScreen(
@@ -800,7 +810,9 @@ class _AppShellState extends ConsumerState<AppShell>
     // Drawer for navigation (shown via hamburger button in TopBar).
     // Visible at all times including when player is active.
     final drawer = Drawer(
-      width: (MediaQuery.sizeOf(context).width - 56).clamp(260.0, 288.0),
+      width: screenWidth < 600
+          ? (screenWidth * 0.72).clamp(176.0, 224.0)
+          : (screenWidth - 56).clamp(260.0, 288.0),
       backgroundColor: themePanelSolid(context),
       elevation: 0,
       shape: const RoundedRectangleBorder(
@@ -957,6 +969,8 @@ class _AppShellState extends ConsumerState<AppShell>
             drawer: isCinema || isPlayerMode ? null : drawer,
             body: Column(
               children: [
+                if (!isCinema && !isPlayerMode)
+                  DesktopMenuBar(onFind: _openSearch),
                 if (!isCinema && !isPlayerMode)
                   SafeArea(
                     bottom: false,

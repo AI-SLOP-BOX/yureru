@@ -554,7 +554,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                     ),
                     decoration: q.speed == s
                         ? BoxDecoration(
-                            color: kAccent,
+                            color: themeAccent(context),
                             borderRadius: BorderRadius.circular(9),
                           )
                         : null,
@@ -563,7 +563,9 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                         if (q.speed == s) ...[
                           Icon(
                             Icons.check_rounded,
-                            color: isDark ? kBg : Colors.white,
+                            color: themeAccent(context).computeLuminance() > 0.5
+                                ? Colors.black87
+                                : Colors.white,
                             size: 18,
                           ),
                           const SizedBox(width: 8),
@@ -605,7 +607,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                   size: 14,
                   color: !has
                       ? kTextMuted
-                      : (q.speed == 1.0 ? kTextSub : kAccent),
+                      : (q.speed == 1.0 ? kTextSub : themeAccent(context)),
                 ),
                 const SizedBox(width: 4),
                 Text(
@@ -615,7 +617,7 @@ class _TransportBarState extends ConsumerState<TransportBar> {
                     fontWeight: FontWeight.w600,
                     color: !has
                         ? kTextMuted
-                        : (q.speed == 1.0 ? kTextSub : kAccent),
+                        : (q.speed == 1.0 ? kTextSub : themeAccent(context)),
                   ),
                 ),
               ],
@@ -688,7 +690,9 @@ class _TimelineBarState extends ConsumerState<_TimelineBar> {
     final inactiveSeekColor = desktop
         ? const Color(0xFF676767)
         : (isDark ? kTextMuted.withValues(alpha: 0.4) : Colors.black12);
-    final seekThumbColor = desktop ? kAccentLight : primaryIconColor;
+    final seekThumbColor = desktop
+        ? themeAccentHighlight(context)
+        : primaryIconColor;
 
     return Row(
       children: [

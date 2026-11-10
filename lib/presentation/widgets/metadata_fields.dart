@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/creator_names.dart';
+import 'unsaved_changes_guard.dart';
 
 class MetadataField extends StatelessWidget {
   const MetadataField({
@@ -101,8 +102,17 @@ class CreatorNamesField extends StatefulWidget {
 }
 
 class CreatorNamesFieldState extends State<CreatorNamesField> {
-  late final List<String> _names = splitCreatorNames(widget.initialValue);
+  // splitCreatorNames returns a const empty list for an unset creator. Copy
+  // it so the first name can be added just like collaborators can.
+  late final List<String> _names = List.of(
+    splitCreatorNames(widget.initialValue),
+  );
   final _entryController = TextEditingController();
+
+  /// Commits text still sitting in the input before the parent form saves.
+  void commitPendingInput() => _addName(_entryController.value.text);
+
+  bool get hasPendingInput => _entryController.text.trim().isNotEmpty;
 
   @override
   void dispose() {
@@ -111,17 +121,18 @@ class CreatorNamesFieldState extends State<CreatorNamesField> {
   }
 
   void _addName([String? value]) {
-    final name = (value ?? _entryController.text).trim();
+    final name = (value ?? _entryController.value.text).trim();
     if (name.isEmpty) return;
     if (_names.any(
       (existing) => existing.toLowerCase() == name.toLowerCase(),
     )) {
-      _entryController.clear();
       return;
     }
-    setState(() => _names.add(name));
+    setState(() {
+      _names.add(name);
+      _entryController.clear();
+    });
     widget.onChanged(List.unmodifiable(_names));
-    _entryController.clear();
   }
 
   void _removeName(String name) {
@@ -135,27 +146,58 @@ class CreatorNamesFieldState extends State<CreatorNamesField> {
     final controller = TextEditingController(text: original);
     final updated = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(widget.text('edit_creator_names', '投稿者名を編集')),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (value) => Navigator.pop(dialogContext, value),
-          decoration: InputDecoration(
-            labelText: widget.text('enter_creator_names', '投稿者名'),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: Text(widget.text('cancel', 'キャンセル')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: Text(widget.text('save', '保存')),
-          ),
-        ],
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final hasDraft = controller.text != original;
+          return PopScope<Object?>(
+            canPop: !hasDraft,
+            onPopInvokedWithResult: (didPop, _) async {
+              if (!didPop &&
+                  hasDraft &&
+                  await confirmDiscardUnsavedChanges(
+                    context,
+                    (key) => widget.text(key, key),
+                  ) &&
+                  dialogContext.mounted) {
+                Navigator.pop(dialogContext);
+              }
+            },
+            child: AlertDialog(
+              title: Text(widget.text('edit_creator_names', '投稿者名を編集')),
+              content: TextField(
+                controller: controller,
+                autofocus: true,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (value) => Navigator.pop(dialogContext, value),
+                onChanged: (_) => setDialogState(() {}),
+                decoration: InputDecoration(
+                  labelText: widget.text('enter_creator_names', '投稿者名'),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    if (hasDraft &&
+                        !await confirmDiscardUnsavedChanges(
+                          context,
+                          (key) => widget.text(key, key),
+                        )) {
+                      return;
+                    }
+                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                  },
+                  child: Text(widget.text('cancel', 'キャンセル')),
+                ),
+                FilledButton(
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, controller.text),
+                  child: Text(widget.text('save', '保存')),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
     controller.dispose();
@@ -246,16 +288,23 @@ class CreatorNamesFieldState extends State<CreatorNamesField> {
               ),
             ),
             const SizedBox(width: 6),
-            IconButton(
-              tooltip: widget.text('add_name', '名前を追加'),
-              onPressed: () => _addName(),
-              icon: const Icon(Icons.add_rounded),
-              style: IconButton.styleFrom(
+            FilledButton.icon(
+              // Keep the button enabled: on desktop, text can be entered by
+              // IME/autofill without the widget's cached pending value being
+              // refreshed before the click. Read the controller at click time.
+              onPressed: () => _addName(_entryController.text),
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: Text(widget.text('add_name', '名前を追加')),
+              style: FilledButton.styleFrom(
                 foregroundColor: widget.textColor,
-                side: BorderSide(color: widget.borderColor),
+                backgroundColor: widget.isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : const Color(0xFFF0F0F0),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: widget.borderColor),
                 ),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
               ),
             ),
             const SizedBox(width: 4),
@@ -273,6 +322,7 @@ class CreatorNamesFieldState extends State<CreatorNamesField> {
             ),
           ],
         ),
+        const SizedBox(height: 4),
       ],
     );
   }

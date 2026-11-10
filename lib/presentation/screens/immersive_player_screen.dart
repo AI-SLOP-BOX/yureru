@@ -88,14 +88,12 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
   void _reveal() {
     _idleTimer?.cancel();
     if (!_controlsVisible) setState(() => _controlsVisible = true);
-    if (_pointerOverSurface) return;
     _idleTimer = Timer(const Duration(seconds: 3), () {
       if (mounted &&
           !_overControls &&
           !_pressed &&
           !_editingControls &&
-          !MediaQuery.accessibleNavigationOf(context) &&
-          ref.read(engineProvider).snapshot.isPlaying) {
+          !MediaQuery.accessibleNavigationOf(context)) {
         setState(() => _controlsVisible = false);
       }
     });
@@ -244,27 +242,6 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (mode != PlayerViewMode.media)
-                    IgnorePointer(
-                      child: ImageFiltered(
-                        imageFilter: ui.ImageFilter.blur(
-                          sigmaX: 70,
-                          sigmaY: 70,
-                        ),
-                        child: Opacity(
-                          opacity: 0.22,
-                          child: ThumbImage(
-                            seed: media.id,
-                            mediaId: media.id,
-                            localPath: media.localPath,
-                            imageContext: MediaImageContext.home,
-                            forceArtwork: true,
-                            expand: true,
-                            highRes: true,
-                          ),
-                        ),
-                      ),
-                    ),
                   if (mode == PlayerViewMode.media)
                     const AmbientRoomGlowCanvas(),
                   SafeArea(
@@ -372,10 +349,11 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                               fontSize: 12,
                             ),
                           );
-                          final options = _controls(
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
+                          final options = Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (media.viewAvailability ==
+                                  MediaViewAvailability.both)
                                 PopupMenuButton<PlayerViewMode>(
                                   tooltip: ref.tr('immersive_view_options'),
                                   onOpened: () {
@@ -391,11 +369,8 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                                     _reveal();
                                     if (next == mode) return;
                                     ref
-                                            .read(
-                                              playerViewModeProvider.notifier,
-                                            )
-                                            .state =
-                                        next;
+                                        .read(playerViewModeProvider.notifier)
+                                        .select(next);
                                     unawaited(
                                       engine.setVideoTrackEnabled(
                                         next == PlayerViewMode.media,
@@ -461,75 +436,78 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                                     ),
                                   ),
                                 ),
-                                SleepTimerButton(
-                                  onEditingChanged: (editing) {
-                                    if (!mounted) return;
-                                    _editingControls = editing;
-                                    _reveal();
-                                  },
-                                ),
-                                FavoriteButton(
-                                  mediaId: media.id,
-                                  color: Colors.white,
-                                ),
-                                PlaybackVolumeButton(
-                                  onEditingChanged: (editing) {
-                                    if (!mounted) return;
-                                    _editingControls = editing;
-                                    _reveal();
-                                  },
-                                ),
-                                PictureInPictureButton(
-                                  engine: engine,
-                                  color: Colors.white,
-                                ),
-                                if (showLyricsButton)
-                                  IconButton(
-                                    tooltip: ref.tr('lyrics'),
-                                    isSelected: _showLyrics,
-                                    onPressed: () => setState(
-                                      () => _showLyrics = !_showLyrics,
-                                    ),
-                                    icon: AppSvgIcon(
-                                      'lyrics',
-                                      color: _showLyrics
-                                          ? Colors.white
-                                          : Colors.white38,
-                                    ),
+                              SleepTimerButton(
+                                onEditingChanged: (editing) {
+                                  if (!mounted) return;
+                                  _editingControls = editing;
+                                  _reveal();
+                                },
+                              ),
+                              FavoriteButton(
+                                mediaId: media.id,
+                                color: Colors.white,
+                              ),
+                              PlaybackVolumeButton(
+                                onEditingChanged: (editing) {
+                                  if (!mounted) return;
+                                  _editingControls = editing;
+                                  _reveal();
+                                },
+                              ),
+                              PictureInPictureButton(
+                                engine: engine,
+                                color: Colors.white,
+                              ),
+                              if (showLyricsButton)
+                                IconButton(
+                                  tooltip: ref.tr('lyrics'),
+                                  isSelected: _showLyrics,
+                                  onPressed: () => setState(
+                                    () => _showLyrics = !_showLyrics,
                                   ),
-                              ],
-                            ),
+                                  icon: AppSvgIcon(
+                                    'lyrics',
+                                    color: _showLyrics
+                                        ? Colors.white
+                                        : Colors.white38,
+                                  ),
+                                ),
+                            ],
                           );
                           if (compact) {
-                            return Column(
-                              children: [
-                                Row(
-                                  children: [
-                                    exit,
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Align(
-                                        alignment:
-                                            AlignmentDirectional.centerEnd,
-                                        child: status,
+                            return _controls(
+                              Column(
+                                children: [
+                                  Row(
+                                    children: [
+                                      exit,
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Align(
+                                          alignment:
+                                              AlignmentDirectional.centerEnd,
+                                          child: status,
+                                        ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                                Align(
-                                  alignment: AlignmentDirectional.centerEnd,
-                                  child: options,
-                                ),
-                              ],
+                                    ],
+                                  ),
+                                  Align(
+                                    alignment: AlignmentDirectional.centerEnd,
+                                    child: options,
+                                  ),
+                                ],
+                              ),
                             );
                           }
-                          return Row(
-                            children: [
-                              exit,
-                              const SizedBox(width: 16),
-                              Expanded(child: status),
-                              options,
-                            ],
+                          return _controls(
+                            Row(
+                              children: [
+                                exit,
+                                const SizedBox(width: 16),
+                                Expanded(child: status),
+                                options,
+                              ],
+                            ),
                           );
                         },
                       ),
@@ -620,15 +598,21 @@ class _ImmersivePlayerScreenState extends ConsumerState<ImmersivePlayerScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    key: const ValueKey('immersive-title'),
-                    displayTitle(media.title),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w700,
+                  InkWell(
+                    borderRadius: BorderRadius.circular(4),
+                    onTap: () =>
+                        ref.read(videoOpenRequestProvider.notifier).state =
+                            media.id,
+                    child: Text(
+                      key: const ValueKey('immersive-title'),
+                      displayTitle(media.title),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   if (formatCreatorNames(media.artist).isNotEmpty)
@@ -761,16 +745,25 @@ class _ImmersiveTransportState extends ConsumerState<_ImmersiveTransport> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton.filled(
+                IconButton(
                   tooltip: ref.tr(playback.isPlaying ? 'pause' : 'play'),
                   onPressed: controller.toggle,
+                  iconSize: 42,
+                  color: Colors.white,
                   style: IconButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    hoverColor: Colors.white10,
+                    highlightColor: Colors.white24,
                   ),
-                  icon: AppSvgIcon(
-                    playback.isPlaying ? 'pause' : 'play',
-                    size: 36,
+                  icon: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 120),
+                    child: Icon(
+                      playback.isPlaying
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                      key: ValueKey(playback.isPlaying),
+                      size: 42,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),

@@ -25,13 +25,20 @@ class YureruApp extends ConsumerWidget {
     final activeLocale = ref.watch(activeLocaleProvider);
     final isRtl = ref.watch(isRtlProvider);
     final currentThemeMode = ref.watch(themeModeProvider);
+    final appearance = ref.watch(appearanceColorsProvider);
 
     return MaterialApp(
       title: 'Yureru',
       debugShowCheckedModeBanner: false,
       locale: activeLocale,
-      theme: yureruLightTheme(),
-      darkTheme: yureruDarkTheme(),
+      theme: yureruLightTheme(
+        accentColor: Color(appearance.accent),
+        backgroundColor: Color(appearance.lightBackground),
+      ),
+      darkTheme: yureruDarkTheme(
+        accentColor: Color(appearance.accent),
+        backgroundColor: Color(appearance.darkBackground),
+      ),
       themeMode: currentThemeMode,
       themeAnimationDuration: Duration.zero,
       builder: (context, child) {

@@ -10,6 +10,7 @@ import 'media_metadata_editor.dart';
 import '../widgets/app_svg_icon.dart';
 import '../widgets/thumb_image.dart';
 import '../widgets/duration_text.dart';
+import '../widgets/track_actions.dart';
 
 final mediaCollectionsProvider =
     Provider.family<List<MediaCollection>, CollectionKind>((ref, kind) {
@@ -192,101 +193,88 @@ class _CollectionBrowserState extends ConsumerState<CollectionBrowser> {
     String? currentId,
     bool wide,
   ) {
-    return ListTile(
-      key: ValueKey('collection-track-${media.id}'),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      selectedTileColor: Theme.of(
-        context,
-      ).colorScheme.primary.withValues(alpha: 0.12),
-      selected: currentId == media.id,
-      leading: ThumbImage(
-        seed: media.title,
-        mediaId: media.id,
-        localPath: media.localPath,
-        imageContext: widget.kind == CollectionKind.albums
-            ? MediaImageContext.album
-            : MediaImageContext.home,
-      ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '${media.trackNumber == null || widget.kind == CollectionKind.artists ? '' : '${media.trackNumber}. '}${media.title}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (media.isFavorite)
-            Padding(
-              padding: const EdgeInsetsDirectional.only(start: 8),
-              child: AppSvgIcon(
-                'favorite_filled',
-                size: 14,
-                color: Theme.of(context).colorScheme.primary,
+    return TrackContextMenuRegion(
+      ref: ref,
+      media: media,
+      child: ListTile(
+        key: ValueKey('collection-track-${media.id}'),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        selectedTileColor: Theme.of(
+          context,
+        ).colorScheme.primary.withValues(alpha: 0.12),
+        selected: currentId == media.id,
+        leading: ThumbImage(
+          seed: media.title,
+          mediaId: media.id,
+          localPath: media.localPath,
+          imageContext: widget.kind == CollectionKind.albums
+              ? MediaImageContext.album
+              : MediaImageContext.home,
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '${media.trackNumber == null || widget.kind == CollectionKind.artists ? '' : '${media.trackNumber}. '}${media.title}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
-        ],
-      ),
-      subtitle: Text(
-        '${showDiscs ? '${ref.tr('disc_label').replaceAll('{disc}', '${media.discNumber ?? 1}')} · ' : ''}${media.artist ?? ref.tr('unknown_artist')}',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (wide && media.durationMs != null)
-            DurationText(
-              mediaId: media.id,
-              localPath: media.localPath,
-              durationMs: media.durationMs,
-            ),
-          PopupMenuButton<String>(
-            tooltip: ref.tr('browse_track_actions'),
-            icon: const AppSvgIcon('more_horizontal'),
-            onSelected: (action) {
-              if (action == 'edit') {
-                showMediaMetadataEditor(context, ref, media);
-              } else {
-                ref.read(libraryProvider.notifier).toggleFavorite(media.id);
-              }
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                value: 'favorite',
-                child: Row(
-                  children: [
-                    AppSvgIcon(
-                      media.isFavorite ? 'favorite_filled' : 'favorite',
-                      size: 18,
-                    ),
-                    const SizedBox(width: 12),
-                    Flexible(
-                      child: Text(
-                        ref.tr(
-                          media.isFavorite ? 'remove_favorite' : 'add_favorite',
-                        ),
-                      ),
-                    ),
-                  ],
+            if (media.isFavorite)
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 8),
+                child: AppSvgIcon(
+                  'favorite_filled',
+                  size: 14,
+                  color: Theme.of(context).colorScheme.primary,
                 ),
               ),
-              PopupMenuItem(
-                value: 'edit',
-                child: Row(
-                  children: [
-                    const AppSvgIcon('collection_edit', size: 18),
-                    const SizedBox(width: 12),
-                    Flexible(child: Text(ref.tr('metadata_edit_title'))),
-                  ],
-                ),
+          ],
+        ),
+        subtitle: Text(
+          '${showDiscs ? '${ref.tr('disc_label').replaceAll('{disc}', '${media.discNumber ?? 1}')} · ' : ''}${media.artist ?? ref.tr('unknown_artist')}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (wide && media.durationMs != null)
+              DurationText(
+                mediaId: media.id,
+                localPath: media.localPath,
+                durationMs: media.durationMs,
               ),
-            ],
-          ),
-        ],
+            PopupMenuButton<String>(
+              tooltip: ref.tr('browse_track_actions'),
+              icon: const AppSvgIcon('more_horizontal'),
+              onSelected: (action) {
+                if (action == 'edit') {
+                  showMediaMetadataEditor(context, ref, media);
+                } else {
+                  runTrackAction(context, ref, media, action);
+                }
+              },
+              itemBuilder: (_) => [
+                ...trackActionItems(ref, media),
+                const PopupMenuDivider(),
+                PopupMenuItem(
+                  value: 'edit',
+                  child: Row(
+                    children: [
+                      const AppSvgIcon('collection_edit', size: 18),
+                      const SizedBox(width: 12),
+                      Flexible(child: Text(ref.tr('metadata_edit_title'))),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        onTap: () => _play(collection.items, selected: media),
       ),
-      onTap: () => _play(collection.items, selected: media),
     );
   }
 

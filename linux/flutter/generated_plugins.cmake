@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   ffmpeg_kit_flutter_new_full
   media_kit_libs_linux
   media_kit_video
+  quickjs_engine
   screen_retriever_linux
   window_manager
 )

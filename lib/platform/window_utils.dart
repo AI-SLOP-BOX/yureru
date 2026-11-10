@@ -59,6 +59,7 @@ Future<void> toggleFullscreen() async {
 Future<bool> enterPictureInPictureWindow({
   PlaybackEngine? engine,
   double? aspectRatio,
+  String? artworkPath,
 }) async {
   if (!(Platform.isMacOS ||
       Platform.isWindows ||
@@ -89,7 +90,11 @@ Future<bool> enterPictureInPictureWindow({
       );
     }
     if (Platform.isMacOS) {
-      return await engine?.enterPictureInPicture(aspectRatio: ratio) ?? false;
+      return await engine?.enterPictureInPicture(
+            aspectRatio: ratio,
+            artworkPath: artworkPath,
+          ) ??
+          false;
     }
     if (Platform.isAndroid) {
       return await windowChannel.invokeMethod<bool>(
@@ -99,7 +104,8 @@ Future<bool> enterPictureInPictureWindow({
           false;
     }
     if (Platform.isIOS) {
-      return await engine?.enterPictureInPicture() ?? false;
+      return await engine?.enterPictureInPicture(artworkPath: artworkPath) ??
+          false;
     }
     _normalWindowBounds ??= await windowManager.getBounds();
     final sourceBounds = _normalWindowBounds!;

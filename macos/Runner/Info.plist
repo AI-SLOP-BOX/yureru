@@ -14,6 +14,14 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>public.audio</string>
+				<string>public.mp3</string>
+				<string>org.xiph.ogg-audio</string>
+				<string>com.apple.m4a-audio</string>
+				<string>public.aac-audio</string>
+				<string>com.microsoft.waveform-audio</string>
+				<string>org.xiph.flac</string>
+				<string>public.aiff-audio</string>
+				<string>com.apple.coreaudio-format</string>
 			</array>
 		</dict>
 		<dict>
@@ -24,6 +32,23 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>public.movie</string>
+				<string>public.video</string>
+				<string>public.mpeg-4</string>
+				<string>com.apple.m4v-video</string>
+				<string>com.apple.quicktime-movie</string>
+				<string>org.matroska.mkv</string>
+				<string>org.webmproject.webm</string>
+				<string>public.avi</string>
+				<string>public.mpeg-2-transport-stream</string>
+				<string>public.avchd-mpeg-2-transport-stream</string>
+				<string>public.mpeg</string>
+				<string>com.adobe.flash.video</string>
+				<string>com.microsoft.windows-media-wmv</string>
+				<string>public.3gpp</string>
+				<string>public.3gpp2</string>
+				<string>org.xiph.ogv</string>
+				<string>jp.co.dvdfllc.vob</string>
+				<string>io.iina.divx</string>
 			</array>
 		</dict>
 	</array>

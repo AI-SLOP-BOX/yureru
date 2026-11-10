@@ -5,7 +5,9 @@ List<String> splitCreatorNames(String? credit) {
   return credit
       .split(
         RegExp(
-          r'\s*(?:,|，|、|・|/|／|&|＆|×|\+|\bfeat\.?|\bft\.?|\bwith\b|\band\b)\s*',
+          // A slash is valid in creator names (for example, band/project
+          // names), so only split on explicit collaboration separators.
+          r'\s*(?:,|，|、|・|&|＆|×|\+|\bfeat\.?|\bft\.?|\bwith\b|\band\b)\s*',
           caseSensitive: false,
         ),
       )

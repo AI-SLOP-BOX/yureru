@@ -131,7 +131,11 @@ class FakePlaybackEngine implements PlaybackEngine {
   Future<void> setVolumeNormalizationEnabled(bool enabled) async {}
 
   @override
-  Future<bool> enterPictureInPicture({double? aspectRatio}) async => false;
+  Future<bool> enterPictureInPicture({
+    double? aspectRatio,
+    String? artworkPath,
+    Rect? sourceRect,
+  }) async => false;
 
   @override
   Stream<Duration> get positionStream => Stream.value(snap.position);

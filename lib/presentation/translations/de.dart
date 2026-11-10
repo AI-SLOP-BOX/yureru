@@ -18,6 +18,7 @@ const Map<String, String> deBase = {
   'new_playlist': 'Neue Playlist',
   'play': 'Wiedergabe',
   'pause': 'Pause',
+  'stop': 'Stoppen',
   'playing': 'Wird abgespielt',
   'paused': 'Pausiert',
   'preview': 'Vorschau',
@@ -260,8 +261,12 @@ const Map<String, String> deScreen = {
   'remove_media_confirm':
       '„{title}“ aus der Mediathek entfernen?\n(Die Datei selbst wird nicht gelöscht.)',
   'added_to_playlist': 'Zu „{name}“ hinzugefügt',
+  'add_to_playlist_failed':
+      'Die ausgewählten Videos konnten nicht zur Playlist hinzugefügt werden',
   'add_queue': 'Zur Warteschlange hinzufügen',
   'add_playlist': 'Zur Playlist hinzufügen',
+  'open_artist_videos': 'Zum Interpreten',
+  'remove_from_playlist': 'Aus Playlist entfernen',
   'change_thumbnail': 'Vorschaubild ändern',
   'thumbnail_label': 'Vorschaubild',
   'delete_from_library': 'Aus Mediathek entfernen',

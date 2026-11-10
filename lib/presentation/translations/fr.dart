@@ -18,6 +18,7 @@ const Map<String, String> frBase = {
   'new_playlist': 'Nouvelle playlist',
   'play': 'Lire',
   'pause': 'Pause',
+  'stop': 'Arrêter',
   'playing': 'Lecture en cours',
   'paused': 'En pause',
   'preview': 'Aperçu',
@@ -261,8 +262,12 @@ const Map<String, String> frScreen = {
   'remove_media_confirm':
       'Retirer « {title} » de la bibliothèque ?\n(Le fichier ne sera pas supprimé.)',
   'added_to_playlist': 'Ajouté à « {name} »',
+  'add_to_playlist_failed':
+      'Impossible d’ajouter les vidéos sélectionnées à la playlist',
   'add_queue': 'Ajouter à la file',
   'add_playlist': 'Ajouter à la playlist',
+  'open_artist_videos': 'Voir l’artiste',
+  'remove_from_playlist': 'Retirer de la playlist',
   'change_thumbnail': 'Modifier la miniature',
   'thumbnail_label': 'Miniature',
   'delete_from_library': 'Retirer de la bibliothèque',

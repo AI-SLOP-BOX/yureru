@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../../library/media_order.dart';
@@ -16,6 +18,7 @@ import '../widgets/page_header.dart';
 import '../widgets/duration_text.dart';
 import '../widgets/thumb_image.dart';
 import '../widgets/media_shelf.dart';
+import 'settings_library_screen.dart';
 
 /// Library home: playlist grid (player card sits above this in the shell).
 class HomeScreen extends ConsumerStatefulWidget {
@@ -29,6 +32,11 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _section = 0;
+  static const _emptyLibraryGuideKey = 'yureru.empty_library_guide_seen_v1';
+  final _libraryActionKey = GlobalKey();
+  OverlayEntry? _libraryGuideEntry;
+  bool _checkingLibraryGuide = false;
+  bool _libraryGuideChecked = false;
 
   Widget _sections() => Padding(
     padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
@@ -60,8 +68,58 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   void dispose() {
+    _libraryGuideEntry?.remove();
     _libraryScrollController.dispose();
     super.dispose();
+  }
+
+  void _maybeShowEmptyLibraryGuide() {
+    if (_checkingLibraryGuide || _libraryGuideChecked) return;
+    _checkingLibraryGuide = true;
+    SharedPreferences.getInstance().then((preferences) {
+      if (!mounted) return;
+      _libraryGuideChecked = true;
+      if (preferences.getBool(_emptyLibraryGuideKey) ?? false) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final renderObject = _libraryActionKey.currentContext
+            ?.findRenderObject();
+        if (renderObject is! RenderBox || !renderObject.hasSize) return;
+        final target =
+            renderObject.localToGlobal(Offset.zero) & renderObject.size;
+        final overlay = Overlay.of(context, rootOverlay: true);
+        late final OverlayEntry entry;
+        void dismiss() {
+          entry.remove();
+          if (identical(_libraryGuideEntry, entry)) {
+            _libraryGuideEntry = null;
+          }
+        }
+
+        entry = OverlayEntry(
+          builder: (overlayContext) => _EmptyLibraryGuide(
+            target: target,
+            title: ref.tr('library_management'),
+            message: ref.tr('import_video_desc'),
+            closeLabel: ref.tr('close'),
+            onDismiss: dismiss,
+            onOpenLibrary: () {
+              dismiss();
+              _openLibraryManagement();
+            },
+          ),
+        );
+        _libraryGuideEntry = entry;
+        overlay.insert(entry);
+        unawaited(preferences.setBool(_emptyLibraryGuideKey, true));
+      });
+    });
+  }
+
+  void _openLibraryManagement() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const LibraryManagementScreen()),
+    );
   }
 
   void _playCollection(List<MediaItem> items, MediaItem selected) {
@@ -118,6 +176,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           }).toList();
 
     if (playlists.isEmpty && lib.savedMedia.isEmpty) {
+      _maybeShowEmptyLibraryGuide();
       return Center(
         child: Padding(
           padding: EdgeInsets.all(32),
@@ -139,6 +198,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ref.tr('import_video_desc'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: themeTextSub(context), fontSize: 13),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                key: _libraryActionKey,
+                onPressed: _openLibraryManagement,
+                icon: const Icon(Icons.video_library_outlined),
+                label: Text(ref.tr('library_management')),
               ),
             ],
           ),
@@ -181,6 +247,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         key: const ValueKey('home-recently-played'),
                         title: ref.tr('recently_played'),
                         items: recentlyPlayed,
+                        enableTrackActions: true,
                         seeAllLabel: ref.tr('see_all'),
                         onPlay: (media) =>
                             _playCollection(recentlyPlayed, media),
@@ -243,10 +310,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
                       child: Row(
                         children: [
-                          const Icon(
+                          Icon(
                             Icons.music_note_rounded,
                             size: 18,
-                            color: kAccent,
+                            color: themeAccent(context),
                           ),
                           const SizedBox(width: 6),
                           Text(
@@ -348,10 +415,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                 ),
                                 trailing: IconButton(
                                   tooltip: ref.tr('play'),
-                                  icon: const Icon(
+                                  icon: Icon(
                                     Icons.play_circle_fill_rounded,
                                     size: 30,
-                                    color: kAccent,
+                                    color: themeAccent(context),
                                   ),
                                   onPressed: () {
                                     showPlayerView(ref);
@@ -535,6 +602,160 @@ class _PlaylistCard extends ConsumerStatefulWidget {
   ConsumerState<_PlaylistCard> createState() => _PlaylistCardState();
 }
 
+class _EmptyLibraryGuide extends StatelessWidget {
+  const _EmptyLibraryGuide({
+    required this.target,
+    required this.title,
+    required this.message,
+    required this.closeLabel,
+    required this.onDismiss,
+    required this.onOpenLibrary,
+  });
+
+  final Rect target;
+  final String title;
+  final String message;
+  final String closeLabel;
+  final VoidCallback onDismiss;
+  final VoidCallback onOpenLibrary;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final size = Size(constraints.maxWidth, constraints.maxHeight);
+      final spotlight = target.inflate(8);
+      final cardWidth = math.min(420.0, size.width - 32);
+      final cardLeft = spotlight.left
+          .clamp(16.0, size.width - cardWidth - 16)
+          .toDouble();
+      final placeBelow = size.height - spotlight.bottom > 150;
+      final cardTop = placeBelow
+          ? spotlight.bottom + 20
+          : math.max(16.0, spotlight.top - 150);
+      final color = Theme.of(context).colorScheme;
+
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onDismiss,
+              child: CustomPaint(
+                painter: _SpotlightPainter(
+                  target: spotlight,
+                  color: Colors.black.withValues(alpha: 0.72),
+                  borderColor: color.primary,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: cardLeft,
+            top: cardTop,
+            width: cardWidth,
+            child: Material(
+              elevation: 12,
+              color: color.surface,
+              borderRadius: BorderRadius.circular(16),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 1, right: 12),
+                      child: Icon(
+                        placeBelow
+                            ? Icons.arrow_upward_rounded
+                            : Icons.arrow_downward_rounded,
+                        color: color.primary,
+                        size: 24,
+                      ),
+                    ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            title,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            message,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: closeLabel,
+                      onPressed: onDismiss,
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Positioned.fromRect(
+            rect: spotlight,
+            child: Semantics(
+              button: true,
+              label: title,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onOpenLibrary,
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+class _SpotlightPainter extends CustomPainter {
+  const _SpotlightPainter({
+    required this.target,
+    required this.color,
+    required this.borderColor,
+  });
+
+  final Rect target;
+  final Color color;
+  final Color borderColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final roundedTarget = RRect.fromRectAndRadius(
+      target,
+      const Radius.circular(18),
+    );
+    final scrim = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(Offset.zero & size)
+      ..addRRect(roundedTarget);
+    canvas.drawPath(scrim, Paint()..color = color);
+    canvas.drawRRect(
+      roundedTarget,
+      Paint()
+        ..color = borderColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SpotlightPainter oldDelegate) =>
+      target != oldDelegate.target ||
+      color != oldDelegate.color ||
+      borderColor != oldDelegate.borderColor;
+}
+
 class _PlaylistCardState extends ConsumerState<_PlaylistCard> {
   bool _hover = false;
 
@@ -549,8 +770,8 @@ class _PlaylistCardState extends ConsumerState<_PlaylistCard> {
         curve: Curves.easeOut,
         decoration: BoxDecoration(
           color: _hover
-              ? (isDark ? kCardHover : const Color(0xFFEBEBEB))
-              : (isDark ? kCard : Colors.white),
+              ? (isDark ? themeCardHover(context) : const Color(0xFFEBEBEB))
+              : (isDark ? themeCard(context) : Colors.white),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: _hover ? kGlassHighlight : themeBorder(context),

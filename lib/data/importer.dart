@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../domain/models.dart';
@@ -83,8 +82,7 @@ Future<List<String>> _collectPaths(
     List<FileSystemEntity> entries;
     try {
       entries = await d.list(followLinks: false).toList();
-    } on FileSystemException catch (e) {
-      debugPrint('import: unreadable dir skipped ${d.path}: $e');
+    } on FileSystemException {
       return;
     }
     for (final e in entries) {
@@ -132,16 +130,18 @@ class VideoImporter {
   Future<List<MediaItem>> pickAndImport({
     bool copyIntoApp = true,
     Set<String> skipSourcePaths = const {},
+    Future<String?> Function()? requestArtistOverride,
     void Function(int done, int total)? onProgress,
   }) async {
-    debugPrint('import: picker open');
     final paths = await _pickVideoPaths();
-    debugPrint('import: picked ${paths.length} path(s)');
     if (paths.isEmpty) return [];
+    final artistOverride = await requestArtistOverride?.call();
+    if (requestArtistOverride != null && artistOverride == null) return [];
     return _importPaths(
       paths,
       copyIntoApp: copyIntoApp,
       skipSourcePaths: skipSourcePaths,
+      artistOverride: artistOverride,
       onProgress: onProgress,
     );
   }
@@ -176,6 +176,7 @@ class VideoImporter {
       newPaths,
       copyIntoApp: true,
       skipSourcePaths: const {},
+      artistOverride: null,
       onProgress: onProgress,
     );
     return [...reused, ...imported];
@@ -186,19 +187,18 @@ class VideoImporter {
   Future<List<MediaItem>?> pickAndImportFolder({
     bool copyIntoApp = true,
     Set<String> skipSourcePaths = const {},
+    Future<String?> Function()? requestArtistOverride,
     void Function(int done, int total)? onProgress,
   }) async {
-    debugPrint('import: folder picker open');
     final path = await _pickFolderPath();
-    if (path == null) {
-      debugPrint('import: folder cancelled');
-      return null;
-    }
-    debugPrint('import: folder picked $path');
+    if (path == null) return null;
+    final artistOverride = await requestArtistOverride?.call();
+    if (requestArtistOverride != null && artistOverride == null) return null;
     return _importPaths(
       [path],
       copyIntoApp: copyIntoApp,
       skipSourcePaths: skipSourcePaths,
+      artistOverride: artistOverride,
       onProgress: onProgress,
     );
   }
@@ -207,6 +207,7 @@ class VideoImporter {
     List<String> paths, {
     required bool copyIntoApp,
     required Set<String> skipSourcePaths,
+    String? artistOverride,
     void Function(int done, int total)? onProgress,
   }) async {
     onProgress?.call(0, 0);
@@ -217,7 +218,6 @@ class VideoImporter {
       } else {
         // Single-file picks bypass folder scan: filter non-video here.
         if (!isSupportedMediaPath(p)) {
-          debugPrint('import: skipped unsupported media file $p');
           continue;
         }
         files.add(p);
@@ -227,10 +227,6 @@ class VideoImporter {
       for (final p in files)
         if (!skipSourcePaths.contains(p)) p,
     ];
-    final skipped = files.length - fresh.length;
-    if (skipped > 0) {
-      debugPrint('import: skipped $skipped already-imported file(s)');
-    }
     final out = <MediaItem>[];
     for (var i = 0; i < fresh.length; i++) {
       final src = fresh[i];
@@ -247,14 +243,15 @@ class VideoImporter {
           await File(src).copy(dest);
         } catch (e) {
           // One bad file must not abort the whole batch or orphan copies.
-          debugPrint('import: copy failed, skipped $src: $e');
           continue;
         }
       }
       out.add(
         MediaItem(
           title: title,
-          artist: artist,
+          artist: artistOverride?.trim().isNotEmpty == true
+              ? artistOverride!.trim()
+              : artist,
           localPath: dest,
           origin: copyIntoApp ? 'imported' : 'referenced',
           sourcePath: src,
@@ -262,7 +259,6 @@ class VideoImporter {
       );
       onProgress?.call(out.length, fresh.length);
     }
-    debugPrint('import: ready ${out.length} item(s), skipped $skipped');
     return out;
   }
 
@@ -292,11 +288,9 @@ class VideoImporter {
       return mediaPickerChannel.invokeMethod<String>('pickFolder');
     }
     try {
-      return await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'メディアフォルダを選択',
-      );
-    } catch (e) {
-      debugPrint('import: getDirectoryPath unavailable: $e');
+      // Let the native picker supply its own localized folder-picker title.
+      return await FilePicker.platform.getDirectoryPath();
+    } catch (_) {
       return null;
     }
   }
@@ -306,10 +300,21 @@ class VideoImporter {
     return i <= 0 ? fileName : fileName.substring(0, i);
   }
 
-  /// Split "Artist - Title" file names (MV convention). Returns
-  /// (title, artist); artist is null when the pattern doesn't apply.
+  /// Split common title/artist filename patterns. A slash is treated as the
+  /// strongest marker: "Title / Artist" or "Title／Artist". Keep supporting
+  /// the existing "Artist - Title" MV convention as well.
   static (String, String?) _splitTitleArtist(String fileName) {
     final base = _titleOf(fileName);
+
+    final asciiSlash = base.lastIndexOf('/');
+    final fullWidthSlash = base.lastIndexOf('／');
+    final slash = asciiSlash > fullWidthSlash ? asciiSlash : fullWidthSlash;
+    if (slash > 0 && slash < base.length - 1) {
+      final title = base.substring(0, slash).trim();
+      final artist = base.substring(slash + 1).trim();
+      if (title.isNotEmpty && artist.isNotEmpty) return (title, artist);
+    }
+
     final sep = base.indexOf(' - ');
     if (sep <= 0) return (base, null);
     final artist = base.substring(0, sep).trim();

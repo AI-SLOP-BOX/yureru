@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Yureru
+Comment=Local video and music player
+Exec=yureru
+Icon=dev.yureru.yureru
+Terminal=false
+Categories=AudioVideo;Player;
+StartupWMClass=dev.yureru.yureru

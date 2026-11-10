@@ -67,6 +67,8 @@ uploads macOS, Windows, Linux, Android APK, and unsigned iOS build artifacts
 to that workflow run. Pushing a `v*` tag also attaches those files to a GitHub
 Release. Android uses the debug key unless release keystore secrets are
 configured; the iOS IPA is unsigned and cannot be installed without signing.
+Linux packages and installation notes for Fedora/KDE and Homebrew are in
+[`packaging/README.md`](packaging/README.md).
 
 ### Immersive player
 

@@ -62,10 +62,12 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   final GlobalKey _ambientVideoCaptureKey = GlobalKey();
   final GlobalKey _compactPlayerStackKey = GlobalKey();
   final GlobalKey _compactPlayerVisualKey = GlobalKey();
+  final GlobalKey _compactPlayerTitleKey = GlobalKey();
   late StateController<Rect?> _ambientApertureController;
   late PlaybackEngine _engine;
   Rect? _lastAmbientAperture;
   bool _ambientBoundsReportScheduled = false;
+  bool _pipSourceBoundsReportScheduled = false;
   bool _ambientBoundsNeeded = false;
   bool _ambientSourceInstallScheduled = false;
   bool? _ambientSourceEnabled;
@@ -84,6 +86,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   bool _isLinearDragging = false;
   double _dragAccumulatedDelta = 0.0;
   Duration _dragStartPos = Duration.zero;
+  double? _cinemaSeekPositionMs;
   bool _queueSheetExpanded = false;
   bool _queuePositionReportScheduled = false;
   double? _queueSheetTop;
@@ -100,10 +103,14 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
           ?.findRenderObject();
       final visualObject = _compactPlayerVisualKey.currentContext
           ?.findRenderObject();
+      final titleObject = _compactPlayerTitleKey.currentContext
+          ?.findRenderObject();
       if (stackObject is! RenderBox ||
           visualObject is! RenderBox ||
+          titleObject is! RenderBox ||
           !stackObject.hasSize ||
-          !visualObject.hasSize) {
+          !visualObject.hasSize ||
+          !titleObject.hasSize) {
         return;
       }
       final visualBottom = visualObject
@@ -112,9 +119,22 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
             ancestor: stackObject,
           )
           .dy;
+      final titleTop = titleObject
+          .localToGlobal(Offset.zero, ancestor: stackObject)
+          .dy;
       final minVisibleSheet = math.min(240.0, stackObject.size.height * 0.36);
       final maxTop = math.max(0.0, stackObject.size.height - minVisibleSheet);
-      final nextTop = visualBottom.clamp(0.0, maxTop).toDouble();
+      // Leave a small breathing gap below the image when the queue is opened.
+      // This keeps the sheet handle from touching the artwork while still
+      // covering the title and metadata below it.
+      final belowVideo = visualBottom + 24;
+      // If responsive spacing or scrolling puts the title above the measured
+      // image edge, start the sheet before the title so it cannot peek above
+      // the queue surface.
+      final nextTop = math
+          .min(belowVideo, titleTop - 8)
+          .clamp(0.0, maxTop)
+          .toDouble();
       if (_queueSheetTop == null || (_queueSheetTop! - nextTop).abs() > 2) {
         setState(() => _queueSheetTop = nextTop);
       }
@@ -174,6 +194,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
         Offset.zero & renderObject.size,
       );
       if (transformed.isEmpty) return;
+      _storePictureInPictureSourceBounds(transformed, window);
       // Keep the full media bounds even when the window clips part of the
       // player. Clamping here to the visible slice recenters and stretches
       // the edge profile, which makes the ambient continuation lean to one
@@ -195,6 +216,49 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
       _lastAmbientAperture = aperture;
       _ambientApertureController.state = aperture;
     });
+  }
+
+  void _schedulePictureInPictureSourceBoundsReport() {
+    if (_pipSourceBoundsReportScheduled) return;
+    _pipSourceBoundsReportScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pipSourceBoundsReportScheduled = false;
+      if (!mounted) return;
+      final renderObject = _ambientVideoBoundsKey.currentContext
+          ?.findRenderObject();
+      final window = MediaQuery.sizeOf(context);
+      if (renderObject is! RenderBox ||
+          !renderObject.hasSize ||
+          window.width <= 0 ||
+          window.height <= 0) {
+        return;
+      }
+      final transformed = MatrixUtils.transformRect(
+        renderObject.getTransformTo(null),
+        Offset.zero & renderObject.size,
+      );
+      if (!transformed.isEmpty) {
+        _storePictureInPictureSourceBounds(transformed, window);
+      }
+    });
+  }
+
+  void _storePictureInPictureSourceBounds(Rect bounds, Size window) {
+    final normalized = Rect.fromLTWH(
+      bounds.left / window.width,
+      bounds.top / window.height,
+      bounds.width / window.width,
+      bounds.height / window.height,
+    );
+    final previous = ref.read(pictureInPictureSourceRectProvider);
+    if (previous != null &&
+        (previous.left - normalized.left).abs() < 0.002 &&
+        (previous.top - normalized.top).abs() < 0.002 &&
+        (previous.width - normalized.width).abs() < 0.002 &&
+        (previous.height - normalized.height).abs() < 0.002) {
+      return;
+    }
+    ref.read(pictureInPictureSourceRectProvider.notifier).state = normalized;
   }
 
   void _clearAmbientVideoBounds() {
@@ -430,15 +494,17 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     );
   }
 
-  Widget _cinemaMetadata(MediaItem media, {double bottom = 32}) {
+  Widget _cinemaMetadata(MediaItem media, {double bottom = 32, bool? visible}) {
     final creator = formatCreatorNames(media.artist);
+    final isVisible = visible ?? _pointerOverPlayer;
     return Positioned(
       left: 28,
       bottom: bottom,
       child: AnimatedOpacity(
-        opacity: _pointerOverPlayer ? 1 : 0,
+        opacity: isVisible ? 1 : 0,
         duration: const Duration(milliseconds: 180),
         child: IgnorePointer(
+          ignoring: !isVisible,
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: MediaQuery.sizeOf(context).width * 0.55,
@@ -447,16 +513,22 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  key: const ValueKey('cinema-title'),
-                  displayTitle(media.title),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    shadows: [Shadow(color: Colors.black87, blurRadius: 10)],
+                InkWell(
+                  borderRadius: BorderRadius.circular(4),
+                  onTap: () =>
+                      ref.read(videoOpenRequestProvider.notifier).state =
+                          media.id,
+                  child: Text(
+                    key: const ValueKey('cinema-title'),
+                    displayTitle(media.title),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      shadows: [Shadow(color: Colors.black87, blurRadius: 10)],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -488,6 +560,36 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     );
   }
 
+  Widget _artworkImageSurface(
+    MediaItem media,
+    PlaybackEngine engine, {
+    bool highRes = false,
+    double radius = 8,
+  }) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // iOS PiP needs an attached AVPlayerLayer. Keep the layer mounted
+        // behind the artwork so the system can take it over when PiP starts.
+        if (defaultTargetPlatform == TargetPlatform.iOS)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Opacity(opacity: 0.001, child: _videoSurface(engine)),
+            ),
+          ),
+        ThumbImage(
+          seed: media.id,
+          mediaId: media.id,
+          localPath: media.localPath,
+          forceArtwork: true,
+          expand: true,
+          highRes: highRes,
+          radius: radius,
+        ),
+      ],
+    );
+  }
+
   Future<ui.Image?> _captureAmbientVideoFrame() async {
     final renderObject = _ambientVideoCaptureKey.currentContext
         ?.findRenderObject();
@@ -509,7 +611,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
 
   void _onSwitchMode(PlayerViewMode newMode) {
     _onPointerHover();
-    ref.read(playerViewModeProvider.notifier).state = newMode;
+    ref.read(playerViewModeProvider.notifier).select(newMode);
     // Keep the player layout in place while the visual smoothly changes mode.
     unawaited(ref.read(playbackControllerProvider).syncCurrentViewSource());
   }
@@ -616,6 +718,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
       _trackGlobalMousePosition,
     );
     _clearAmbientVideoBounds();
+    ref.read(pictureInPictureSourceRectProvider.notifier).state = null;
     _engine.setAmbientFrameSource(null);
     super.dispose();
   }
@@ -642,16 +745,29 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final snap = engine.snapshot;
     final media = q.currentId == null ? null : lib.byId(q.currentId!);
     if (media == null) return const SizedBox.shrink();
+    _schedulePictureInPictureSourceBoundsReport();
+    final canSwitchMode = media.viewAvailability == MediaViewAvailability.both;
     _requestVisualAspectRatio(media, mode);
     final reportedAspectRatio = engine.videoAspectRatio;
     final hasValidVideoAspectRatio =
         reportedAspectRatio != null &&
         reportedAspectRatio.isFinite &&
         reportedAspectRatio > 0;
+    final isSelectedThumbnailJacket =
+        mode == PlayerViewMode.image &&
+        media.artworkPath == null &&
+        media.thumbnailPath != null;
     final videoAspectRatio = hasValidVideoAspectRatio
         ? reportedAspectRatio
         : (16 / 9);
-    final visualAspectRatio = _visualAspectRatio ?? videoAspectRatio;
+    // Video mode must follow the decoder's actual frame ratio. The thumbnail
+    // can have been cropped or encoded at a different ratio, so using its
+    // dimensions here makes the player jump after the image metadata loads.
+    // Jacket mode uses the selected image's own dimensions instead.
+    final visualAspectRatio = mode == PlayerViewMode.media
+        ? videoAspectRatio
+        : (_visualAspectRatio ??
+              (isSelectedThumbnailJacket ? 1.0 : videoAspectRatio));
     final videoLayoutWidth = screenWidth;
     // The player lives inside the center pane, which is already narrower than
     // the window when the sidebar and queue are open. Keep the desktop layout
@@ -1022,6 +1138,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                               // loads this becomes its natural aspect ratio.
                               aspectRatio: visualAspectRatio,
                               child: Container(
+                                key: _ambientVideoBoundsKey,
                                 decoration: BoxDecoration(
                                   color: themeCard(context),
                                   borderRadius: BorderRadius.circular(24),
@@ -1061,13 +1178,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                         ),
                                       ),
                                     ),
-                                    ThumbImage(
-                                      seed: media.id,
-                                      mediaId: media.id,
-                                      localPath: media.localPath,
-                                      forceArtwork: true,
+                                    _artworkImageSurface(
+                                      media,
+                                      engine,
                                       radius: 0,
-                                      expand: true,
                                       highRes: true,
                                     ),
                                   ],
@@ -1237,64 +1351,67 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                 ),
 
                                 // Media / Image Mode Switcher capsule
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(24),
-                                  child: BackdropFilter(
-                                    filter: ui.ImageFilter.blur(
-                                      sigmaX: 18,
-                                      sigmaY: 18,
-                                    ),
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        color: isDark
-                                            ? Colors.black.withValues(
-                                                alpha: 0.5,
-                                              )
-                                            : Colors.white.withValues(
-                                                alpha: 0.85,
-                                              ),
-                                        borderRadius: BorderRadius.circular(24),
-                                        border: Border.all(
-                                          color: themeBorder(context),
-                                          width: 1,
-                                        ),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black.withValues(
-                                              alpha: isDark ? 0.3 : 0.1,
-                                            ),
-                                            blurRadius: 20,
-                                            offset: const Offset(0, 6),
-                                          ),
-                                        ],
+                                if (canSwitchMode)
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(24),
+                                    child: BackdropFilter(
+                                      filter: ui.ImageFilter.blur(
+                                        sigmaX: 18,
+                                        sigmaY: 18,
                                       ),
-                                      padding: const EdgeInsets.all(4),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          _ModeButton(
-                                            label: ref.tr('media'),
-                                            icon: Icons.smart_display_rounded,
-                                            selected:
-                                                mode == PlayerViewMode.media,
-                                            onTap: () => _onSwitchMode(
-                                              PlayerViewMode.media,
-                                            ),
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: isDark
+                                              ? Colors.black.withValues(
+                                                  alpha: 0.5,
+                                                )
+                                              : Colors.white.withValues(
+                                                  alpha: 0.85,
+                                                ),
+                                          borderRadius: BorderRadius.circular(
+                                            24,
                                           ),
-                                          _ModeButton(
-                                            label: ref.tr('image'),
-                                            icon: Icons.image_rounded,
-                                            selected:
-                                                mode == PlayerViewMode.image,
-                                            onTap: () => _onSwitchMode(
-                                              PlayerViewMode.image,
-                                            ),
+                                          border: Border.all(
+                                            color: themeBorder(context),
+                                            width: 1,
                                           ),
-                                        ],
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withValues(
+                                                alpha: isDark ? 0.3 : 0.1,
+                                              ),
+                                              blurRadius: 20,
+                                              offset: const Offset(0, 6),
+                                            ),
+                                          ],
+                                        ),
+                                        padding: const EdgeInsets.all(4),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            _ModeButton(
+                                              label: ref.tr('media'),
+                                              icon: Icons.smart_display_rounded,
+                                              selected:
+                                                  mode == PlayerViewMode.media,
+                                              onTap: () => _onSwitchMode(
+                                                PlayerViewMode.media,
+                                              ),
+                                            ),
+                                            _ModeButton(
+                                              label: ref.tr('image'),
+                                              icon: Icons.image_rounded,
+                                              selected:
+                                                  mode == PlayerViewMode.image,
+                                              onTap: () => _onSwitchMode(
+                                                PlayerViewMode.image,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
 
                                 const SleepTimerButton(),
                                 FavoriteButton(mediaId: media.id),
@@ -1451,7 +1568,92 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                   ),
                 ),
               ),
-            if (!isCinema)
+            if (isCinema && !isCompact)
+              Positioned(
+                left: 24 + widget.leadingChromeInset,
+                right: 24 + widget.trailingChromeInset,
+                bottom: 8,
+                child: MouseRegion(
+                  onExit: (_) => _onControlsExit(),
+                  child: IgnorePointer(
+                    ignoring: !_pointerOverPlayer,
+                    child: AnimatedOpacity(
+                      opacity: _pointerOverPlayer ? 1 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: StreamBuilder<PlaybackSnapshot>(
+                        stream: engine.snapshots,
+                        initialData: engine.snapshot,
+                        builder: (context, snapshot) {
+                          final playback = snapshot.data ?? engine.snapshot;
+                          final durationMs = playback.duration.inMilliseconds
+                              .toDouble();
+                          final positionMs =
+                              (_cinemaSeekPositionMs ??
+                                      playback.position.inMilliseconds
+                                          .toDouble())
+                                  .clamp(
+                                    0.0,
+                                    durationMs > 0 ? durationMs : 1.0,
+                                  );
+                          return SliderTheme(
+                            data: SliderTheme.of(context).copyWith(
+                              trackHeight: 3,
+                              thumbShape: const RoundSliderThumbShape(
+                                enabledThumbRadius: 5,
+                              ),
+                              overlayShape: const RoundSliderOverlayShape(
+                                overlayRadius: 11,
+                              ),
+                              activeTrackColor: Colors.white,
+                              inactiveTrackColor: Colors.white38,
+                              thumbColor: Colors.white,
+                              overlayColor: Colors.white24,
+                            ),
+                            child: Slider(
+                              min: 0,
+                              max: durationMs > 0 ? durationMs : 1,
+                              value: positionMs,
+                              onChangeStart:
+                                  playback.initialized && durationMs > 0
+                                  ? (value) {
+                                      _hideTimer?.cancel();
+                                      setState(() {
+                                        _pointerPressed = true;
+                                        _cinemaSeekPositionMs = value;
+                                      });
+                                    }
+                                  : null,
+                              onChanged: playback.initialized && durationMs > 0
+                                  ? (value) => setState(
+                                      () => _cinemaSeekPositionMs = value,
+                                    )
+                                  : null,
+                              onChangeEnd:
+                                  playback.initialized && durationMs > 0
+                                  ? (value) async {
+                                      await ctl.seekTo(
+                                        Duration(milliseconds: value.round()),
+                                      );
+                                      if (!mounted) return;
+                                      setState(() {
+                                        _pointerPressed = false;
+                                        _cinemaSeekPositionMs = null;
+                                      });
+                                      _startHideTimer(reset: true);
+                                    }
+                                  : null,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            // In full-player artwork mode, the shell's bottom transport row
+            // owns the now-playing details and controls. Avoid showing a
+            // second floating info card over the artwork.
+            if (!isCinema && !(fullPlayerView && mode == PlayerViewMode.image))
               Positioned(
                 bottom: isCompact ? 10 : 34,
                 // The desktop sidebar and queue are edge overlays above the
@@ -1589,22 +1791,37 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                     CrossAxisAlignment.start,
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  Text(
-                                                    key: const ValueKey(
-                                                      'player-title',
-                                                    ),
-                                                    displayTitle(media.title),
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: TextStyle(
-                                                      fontSize: isCompact
-                                                          ? 13.5
-                                                          : 15,
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                      color: playerTextPrimary,
-                                                      letterSpacing: -0.2,
+                                                  InkWell(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          3,
+                                                        ),
+                                                    onTap: () =>
+                                                        ref
+                                                            .read(
+                                                              videoOpenRequestProvider
+                                                                  .notifier,
+                                                            )
+                                                            .state = media
+                                                            .id,
+                                                    child: Text(
+                                                      key: const ValueKey(
+                                                        'player-title',
+                                                      ),
+                                                      displayTitle(media.title),
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                        fontSize: isCompact
+                                                            ? 13.5
+                                                            : 15,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color:
+                                                            playerTextPrimary,
+                                                        letterSpacing: -0.2,
+                                                      ),
                                                     ),
                                                   ),
                                                   const SizedBox(height: 2),
@@ -1870,6 +2087,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     required PlaybackEngine engine,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isSelectedThumbnailJacket =
+        mode == PlayerViewMode.image &&
+        media.artworkPath == null &&
+        media.thumbnailPath != null;
     final queue = ref.watch(queueProvider);
     final controller = ref.read(playbackControllerProvider);
     return Scaffold(
@@ -1898,19 +2119,24 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                     child: AspectRatio(
                       aspectRatio:
                           _visualAspectRatio ??
-                          engine.videoAspectRatio ??
-                          (16 / 9),
-                      child: ThumbImage(
-                        seed: media.id,
-                        mediaId: media.id,
-                        localPath: media.localPath,
-                        forceArtwork: true,
-                        expand: true,
-                        highRes: true,
+                          (isSelectedThumbnailJacket
+                              ? 1.0
+                              : engine.videoAspectRatio ?? (16 / 9)),
+                      child: Container(
+                        key: _ambientVideoBoundsKey,
+                        child: _artworkImageSurface(
+                          media,
+                          engine,
+                          highRes: true,
+                        ),
                       ),
                     ),
                   ),
-            _cinemaMetadata(media, bottom: 112),
+            _cinemaMetadata(
+              media,
+              bottom: 112,
+              visible: _compactCinemaControlsVisible,
+            ),
             Positioned(
               top: MediaQuery.paddingOf(context).top + 8,
               right: 12,
@@ -2037,6 +2263,10 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final showQueue = ref.watch(queueVisibleProvider);
     final lockQueueOpen = LayoutMetrics.isLargeDesktop(context);
     final windowWidth = MediaQuery.sizeOf(context).width;
+    final isSelectedThumbnailJacket =
+        mode == PlayerViewMode.image &&
+        media.artworkPath == null &&
+        media.thumbnailPath != null;
     final isNarrowWindow = windowWidth < 1000;
     final isPhoneSize = windowWidth < 600;
     final showQueueSheet = showQueue && isNarrowWindow;
@@ -2052,9 +2282,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = themeTextPrimary(context);
     final textSub = themeTextSub(context);
-    final transportArrowColor = isDark
-        ? const Color(0xFFA9A9A9)
-        : const Color(0xFF5D5D5D);
+    final transportArrowColor = playerTransportColor(context);
     final playIconColor = transportArrowColor;
     final compactPlayPauseSize = (MediaQuery.sizeOf(context).width * 0.14)
         .clamp(48.0, 56.0)
@@ -2161,29 +2389,49 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                               iconSize: 22,
                                               color: textPrimary,
                                             ),
-                                            // Mode switcher (media / image)
                                             IconButton(
-                                              icon: Icon(
-                                                mode == PlayerViewMode.media
-                                                    ? Icons.image_rounded
-                                                    : Icons
-                                                          .smart_display_rounded,
-                                                size: 22,
-                                                color: textPrimary,
+                                              icon: const Icon(
+                                                Icons.fullscreen_rounded,
+                                                size: 24,
                                               ),
+                                              color: textPrimary,
                                               tooltip:
-                                                  mode == PlayerViewMode.media
-                                                  ? ref.tr('image_mode')
-                                                  : ref.tr('video_mode'),
+                                                  '${ref.tr('fullscreen')} (F)',
                                               onPressed: () {
-                                                _onSwitchMode(
-                                                  mode == PlayerViewMode.media
-                                                      ? PlayerViewMode.image
-                                                      : PlayerViewMode.media,
-                                                );
+                                                ref
+                                                        .read(
+                                                          cinemaModeProvider
+                                                              .notifier,
+                                                        )
+                                                        .state =
+                                                    true;
                                               },
                                             ),
-                                            if (!narrowToolbar)
+                                            // Mode switcher (media / image)
+                                            if (media.viewAvailability ==
+                                                MediaViewAvailability.both)
+                                              IconButton(
+                                                icon: Icon(
+                                                  mode == PlayerViewMode.media
+                                                      ? Icons.image_rounded
+                                                      : Icons
+                                                            .smart_display_rounded,
+                                                  size: 22,
+                                                  color: textPrimary,
+                                                ),
+                                                tooltip:
+                                                    mode == PlayerViewMode.media
+                                                    ? ref.tr('image_mode')
+                                                    : ref.tr('video_mode'),
+                                                onPressed: () {
+                                                  _onSwitchMode(
+                                                    mode == PlayerViewMode.media
+                                                        ? PlayerViewMode.image
+                                                        : PlayerViewMode.media,
+                                                  );
+                                                },
+                                              ),
+                                            if (!isPhoneSize && !narrowToolbar)
                                               IconButton(
                                                 tooltip: ref.tr('immersive'),
                                                 icon: const AppSvgIcon(
@@ -2197,26 +2445,6 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                             )
                                                             .state =
                                                         true,
-                                              ),
-                                            // Fullscreen / Cinema mode button
-                                            if (!narrowToolbar)
-                                              IconButton(
-                                                icon: const Icon(
-                                                  Icons.fullscreen_rounded,
-                                                  size: 24,
-                                                ),
-                                                color: textPrimary,
-                                                tooltip:
-                                                    '${ref.tr('fullscreen')} (F)',
-                                                onPressed: () {
-                                                  ref
-                                                          .read(
-                                                            cinemaModeProvider
-                                                                .notifier,
-                                                          )
-                                                          .state =
-                                                      true;
-                                                },
                                               ),
                                             // Queue visibility is controlled by the
                                             // responsive content panel, not a separate
@@ -2257,19 +2485,11 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                           )
                                                           .state =
                                                       true;
-                                                } else if (val ==
-                                                    'fullscreen') {
-                                                  ref
-                                                          .read(
-                                                            cinemaModeProvider
-                                                                .notifier,
-                                                          )
-                                                          .state =
-                                                      true;
                                                 }
                                               },
                                               itemBuilder: (ctx) => [
-                                                if (narrowToolbar) ...[
+                                                if (narrowToolbar &&
+                                                    !isPhoneSize) ...[
                                                   PopupMenuItem(
                                                     value: 'immersive',
                                                     child: Row(
@@ -2286,25 +2506,6 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                       ],
                                                     ),
                                                   ),
-                                                  PopupMenuItem(
-                                                    value: 'fullscreen',
-                                                    child: Row(
-                                                      children: [
-                                                        const Icon(
-                                                          Icons
-                                                              .fullscreen_rounded,
-                                                          size: 18,
-                                                        ),
-                                                        const SizedBox(
-                                                          width: 10,
-                                                        ),
-                                                        Text(
-                                                          ref.tr('fullscreen'),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                  const PopupMenuDivider(),
                                                 ],
                                                 if (media.isTemporary)
                                                   PopupMenuItem(
@@ -2325,28 +2526,39 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                       ],
                                                     ),
                                                   ),
-                                                PopupMenuItem(
-                                                  value: 'add_to_playlist',
-                                                  child: Row(
-                                                    children: [
-                                                      Icon(
-                                                        Icons
-                                                            .playlist_add_rounded,
-                                                        color: textPrimary,
-                                                        size: 18,
-                                                      ),
-                                                      const SizedBox(width: 10),
-                                                      Text(
-                                                        ref.tr('add_playlist'),
-                                                        style: TextStyle(
+                                                if (mode ==
+                                                    PlayerViewMode.image)
+                                                  PopupMenuItem(
+                                                    value: 'add_to_playlist',
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons
+                                                              .playlist_add_rounded,
                                                           color: textPrimary,
-                                                          fontSize: 13,
+                                                          size: 18,
                                                         ),
-                                                      ),
-                                                    ],
+                                                        const SizedBox(
+                                                          width: 10,
+                                                        ),
+                                                        Text(
+                                                          ref.tr(
+                                                            'add_playlist',
+                                                          ),
+                                                          style: TextStyle(
+                                                            color: textPrimary,
+                                                            fontSize: 13,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
                                                   ),
-                                                ),
-                                                const PopupMenuDivider(),
+                                                if ((narrowToolbar &&
+                                                        !isPhoneSize) ||
+                                                    media.isTemporary ||
+                                                    mode ==
+                                                        PlayerViewMode.image)
+                                                  const PopupMenuDivider(),
                                                 PopupMenuItem(
                                                   enabled: false,
                                                   child: Row(
@@ -2388,7 +2600,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                         '${s == s.toInt() ? s.toInt() : s}x',
                                                         style: TextStyle(
                                                           color: q.speed == s
-                                                              ? kAccentLight
+                                                              ? themeAccentHighlight(
+                                                                  context,
+                                                                )
                                                               : textPrimary,
                                                           fontWeight:
                                                               q.speed == s
@@ -2437,7 +2651,12 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                           ? reportedRatio
                                           : 16 / 9;
                                       final aspectRatio =
-                                          _visualAspectRatio ?? fallbackRatio;
+                                          mode == PlayerViewMode.media
+                                          ? fallbackRatio
+                                          : (_visualAspectRatio ??
+                                                (isSelectedThumbnailJacket
+                                                    ? 1.0
+                                                    : fallbackRatio));
                                       final heightFactor = isPhoneSize
                                           ? (aspectRatio < 0.8
                                                 ? 0.34
@@ -2509,13 +2728,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                             ),
                                                           ],
                                                   ),
-                                                  key:
-                                                      mode ==
-                                                          PlayerViewMode.media
-                                                      ? _ambientVideoBoundsKey
-                                                      : const ValueKey(
-                                                          'compact-player-visual-surface',
-                                                        ),
+                                                  key: _ambientVideoBoundsKey,
                                                   clipBehavior: Clip.antiAlias,
                                                   child: GestureDetector(
                                                     behavior:
@@ -2589,15 +2802,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                                                       expand:
                                                                           true,
                                                                     ))
-                                                            : ThumbImage(
-                                                                seed: media.id,
-                                                                mediaId:
-                                                                    media.id,
-                                                                localPath: media
-                                                                    .localPath,
-                                                                forceArtwork:
-                                                                    true,
-                                                                expand: true,
+                                                            : _artworkImageSurface(
+                                                                media,
+                                                                engine,
                                                                 highRes: true,
                                                               ),
                                                       ),
@@ -2627,16 +2834,30 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
                                   Row(
                                     children: [
                                       Expanded(
-                                        child: Text(
-                                          title,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 22,
-                                            fontWeight: FontWeight.w800,
-                                            color: textPrimary,
-                                            letterSpacing: -0.5,
-                                            height: 1.2,
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                          onTap: () =>
+                                              ref
+                                                      .read(
+                                                        videoOpenRequestProvider
+                                                            .notifier,
+                                                      )
+                                                      .state =
+                                                  media.id,
+                                          child: Text(
+                                            title,
+                                            key: _compactPlayerTitleKey,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 22,
+                                              fontWeight: FontWeight.w800,
+                                              color: textPrimary,
+                                              letterSpacing: -0.5,
+                                              height: 1.2,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -3449,7 +3670,7 @@ class _PlayerSpeedButton extends StatelessWidget {
                 ),
                 decoration: speed == s
                     ? BoxDecoration(
-                        color: kAccent,
+                        color: themeAccent(context),
                         borderRadius: BorderRadius.circular(8),
                       )
                     : null,
@@ -3496,7 +3717,7 @@ class _PlayerSpeedButton extends StatelessWidget {
             Icon(
               Icons.speed_rounded,
               size: 13,
-              color: speed == 1.0 ? textSub : kAccentLight,
+              color: speed == 1.0 ? textSub : themeAccentHighlight(context),
             ),
             const SizedBox(width: 3),
             Text(
@@ -3504,7 +3725,7 @@ class _PlayerSpeedButton extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11.5,
                 fontWeight: FontWeight.w600,
-                color: speed == 1.0 ? textSub : kAccentLight,
+                color: speed == 1.0 ? textSub : themeAccentHighlight(context),
               ),
             ),
           ],

@@ -1,0 +1,44 @@
+app-id: dev.yureru.yureru
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+command: yureru
+separate-locales: false
+add-extensions:
+  org.freedesktop.Platform.ffmpeg-full:
+    directory: lib/ffmpeg
+    version: '26.08'
+    add-ld-path: .
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio
+  - --share=network
+  - --filesystem=xdg-videos:ro
+  - --filesystem=xdg-music:ro
+  - --filesystem=xdg-pictures:ro
+  - --env=GTK_USE_PORTAL=1
+  - --env=LD_LIBRARY_PATH=/app/lib:/app/lib/ffmpeg:/app/lib/yureru/lib
+modules:
+  - packaging/flatpak/modules/mpv.json
+  - name: yureru
+    buildsystem: simple
+    build-commands:
+      - install -d /app/lib/yureru /app/bin
+      - cp -a . /app/lib/yureru/
+      - ln -s /app/lib/yureru/Yureru /app/bin/yureru
+      - install -Dm644 dev.yureru.yureru.desktop /app/share/applications/dev.yureru.yureru.desktop
+      - install -Dm644 dev.yureru.yureru.metainfo.xml /app/share/metainfo/dev.yureru.yureru.metainfo.xml
+      - install -Dm644 dev.yureru.yureru.png /app/share/icons/hicolor/512x512/apps/dev.yureru.yureru.png
+      - cp -a share/licenses/dev.yureru.yureru/. /app/share/licenses/dev.yureru.yureru/
+    sources:
+      - type: dir
+        path: packaging/flatpak/bundle
+      - type: file
+        path: packaging/flatpak/dev.yureru.yureru.desktop
+      - type: file
+        path: packaging/flatpak/dev.yureru.yureru.metainfo.xml
+      - type: file
+        path: packaging/flatpak/icons/dev.yureru.yureru.png

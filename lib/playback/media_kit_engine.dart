@@ -12,6 +12,7 @@ import 'package:media_kit_video/media_kit_video.dart' as mkv;
 import 'package:path_provider/path_provider.dart';
 import 'ambient_colors.dart';
 import 'playback_engine.dart';
+import 'pip_artwork_movie.dart';
 
 /// media_kit-backed engine. The ONLY place importing media_kit(_video).
 /// Owns one mk.Player + lazily-created mkv.VideoController for the view.
@@ -43,6 +44,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   double _rate = 1.0;
   double _volume = 1.0;
   bool _normalizationEnabled = false;
+  int _timelineOffsetMs = 0;
   String? _lastPlayerError;
   final ValueNotifier<ui.Image?> _ambientMatteFrame = ValueNotifier(null);
   Future<ui.Image?> Function()? _ambientFrameSource;
@@ -69,9 +71,10 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
         // from the paused in-app player must not pull the displayed state
         // backward or make the transport control look stopped.
         if (_nativePipActive) return;
-        _positions.add(d);
+        final timelinePosition = _toTimelinePosition(d);
+        _positions.add(timelinePosition);
         _snap = PlaybackSnapshot(
-          position: d,
+          position: timelinePosition,
           duration: _snap.duration,
           isPlaying: _snap.isPlaying,
           initialized: true,
@@ -83,7 +86,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
             _nativePipChannel.invokeMethod<void>('updatePosition', {
               'position': d.inMicroseconds / Duration.microsecondsPerSecond,
               'duration':
-                  _snap.duration.inMicroseconds /
+                  _sourceDuration.inMicroseconds /
                   Duration.microsecondsPerSecond,
             }),
           );
@@ -92,10 +95,11 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     );
     _subs.add(
       p.stream.duration.listen((d) {
-        _durations.add(d);
+        final timelineDuration = _toTimelineDuration(d);
+        _durations.add(timelineDuration);
         _snap = PlaybackSnapshot(
           position: _snap.position,
-          duration: d,
+          duration: timelineDuration,
           isPlaying: _snap.isPlaying,
           initialized: true,
           completed: false,
@@ -131,6 +135,35 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     return p;
   }
 
+  Duration _toTimelinePosition(Duration sourcePosition) => Duration(
+    milliseconds: (sourcePosition.inMilliseconds - _timelineOffsetMs).clamp(
+      0,
+      _timelineEndMs ?? (1 << 62),
+    ),
+  );
+
+  int? get _timelineEndMs {
+    final end = _activeSource?.end?.inMilliseconds;
+    return end == null ? null : (end - _timelineOffsetMs).clamp(0, 1 << 62);
+  }
+
+  Duration get _timelineOffsetDuration =>
+      Duration(milliseconds: _timelineOffsetMs);
+
+  Duration get _sourcePosition => _snap.position + _timelineOffsetDuration;
+
+  Duration get _sourceDuration => _snap.duration + _timelineOffsetDuration;
+
+  Duration _toTimelineDuration(Duration sourceDuration) {
+    final sourceEnd = _activeSource?.end?.inMilliseconds;
+    final effectiveEnd = sourceEnd == null
+        ? sourceDuration.inMilliseconds
+        : sourceDuration.inMilliseconds.clamp(0, sourceEnd);
+    return Duration(
+      milliseconds: (effectiveEnd - _timelineOffsetMs).clamp(0, 1 << 62),
+    );
+  }
+
   void _fireCompleted() {
     if (_completedFired) return;
     _completedFired = true;
@@ -150,6 +183,7 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   Future<void> load(PlaybackSource source, {bool autoplay = true}) async {
     final continueInNativePip = _nativePipActive;
     _activeSource = source;
+    _timelineOffsetMs = source.timelineOffset.inMilliseconds;
     _completedFired = false;
     _previousAmbientEdges = null;
     _ambientGeometry = null;
@@ -175,18 +209,47 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     await _setAndroidBackgroundPlayback(autoplay && p.state.playing);
     if (_rate != 1.0) await p.setRate(_rate);
     _snap = PlaybackSnapshot(
-      position: p.state.position,
-      duration: p.state.duration,
+      position: _toTimelinePosition(p.state.position),
+      duration: _toTimelineDuration(p.state.duration),
       isPlaying: p.state.playing,
       initialized: true,
     );
     _snapCtrl.add(_snap);
     if (continueInNativePip) {
-      final pipUri =
-          _nativePipUsesWebKit &&
-              _localPath(source.uri).toLowerCase().endsWith('.webm')
-          ? source.uri
-          : await _pictureInPictureSource(source);
+      String pipUri;
+      if (source.pipArtworkPath != null) {
+        try {
+          final audioPath = _localPath(source.uri);
+          final extension = audioPath.split('.').last.toLowerCase();
+          pipUri = await PipArtworkMovie.prepare(
+            mediaId: source.mediaId,
+            artworkPath: source.pipArtworkPath!,
+            audioPath: audioPath,
+            trimEndMs: source.end?.inMilliseconds,
+            forceAac: !const {
+              'aac',
+              'm4a',
+              'mp4',
+              'mov',
+              'mp3',
+            }.contains(extension),
+          );
+        } catch (_) {
+          // If the next jacket cannot be prepared, keep the PiP session alive
+          // on the source video/audio instead of failing the queue transition.
+          pipUri =
+              _nativePipUsesWebKit &&
+                  _localPath(source.uri).toLowerCase().endsWith('.webm')
+              ? source.uri
+              : await _pictureInPictureSource(source);
+        }
+      } else {
+        pipUri =
+            _nativePipUsesWebKit &&
+                _localPath(source.uri).toLowerCase().endsWith('.webm')
+            ? source.uri
+            : await _pictureInPictureSource(source);
+      }
       final updated = await _nativePipChannel.invokeMethod<bool>('update', {
         'uri': pipUri,
         'playing': autoplay,
@@ -355,11 +418,18 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     if (_nativePipActive) {
       await _nativePipChannel.invokeMethod<void>(
         'seekTo',
-        pos.inMicroseconds / Duration.microsecondsPerSecond,
+        (pos + _timelineOffsetDuration).inMicroseconds /
+            Duration.microsecondsPerSecond,
       );
       return;
     }
-    await _ensurePlayer().seek(pos);
+    final sourceMs = pos.inMilliseconds + _timelineOffsetMs;
+    final endMs = _activeSource?.end?.inMilliseconds;
+    await _ensurePlayer().seek(
+      Duration(
+        milliseconds: endMs == null ? sourceMs : sourceMs.clamp(0, endMs),
+      ),
+    );
   }
 
   @override
@@ -484,7 +554,11 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
   String? get pictureInPictureFailure => _pictureInPictureFailure;
 
   @override
-  Future<bool> enterPictureInPicture({double? aspectRatio}) async {
+  Future<bool> enterPictureInPicture({
+    double? aspectRatio,
+    String? artworkPath,
+    Rect? sourceRect,
+  }) async {
     // Starting PiP is idempotent. Do not turn an already-visible PiP window
     // off just because the toolbar action is invoked again.
     if (_nativePipActive) return true;
@@ -495,6 +569,50 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
       final source = _activeSource!;
       final sourcePath = _localPath(source.uri);
       final isWebM = sourcePath.toLowerCase().endsWith('.webm');
+      if (artworkPath != null) {
+        final audioExtension = sourcePath.split('.').last.toLowerCase();
+        final forceAac = !const {
+          'aac',
+          'm4a',
+          'mp4',
+          'mov',
+          'mp3',
+        }.contains(audioExtension);
+        var stillMovie = await PipArtworkMovie.prepare(
+          mediaId: source.mediaId,
+          artworkPath: artworkPath,
+          audioPath: sourcePath,
+          trimEndMs: source.end?.inMilliseconds,
+          forceAac: forceAac,
+        );
+        if (wasPlaying) await pause();
+        var started = await _startNativePip(
+          stillMovie,
+          wasPlaying,
+          sourceRect: sourceRect,
+        );
+        if (!started && !forceAac) {
+          stillMovie = await PipArtworkMovie.prepare(
+            mediaId: source.mediaId,
+            artworkPath: artworkPath,
+            audioPath: sourcePath,
+            trimEndMs: source.end?.inMilliseconds,
+            forceAac: true,
+          );
+          started = await _startNativePip(
+            stillMovie,
+            wasPlaying,
+            sourceRect: sourceRect,
+          );
+        }
+        if (!started) {
+          if (wasPlaying) await play();
+          return false;
+        }
+        _nativePipActive = true;
+        _nativePipUsesWebKit = false;
+        return true;
+      }
       if (isWebM) {
         final videoCodec = await _videoCodec(sourcePath);
         if (videoCodec == 'av1') {
@@ -504,7 +622,11 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
           // AAC, then hand the compatible file to system PiP.
           final pipUri = await _pictureInPictureSource(source);
           if (wasPlaying) await pause();
-          final started = await _startNativePip(pipUri, wasPlaying);
+          final started = await _startNativePip(
+            pipUri,
+            wasPlaying,
+            sourceRect: sourceRect,
+          );
           if (started) {
             _nativePipActive = true;
             _nativePipUsesWebKit = false;
@@ -537,7 +659,11 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
           return false;
         }
         if (wasPlaying) await pause();
-        final startedCached = await _startNativePip(cached, wasPlaying);
+        final startedCached = await _startNativePip(
+          cached,
+          wasPlaying,
+          sourceRect: sourceRect,
+        );
         if (!startedCached && wasPlaying) await play();
         if (startedCached) _nativePipActive = true;
         return startedCached;
@@ -545,13 +671,21 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
 
       var pipUri = await _pictureInPictureSource(source);
       if (wasPlaying) await pause();
-      var started = await _startNativePip(pipUri, wasPlaying);
+      var started = await _startNativePip(
+        pipUri,
+        wasPlaying,
+        sourceRect: sourceRect,
+      );
       if (!started && Platform.isMacOS) {
         final converted = await _pictureInPictureSource(source, force: true);
         if (converted != pipUri) {
           pipUri = converted;
           if (wasPlaying) await pause();
-          started = await _startNativePip(pipUri, wasPlaying);
+          started = await _startNativePip(
+            pipUri,
+            wasPlaying,
+            sourceRect: sourceRect,
+          );
         }
       }
       if (!started) {
@@ -573,16 +707,29 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
     return parsed?.scheme == 'file' ? parsed!.toFilePath() : uri;
   }
 
-  Future<bool> _startNativePip(String uri, bool playing) async {
+  Future<bool> _startNativePip(
+    String uri,
+    bool playing, {
+    Rect? sourceRect,
+  }) async {
+    final sourceRectMap = sourceRect == null
+        ? null
+        : <String, double>{
+            'left': sourceRect.left,
+            'top': sourceRect.top,
+            'width': sourceRect.width,
+            'height': sourceRect.height,
+          };
     final started =
         await _nativePipChannel.invokeMethod<bool>('start', {
           'playing': playing,
           'uri': uri,
           'position':
-              _snap.position.inMicroseconds / Duration.microsecondsPerSecond,
+              _sourcePosition.inMicroseconds / Duration.microsecondsPerSecond,
           'duration':
-              _snap.duration.inMicroseconds / Duration.microsecondsPerSecond,
+              _sourceDuration.inMicroseconds / Duration.microsecondsPerSecond,
           'rate': _rate,
+          if (sourceRectMap != null) 'sourceRect': sourceRectMap,
         }) ??
         false;
     if (!started) {
@@ -599,9 +746,9 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
           'uri': source.uri,
           'playing': playing,
           'position':
-              _snap.position.inMicroseconds / Duration.microsecondsPerSecond,
+              _sourcePosition.inMicroseconds / Duration.microsecondsPerSecond,
           'duration':
-              _snap.duration.inMicroseconds / Duration.microsecondsPerSecond,
+              _sourceDuration.inMicroseconds / Duration.microsecondsPerSecond,
           'rate': _rate,
         }) ??
         false;
@@ -806,14 +953,14 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
         final seconds = (call.arguments as num?)?.toDouble();
         if (seconds != null && seconds.isFinite) {
           final current =
-              _snap.position.inMicroseconds / Duration.microsecondsPerSecond;
+              _sourcePosition.inMicroseconds / Duration.microsecondsPerSecond;
           final duration =
-              _snap.duration.inMicroseconds / Duration.microsecondsPerSecond;
+              _sourceDuration.inMicroseconds / Duration.microsecondsPerSecond;
           final target = (current + seconds).clamp(
             0.0,
             duration > 0 ? duration : double.infinity,
           );
-          await seekTo(
+          await _ensurePlayer().seek(
             Duration(
               microseconds: (target * Duration.microsecondsPerSecond).round(),
             ),

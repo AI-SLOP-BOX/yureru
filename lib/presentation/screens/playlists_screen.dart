@@ -9,6 +9,7 @@ import '../theme.dart';
 import '../widgets/app_svg_icon.dart';
 import '../widgets/page_header.dart';
 import '../widgets/thumb_image.dart';
+import '../widgets/unsaved_changes_guard.dart';
 
 /// Playlists page: vertical list with counts + play/shuffle actions.
 class _PlaylistsSortMenu extends ConsumerWidget {
@@ -264,25 +265,49 @@ Future<void> _createPlaylist(BuildContext context, WidgetRef ref) async {
   final controller = TextEditingController();
   final name = await showDialog<String>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: Text(ref.tr('create_playlist')),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        textCapitalization: TextCapitalization.sentences,
-        decoration: InputDecoration(hintText: ref.tr('playlist_name')),
-        onSubmitted: (value) => Navigator.pop(dialogContext, value),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(dialogContext),
-          child: Text(ref.tr('cancel')),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(dialogContext, controller.text),
-          child: Text(ref.tr('create')),
-        ),
-      ],
+    barrierDismissible: false,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (context, setDialogState) {
+        final hasDraft = controller.text.trim().isNotEmpty;
+        return PopScope<Object?>(
+          canPop: !hasDraft,
+          onPopInvokedWithResult: (didPop, _) async {
+            if (!didPop &&
+                hasDraft &&
+                await confirmDiscardUnsavedChanges(context, ref.tr) &&
+                dialogContext.mounted) {
+              Navigator.pop(dialogContext);
+            }
+          },
+          child: AlertDialog(
+            title: Text(ref.tr('create_playlist')),
+            content: TextField(
+              controller: controller,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: InputDecoration(hintText: ref.tr('playlist_name')),
+              onChanged: (_) => setDialogState(() {}),
+              onSubmitted: (value) => Navigator.pop(dialogContext, value),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  if (hasDraft &&
+                      !await confirmDiscardUnsavedChanges(context, ref.tr)) {
+                    return;
+                  }
+                  if (dialogContext.mounted) Navigator.pop(dialogContext);
+                },
+                child: Text(ref.tr('cancel')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, controller.text),
+                child: Text(ref.tr('create')),
+              ),
+            ],
+          ),
+        );
+      },
     ),
   );
   controller.dispose();

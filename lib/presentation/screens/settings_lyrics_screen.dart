@@ -163,7 +163,7 @@ class _LyricsMediaSettingsScreenState
     final queue = ref.read(queueProvider);
     final remaining = queue.queue.where((id) => id != media.id).toList();
     ref.read(lyricsEditorRequestProvider.notifier).state = media.id;
-    ref.read(playerViewModeProvider.notifier).state = _viewMode;
+    ref.read(playerViewModeProvider.notifier).setEffective(_viewMode);
     await ref
         .read(libraryProvider.notifier)
         .setLyricsButtonHidden(media.id, false);
@@ -172,7 +172,9 @@ class _LyricsMediaSettingsScreenState
       ...remaining,
     ], shuffle: false);
     await ref.read(engineProvider).setVideoTrackEnabled(!_artwork);
-    await ref.read(playbackControllerProvider).openCurrent();
+    await ref
+        .read(playbackControllerProvider)
+        .openCurrent(usePreferredViewMode: false);
     if (!mounted) return;
     if (!ref.read(engineProvider).snapshot.isPlaying) {
       await ref.read(engineProvider).play();
@@ -224,6 +226,19 @@ class _LyricsMediaSettingsScreenState
         } catch (_) {}
       }
     }
+    // The lyrics panel also discovers sidecar files next to the media. Make
+    // those available to the editor so existing .lrc files can be edited.
+    for (final extension in const ['lrc', 'txt']) {
+      final sidecar = media.localPath.replaceFirst(
+        RegExp(r'\.[^./\\]+$'),
+        '.$extension',
+      );
+      try {
+        if (await File(sidecar).exists()) {
+          return await File(sidecar).readAsString();
+        }
+      } catch (_) {}
+    }
     if (ref.read(queueProvider).currentId == media.id) {
       return await ref.read(engineProvider).readEmbeddedLyrics() ?? '';
     }
@@ -231,56 +246,108 @@ class _LyricsMediaSettingsScreenState
   }
 
   Future<void> _editLyrics(MediaItem media, String? path) async {
-    final text = await _initialText(media, path);
-    if (!mounted) return;
-    // Keep the editor on this settings page, but load the selected MV into the
-    // shared playback engine so its video surface is available inside the LRC
-    // editor while timing lines.
-    if (isVideoPath(media.localPath)) {
-      final queue = ref.read(queueProvider);
-      final remaining = queue.queue.where((id) => id != media.id).toList();
-      ref.read(playerViewModeProvider.notifier).state = _viewMode;
-      ref.read(queueProvider.notifier).start([
-        media.id,
-        ...remaining,
-      ], shuffle: false);
-      await ref.read(engineProvider).setVideoTrackEnabled(!_artwork);
-      await ref.read(playbackControllerProvider).openCurrent();
-      if (!mounted) return;
-      if (!ref.read(engineProvider).snapshot.isPlaying) {
-        await ref.read(engineProvider).play();
+    final engine = ref.read(engineProvider);
+    final playbackController = ref.read(playbackControllerProvider);
+    final queueNotifier = ref.read(queueProvider.notifier);
+    final viewModeNotifier = ref.read(playerViewModeProvider.notifier);
+    final libraryIds = ref
+        .read(libraryProvider)
+        .media
+        .map((item) => item.id)
+        .toSet();
+    // Always audition the selected item from zero while syncing lyrics,
+    // including audio-only files; restore the previous item on close.
+    const shouldPreview = true;
+    final activeQueue = ref.read(queueProvider);
+    final previousQueue = activeQueue.copyWith(
+      queue: List.of(activeQueue.queue),
+      original: List.of(activeQueue.original),
+    );
+    final previousViewMode = ref.read(playerViewModeProvider);
+    final previousPlayback = engine.snapshot;
+    final previousMediaId = previousQueue.currentId;
+
+    try {
+      // Preview the selected MV from its beginning while editing. Keep the
+      // current queue and playback snapshot so closing the editor can put the
+      // user back exactly where they were listening.
+      if (shouldPreview) {
+        viewModeNotifier.setEffective(_viewMode);
+        // Keep preview playback isolated. If it reaches the end while the
+        // user is editing timestamps, it must never continue into an
+        // unrelated library item.
+        queueNotifier.start([media.id], shuffle: false);
+        queueNotifier.setRepeat('off');
+        await engine.setVideoTrackEnabled(!_artwork);
+        await playbackController.openCurrent(usePreferredViewMode: false);
+        await playbackController.syncCurrentViewSource();
+        await engine.pause();
+        await engine.seekTo(Duration.zero);
+        await engine.play();
       }
       if (!mounted) return;
+
+      final text = await _initialText(media, path);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => Dialog.fullscreen(
+          child: LyricsEditorDialog(
+            media: media,
+            engine: engine,
+            initialText: text,
+            viewMode: _viewMode,
+            initialSynchronized:
+                path?.toLowerCase().endsWith('.lrc') == true ||
+                parseLrc(text).isNotEmpty,
+            onSaved: (newPath) => ref
+                .read(libraryProvider.notifier)
+                .updateMediaLyricsForView(
+                  media.id,
+                  artwork: _artwork,
+                  path: newPath,
+                ),
+            advancedLrcTools: true,
+            fullScreen: true,
+            onDraftSaved: (newPath) => ref
+                .read(libraryProvider.notifier)
+                .updateMediaLyricsForView(
+                  media.id,
+                  artwork: _artwork,
+                  path: newPath,
+                ),
+            onFinalized: () => ref
+                .read(libraryProvider.notifier)
+                .setLyricsEditingFinalized(media.id, true),
+          ),
+        ),
+      );
+    } finally {
+      if (shouldPreview) {
+        try {
+          await engine.pause();
+          queueNotifier.restore(previousQueue, libraryIds);
+          viewModeNotifier.setEffective(previousViewMode);
+          await engine.setVideoTrackEnabled(
+            previousViewMode == PlayerViewMode.media,
+          );
+          if (previousMediaId != null) {
+            await playbackController.openCurrent();
+            if (previousPlayback.initialized) {
+              await engine.seekTo(previousPlayback.position);
+              if (previousPlayback.isPlaying) {
+                await engine.play();
+              } else {
+                await engine.pause();
+              }
+            }
+          }
+        } catch (_) {
+          // Closing the editor should remain safe even if the previous media
+          // was removed or its file became unavailable during editing.
+        }
+      }
     }
-    await showDialog<void>(
-      context: context,
-      builder: (_) => LyricsEditorDialog(
-        media: media,
-        engine: ref.read(engineProvider),
-        initialText: text,
-        viewMode: _viewMode,
-        initialSynchronized:
-            path?.toLowerCase().endsWith('.lrc') ?? parseLrc(text).isNotEmpty,
-        onSaved: (newPath) => ref
-            .read(libraryProvider.notifier)
-            .updateMediaLyricsForView(
-              media.id,
-              artwork: _artwork,
-              path: newPath,
-            ),
-        advancedLrcTools: true,
-        onDraftSaved: (newPath) => ref
-            .read(libraryProvider.notifier)
-            .updateMediaLyricsForView(
-              media.id,
-              artwork: _artwork,
-              path: newPath,
-            ),
-        onFinalized: () => ref
-            .read(libraryProvider.notifier)
-            .setLyricsEditingFinalized(media.id, true),
-      ),
-    );
   }
 
   Future<void> _chooseTranslationLyrics(MediaItem media) async {

@@ -19,6 +19,9 @@ class PlaybackController {
   /// Media id currently loaded in the engine (for position bookkeeping).
   String? _loadedId;
   String? _loadedSourceUri;
+  PlayerViewMode? _loadedViewMode;
+  int _loadedTimelineOffsetMs = 0;
+  int _loadedTrimEndMs = 0;
   final Set<String> _openingIds = {};
 
   PlaybackController(this.ref) {
@@ -59,7 +62,7 @@ class PlaybackController {
       if (!snap.isPlaying || !snap.initialized) return;
       final id = _loadedId ?? ref.read(queueProvider).currentId;
       if (id == null) return;
-      final ms = snap.position.inMilliseconds;
+      final ms = _videoTimelinePositionMs(id, snap.position.inMilliseconds);
       if (ms < 3000) return;
       final now = DateTime.now();
       if (now.difference(_lastPosSave).inSeconds < 10) return;
@@ -72,9 +75,21 @@ class PlaybackController {
 
   Future<void> _saveNow() async {
     final id = _loadedId ?? ref.read(queueProvider).currentId;
-    final ms = engine.snapshot.position.inMilliseconds;
+    final ms = _videoTimelinePositionMs(
+      id,
+      engine.snapshot.position.inMilliseconds,
+    );
     if (id == null || ms < 3000) return;
     await ref.read(sessionStoreProvider).savePosition(id, ms);
+  }
+
+  int _videoTimelinePositionMs(String? id, int viewPositionMs) {
+    if (id == null ||
+        _loadedId != id ||
+        _loadedViewMode != PlayerViewMode.image) {
+      return viewPositionMs;
+    }
+    return viewPositionMs + _loadedTimelineOffsetMs;
   }
 
   Future<void> pauseAndRemember() async {
@@ -131,7 +146,7 @@ class PlaybackController {
     await openCurrent();
   }
 
-  Future<void> openCurrent() async {
+  Future<void> openCurrent({bool usePreferredViewMode = true}) async {
     final q = ref.read(queueProvider);
     final lib = ref.read(libraryProvider);
     final id = q.currentId;
@@ -149,9 +164,24 @@ class PlaybackController {
       }
       return;
     }
+    final viewNotifier = ref.read(playerViewModeProvider.notifier);
+    await viewNotifier.ready;
+    final desiredMode = usePreferredViewMode
+        ? viewNotifier.preferred
+        : ref.read(playerViewModeProvider);
+    final effectiveMode = switch (m.viewAvailability) {
+      MediaViewAvailability.both => desiredMode,
+      MediaViewAvailability.mediaOnly => PlayerViewMode.media,
+      MediaViewAvailability.artworkOnly => PlayerViewMode.image,
+    };
+    viewNotifier.setEffective(effectiveMode);
+    final isArtworkView = effectiveMode == PlayerViewMode.image;
     // Queue taps can arrive through both the row and its play affordance.
     // Do not open the same media twice while its first load is still running.
-    if (_loadedId == id && engine.snapshot.initialized) return;
+    if (_loadedId == id && engine.snapshot.initialized) {
+      await syncCurrentViewSource();
+      return;
+    }
     if (!_openingIds.add(id)) return;
     try {
       await ref.read(audioSettingsProvider.notifier).ready;
@@ -163,25 +193,62 @@ class PlaybackController {
       // Remember where the outgoing track stopped before switching.
       if (_loadedId != null && _loadedId != id) await _saveNow();
       final sourceMedia = _sourceMediaForView(m);
-      final start = await _savedStart(id, sourceMedia.durationMs);
+      final videoStart = await _savedStart(id, m.durationMs);
+      var start = videoStart ?? Duration.zero;
+      var timelineOffset = Duration.zero;
+      if (ref.read(playerViewModeProvider) == PlayerViewMode.image) {
+        timelineOffset = Duration(milliseconds: m.artworkAudioOffsetMs);
+        start = Duration(
+          milliseconds:
+              (start.inMilliseconds - m.artworkAudioOffsetMs).clamp(
+                0,
+                1 << 62,
+              ) +
+              m.artworkAudioOffsetMs,
+        );
+        final sourceDurationMs = sourceMedia.durationMs;
+        if (sourceDurationMs != null &&
+            start.inMilliseconds >= sourceDurationMs) {
+          start = Duration(
+            milliseconds: sourceDurationMs > 500 ? sourceDurationMs - 500 : 0,
+          );
+        }
+      }
       await ref.read(sessionStoreProvider).markActiveMedia(id);
       try {
         await engine.load(
-          PlaybackSource(mediaId: id, uri: sourceMedia.localPath, start: start),
+          PlaybackSource(
+            mediaId: id,
+            uri: sourceMedia.localPath,
+            start: start,
+            timelineOffset: timelineOffset,
+            end: isArtworkView && m.artworkAudioEndMs > 0
+                ? Duration(milliseconds: m.artworkAudioEndMs)
+                : null,
+            pipArtworkPath: isArtworkView
+                ? m.artworkPath ?? m.thumbnailPath
+                : null,
+          ),
           autoplay: true,
         );
         _loadedId = id;
         _loadedSourceUri = sourceMedia.localPath;
+        _loadedViewMode = ref.read(playerViewModeProvider);
+        _loadedTimelineOffsetMs = timelineOffset.inMilliseconds;
+        _loadedTrimEndMs = isArtworkView ? m.artworkAudioEndMs : 0;
         await _recordPlayback(id);
       } catch (_) {
         if (sourceMedia.localPath != m.localPath) {
           try {
             await engine.load(
-              PlaybackSource(mediaId: id, uri: m.localPath, start: start),
+              PlaybackSource(mediaId: id, uri: m.localPath, start: videoStart),
               autoplay: true,
             );
             _loadedId = id;
             _loadedSourceUri = m.localPath;
+            _loadedViewMode = ref.read(playerViewModeProvider);
+            _loadedTimelineOffsetMs = 0;
+            _loadedTrimEndMs = 0;
             await _recordPlayback(id);
             return;
           } catch (_) {}
@@ -223,11 +290,42 @@ class PlaybackController {
     final useVideoTrack =
         ref.read(playerViewModeProvider) == PlayerViewMode.media;
     final snapshot = engine.snapshot;
+    final targetMode = ref.read(playerViewModeProvider);
+    final videoTimelineMs =
+        snapshot.position.inMilliseconds +
+        (_loadedViewMode == PlayerViewMode.image ? _loadedTimelineOffsetMs : 0);
+    final targetTimelineOffset = targetMode == PlayerViewMode.image
+        ? media.artworkAudioOffsetMs
+        : 0;
+    final targetTrimEnd = targetMode == PlayerViewMode.image
+        ? media.artworkAudioEndMs
+        : 0;
+    final targetStartMs =
+        (targetMode == PlayerViewMode.image
+                ? (videoTimelineMs - media.artworkAudioOffsetMs).clamp(
+                        0,
+                        1 << 62,
+                      ) +
+                      media.artworkAudioOffsetMs
+                : videoTimelineMs)
+            .clamp(0, 1 << 62);
+    final targetStart = Duration(milliseconds: targetStartMs);
     await engine.setVideoTrackEnabled(useVideoTrack);
-    if (_loadedId == media.id && _loadedSourceUri == sourceMedia.localPath) {
+    if (_loadedId == media.id &&
+        _loadedSourceUri == sourceMedia.localPath &&
+        _loadedTimelineOffsetMs == targetTimelineOffset &&
+        _loadedTrimEndMs == targetTrimEnd &&
+        _loadedViewMode == targetMode) {
       return;
     }
-    var start = snapshot.position;
+    if (_loadedId == media.id &&
+        _loadedSourceUri == sourceMedia.localPath &&
+        _loadedTimelineOffsetMs == targetTimelineOffset &&
+        _loadedTrimEndMs == targetTrimEnd) {
+      _loadedViewMode = targetMode;
+      return;
+    }
+    var start = targetStart;
     final maxMs = sourceMedia.durationMs;
     if (maxMs != null && start.inMilliseconds >= maxMs) {
       start = Duration(milliseconds: maxMs > 500 ? maxMs - 500 : 0);
@@ -239,19 +337,34 @@ class PlaybackController {
           mediaId: media.id,
           uri: sourceMedia.localPath,
           start: start,
+          timelineOffset: Duration(milliseconds: targetTimelineOffset),
+          end: targetTrimEnd > 0 ? Duration(milliseconds: targetTrimEnd) : null,
+          pipArtworkPath: targetMode == PlayerViewMode.image
+              ? media.artworkPath ?? media.thumbnailPath
+              : null,
         ),
         autoplay: snapshot.isPlaying,
       );
       _loadedId = media.id;
       _loadedSourceUri = sourceMedia.localPath;
+      _loadedViewMode = targetMode;
+      _loadedTimelineOffsetMs = targetTimelineOffset;
+      _loadedTrimEndMs = targetTrimEnd;
     } catch (_) {
       if (sourceMedia.localPath == media.localPath) return;
       await engine.load(
-        PlaybackSource(mediaId: media.id, uri: media.localPath, start: start),
+        PlaybackSource(
+          mediaId: media.id,
+          uri: media.localPath,
+          start: Duration(milliseconds: videoTimelineMs),
+        ),
         autoplay: snapshot.isPlaying,
       );
       _loadedId = media.id;
       _loadedSourceUri = media.localPath;
+      _loadedViewMode = targetMode;
+      _loadedTimelineOffsetMs = 0;
+      _loadedTrimEndMs = 0;
     }
   }
 
@@ -355,14 +468,58 @@ class PlaybackController {
       if (id == null) return;
       final m = lib.byId(id);
       if (m == null) return;
-      final start = await _savedStart(id, m.durationMs);
+      final viewNotifier = ref.read(playerViewModeProvider.notifier);
+      await viewNotifier.ready;
+      viewNotifier.setEffective(switch (m.viewAvailability) {
+        MediaViewAvailability.both => viewNotifier.preferred,
+        MediaViewAvailability.mediaOnly => PlayerViewMode.media,
+        MediaViewAvailability.artworkOnly => PlayerViewMode.image,
+      });
+      final sourceMedia = _sourceMediaForView(m);
+      var start = await _savedStart(id, m.durationMs) ?? Duration.zero;
+      var timelineOffset = Duration.zero;
+      if (ref.read(playerViewModeProvider) == PlayerViewMode.image) {
+        timelineOffset = Duration(milliseconds: m.artworkAudioOffsetMs);
+        start = Duration(
+          milliseconds:
+              (start.inMilliseconds - m.artworkAudioOffsetMs).clamp(
+                0,
+                1 << 62,
+              ) +
+              m.artworkAudioOffsetMs,
+        );
+      }
       await ref.read(audioSettingsProvider.notifier).ready;
       await engine.setPlaybackRate(q.speed);
+      await engine.setVideoTrackEnabled(
+        ref.read(playerViewModeProvider) == PlayerViewMode.media,
+      );
       await engine.load(
-        PlaybackSource(mediaId: id, uri: m.localPath, start: start),
+        PlaybackSource(
+          mediaId: id,
+          uri: sourceMedia.localPath,
+          start: start,
+          timelineOffset: timelineOffset,
+          end:
+              ref.read(playerViewModeProvider) == PlayerViewMode.image &&
+                  m.artworkAudioEndMs > 0
+              ? Duration(milliseconds: m.artworkAudioEndMs)
+              : null,
+          pipArtworkPath:
+              ref.read(playerViewModeProvider) == PlayerViewMode.image
+              ? m.artworkPath ?? m.thumbnailPath
+              : null,
+        ),
         autoplay: false,
       );
       _loadedId = id;
+      _loadedSourceUri = sourceMedia.localPath;
+      _loadedViewMode = ref.read(playerViewModeProvider);
+      _loadedTimelineOffsetMs = timelineOffset.inMilliseconds;
+      _loadedTrimEndMs =
+          ref.read(playerViewModeProvider) == PlayerViewMode.image
+          ? m.artworkAudioEndMs
+          : 0;
       ref.read(viewingPlayerProvider.notifier).state = true;
     } catch (_) {
       // Session restore must never break launch.
@@ -383,6 +540,10 @@ class PlaybackController {
       } else {
         await engine.pause();
         _loadedId = null;
+        _loadedSourceUri = null;
+        _loadedViewMode = null;
+        _loadedTimelineOffsetMs = 0;
+        _loadedTrimEndMs = 0;
       }
     }
   }

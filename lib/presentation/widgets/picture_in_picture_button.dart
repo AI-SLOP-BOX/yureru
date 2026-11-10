@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_state.dart';
+import '../../data/thumbnails.dart';
 import '../../platform/window_utils.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
@@ -49,9 +52,12 @@ class _PictureInPictureButtonState
           platform == TargetPlatform.macOS ||
           platform == TargetPlatform.windows ||
           platform == TargetPlatform.linux;
+      final switchesShellToPip =
+          (isDesktop && !isMacOS) || platform == TargetPlatform.android;
       final pipState = ref.read(pictureInPictureProvider.notifier);
-      if (isDesktop && !isMacOS) {
-        // Switch to the video-only surface before the compact window shrinks.
+      if (switchesShellToPip) {
+        // Switch the Flutter surface before the native/custom PiP transition,
+        // so Android's PiP snapshot already contains the jacket image.
         pipState.state = true;
         await WidgetsBinding.instance.endOfFrame;
       }
@@ -59,13 +65,39 @@ class _PictureInPictureButtonState
           ref.read(playerViewModeProvider) == PlayerViewMode.image
           ? 1.0
           : widget.engine.videoAspectRatio ?? 16 / 9;
+      final sourceRect = ref.read(pictureInPictureSourceRectProvider);
+      String? artworkPath;
+      if (ref.read(playerViewModeProvider) == PlayerViewMode.image) {
+        final mediaId = ref.read(queueProvider).currentId;
+        final media = mediaId == null
+            ? null
+            : ref.read(libraryProvider).byId(mediaId);
+        if (media != null) {
+          for (final candidate in [media.artworkPath, media.thumbnailPath]) {
+            if (candidate != null && await File(candidate).exists()) {
+              artworkPath = candidate;
+              break;
+            }
+          }
+          artworkPath ??= (await ThumbnailService.forMedia(
+            mediaId: media.id,
+            localPath: media.localPath,
+            highRes: true,
+          ))?.path;
+        }
+      }
       final started = isMacOS
-          ? await widget.engine.enterPictureInPicture(aspectRatio: aspectRatio)
+          ? await widget.engine.enterPictureInPicture(
+              aspectRatio: aspectRatio,
+              artworkPath: artworkPath,
+              sourceRect: sourceRect,
+            )
           : await enterPictureInPictureWindow(
               engine: widget.engine,
               aspectRatio: aspectRatio,
+              artworkPath: artworkPath,
             );
-      if (!started && isDesktop && !isMacOS) {
+      if (!started && switchesShellToPip) {
         pipState.state = false;
       } else if (started && platform != TargetPlatform.iOS && !isMacOS) {
         pipState.state = true;
@@ -117,21 +149,20 @@ class _PictureInPictureButtonState
       initialData: widget.engine.snapshot,
       builder: (context, _) {
         final isIos = defaultTargetPlatform == TargetPlatform.iOS;
+        final artworkMode =
+            ref.watch(playerViewModeProvider) == PlayerViewMode.image;
         final canStart =
             !_starting &&
             (isPipActive ||
                 (widget.enabled &&
                     (!isIos ||
                         (!normalizationEnabled &&
-                            widget.engine.supportsPictureInPicture))));
+                            (widget.engine.supportsPictureInPicture ||
+                                artworkMode)))));
         return IconButton(
           tooltip: ref.tr(isPipActive ? 'restore_window' : 'pip'),
           icon: Icon(
-            _starting
-                ? Icons.hourglass_top_rounded
-                : isPipActive
-                ? Icons.open_in_full_rounded
-                : Icons.picture_in_picture_alt_rounded,
+            Icons.picture_in_picture_alt_rounded,
             size: widget.iconSize,
             color: widget.color,
           ),

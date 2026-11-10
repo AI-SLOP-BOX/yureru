@@ -8,12 +8,28 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../app_state.dart';
 import '../../data/lyrics.dart';
-import '../../domain/creator_names.dart';
 import '../../domain/models.dart';
 import '../../playback/playback_engine.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import 'lyrics_editor_dialog.dart';
+
+/// The immersive player follows lyrics as they advance, so an auto-added
+/// desktop scrollbar flashes on every programmatic scroll. Keep scrolling
+/// available while suppressing that scrollbar for the lyrics surface.
+class _ImmersiveLyricsScrollBehavior extends MaterialScrollBehavior {
+  const _ImmersiveLyricsScrollBehavior();
+
+  @override
+  bool get scrollbars => false;
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
+}
 
 /// Lyrics content hosted inside QueuePanel, alongside the upcoming queue.
 class LyricsPanel extends ConsumerStatefulWidget {
@@ -111,6 +127,13 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
     if (_translationLines.isEmpty) return;
     setState(() => _showTranslation = !_showTranslation);
   }
+
+  Widget _lyricsScrollView(Widget child) => widget.immersive
+      ? ScrollConfiguration(
+          behavior: const _ImmersiveLyricsScrollBehavior(),
+          child: child,
+        )
+      : child;
 
   Future<_LyricsSource> _loadSource() async {
     var path = widget.media.lyricsPathForView(
@@ -292,42 +315,21 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
     }
     final currentMedia =
         ref.watch(libraryProvider).byId(widget.media.id) ?? widget.media;
-    final title = displayTitle(widget.media.title);
     final textPrimary = themeTextPrimary(context);
     final textSub = themeTextSub(context);
     final phoneLayout = MediaQuery.sizeOf(context).width < 600;
+    final hasLyricsActions =
+        (currentMedia.translatedLyricsPath != null &&
+            _translationLines.isNotEmpty) ||
+        !currentMedia.lyricsEditingFinalized;
     return Column(
       children: [
-        if (!widget.immersive)
+        if (!widget.immersive && hasLyricsActions)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
             child: Row(
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (title.isNotEmpty)
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      if (widget.media.artist?.trim().isNotEmpty == true)
-                        Text(
-                          formatCreatorNames(widget.media.artist),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: textSub, fontSize: 12),
-                        ),
-                    ],
-                  ),
-                ),
+                const Spacer(),
                 if (currentMedia.translatedLyricsPath != null &&
                     _translationLines.isNotEmpty)
                   IconButton(
@@ -353,11 +355,9 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
               ],
             ),
           ),
-        if (!widget.immersive) Divider(height: 1, color: themeBorder(context)),
-        if (widget.immersive &&
-            ((currentMedia.translatedLyricsPath != null &&
-                    _translationLines.isNotEmpty) ||
-                !currentMedia.lyricsEditingFinalized))
+        if (!widget.immersive && hasLyricsActions)
+          Divider(height: 1, color: themeBorder(context)),
+        if (widget.immersive && hasLyricsActions)
           Align(
             alignment: Alignment.centerRight,
             child: Row(
@@ -431,6 +431,16 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                         final lines = parseLrc(
                           text,
                         ).where((line) => line.text.trim().isNotEmpty).toList();
+                        final untimedLines =
+                            RegExp(
+                                  r'^\s*\[(?:x-xx|-:--)\]\s*(.*)$',
+                                  caseSensitive: false,
+                                  multiLine: true,
+                                )
+                                .allMatches(text)
+                                .map((match) => match.group(1)!.trim())
+                                .where((line) => line.isNotEmpty)
+                                .toList();
                         if (lyricsSnapshot.hasError || lines.isEmpty) {
                           final plainText = text
                               .replaceAll(
@@ -444,18 +454,21 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                               .trim();
                           if (!lyricsSnapshot.hasError &&
                               plainText.isNotEmpty) {
-                            return SingleChildScrollView(
-                              padding: const EdgeInsets.all(20),
-                              child: Text(
-                                _showTranslation && _translationLines.isNotEmpty
-                                    ? _translationLines.join('\n')
-                                    : plainText,
-                                style: TextStyle(
-                                  color: textPrimary,
-                                  fontSize: widget.immersive
-                                      ? 30
-                                      : (phoneLayout ? 20 : 16),
-                                  height: 1.6,
+                            return _lyricsScrollView(
+                              SingleChildScrollView(
+                                padding: const EdgeInsets.all(20),
+                                child: Text(
+                                  _showTranslation &&
+                                          _translationLines.isNotEmpty
+                                      ? _translationLines.join('\n')
+                                      : plainText,
+                                  style: TextStyle(
+                                    color: textPrimary,
+                                    fontSize: widget.immersive
+                                        ? 30
+                                        : (phoneLayout ? 20 : 16),
+                                    height: 1.6,
+                                  ),
                                 ),
                               ),
                             );
@@ -485,71 +498,94 @@ class _LyricsPanelState extends ConsumerState<LyricsPanel> {
                             WidgetsBinding.instance.addPostFrameCallback(
                               (_) => _scrollTo(active),
                             );
-                            return ListView.builder(
-                              controller: _scrollController,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                                vertical: 12,
-                              ),
-                              itemCount: lines.length,
-                              itemBuilder: (context, index) {
-                                final isActive = index == active;
-                                return SizedBox(
-                                  height: _lineHeight,
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: InkWell(
-                                      onTap: () => widget.engine.seekTo(
-                                        playbackPositionForLyric(
-                                          lines[index].time,
-                                          offset: Duration(
-                                            milliseconds: currentMedia
-                                                .lyricsOffsetForView(
-                                                  artwork:
-                                                      widget.viewMode ==
-                                                      PlayerViewMode.image,
-                                                ),
+                            return _lyricsScrollView(
+                              ListView.builder(
+                                controller: _scrollController,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 12,
+                                ),
+                                itemCount: lines.length + untimedLines.length,
+                                itemBuilder: (context, index) {
+                                  if (index >= lines.length) {
+                                    return SizedBox(
+                                      height: _lineHeight,
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          untimedLines[index - lines.length],
+                                          style: TextStyle(
+                                            color: textSub.withValues(
+                                              alpha: 0.7,
+                                            ),
+                                            fontSize: widget.immersive
+                                                ? 26
+                                                : (phoneLayout ? 20 : 16),
+                                            height: 1.6,
                                           ),
                                         ),
                                       ),
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: AnimatedDefaultTextStyle(
-                                        duration: const Duration(
-                                          milliseconds: 180,
+                                    );
+                                  }
+                                  final isActive = index == active;
+                                  return SizedBox(
+                                    height: _lineHeight,
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: InkWell(
+                                        onTap: () => widget.engine.seekTo(
+                                          playbackPositionForLyric(
+                                            lines[index].time,
+                                            offset: Duration(
+                                              milliseconds: currentMedia
+                                                  .lyricsOffsetForView(
+                                                    artwork:
+                                                        widget.viewMode ==
+                                                        PlayerViewMode.image,
+                                                  ),
+                                            ),
+                                          ),
                                         ),
-                                        style: TextStyle(
-                                          color: isActive
-                                              ? textPrimary
-                                              : textSub.withValues(
-                                                  alpha:
-                                                      (index - active).abs() < 3
-                                                      ? 0.7
-                                                      : 0.42,
-                                                ),
-                                          fontSize: widget.immersive
-                                              ? (isActive ? 30 : 26)
-                                              : phoneLayout
-                                              ? (isActive ? 22 : 18)
-                                              : (isActive ? 18 : 15),
-                                          fontWeight: isActive
-                                              ? FontWeight.w700
-                                              : FontWeight.w500,
-                                        ),
-                                        child: Text(
-                                          _showTranslation &&
-                                                  index <
-                                                      _translationLines.length
-                                              ? _translationLines[index]
-                                              : lines[index].text,
-                                          maxLines: widget.immersive ? 2 : 3,
-                                          softWrap: true,
-                                          overflow: TextOverflow.ellipsis,
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: AnimatedDefaultTextStyle(
+                                          duration: const Duration(
+                                            milliseconds: 180,
+                                          ),
+                                          style: TextStyle(
+                                            color: isActive
+                                                ? textPrimary
+                                                : textSub.withValues(
+                                                    alpha:
+                                                        (index - active).abs() <
+                                                            3
+                                                        ? 0.7
+                                                        : 0.42,
+                                                  ),
+                                            fontSize: widget.immersive
+                                                ? (isActive ? 30 : 26)
+                                                : phoneLayout
+                                                ? (isActive ? 22 : 18)
+                                                : (isActive ? 18 : 15),
+                                            fontWeight: isActive
+                                                ? FontWeight.w700
+                                                : FontWeight.w500,
+                                          ),
+                                          child: Text(
+                                            _showTranslation &&
+                                                    index <
+                                                        _translationLines.length
+                                                ? _translationLines[index]
+                                                : lines[index].text,
+                                            maxLines: widget.immersive ? 2 : 3,
+                                            softWrap: true,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                );
-                              },
+                                  );
+                                },
+                              ),
                             );
                           },
                         );

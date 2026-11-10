@@ -18,6 +18,7 @@ const Map<String, String> ptBase = {
   'new_playlist': 'Nova playlist',
   'play': 'Tocar',
   'pause': 'Pausar',
+  'stop': 'Parar',
   'playing': 'Tocando agora',
   'paused': 'Pausado',
   'preview': 'Pré-visualização',
@@ -258,8 +259,12 @@ const Map<String, String> ptScreen = {
   'remove_media_confirm':
       'Remover “{title}” da biblioteca?\n(O arquivo não será excluído.)',
   'added_to_playlist': 'Adicionado a “{name}”',
+  'add_to_playlist_failed':
+      'Não foi possível adicionar os vídeos selecionados à playlist',
   'add_queue': 'Adicionar à fila',
   'add_playlist': 'Adicionar à playlist',
+  'open_artist_videos': 'Ir para o artista',
+  'remove_from_playlist': 'Remover da playlist',
   'change_thumbnail': 'Alterar miniatura',
   'thumbnail_label': 'Miniatura',
   'delete_from_library': 'Remover da biblioteca',

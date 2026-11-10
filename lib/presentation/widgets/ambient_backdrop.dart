@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_state.dart';
-import 'thumb_image.dart';
 
 class AmbientRoomGlowCanvas extends ConsumerWidget {
   const AmbientRoomGlowCanvas({super.key});
@@ -21,53 +20,17 @@ class AmbientRoomGlowCanvas extends ConsumerWidget {
     // adding a separate blurred layer only creates muddy dark patches around it.
     // This also prevents reusing the notifier's last sampled video frame.
     if (viewMode == PlayerViewMode.image) return const SizedBox.expand();
+    final hasVideoFrameSource =
+        ref.read(engineProvider).videoAspectRatio != null;
+    // Do not turn a jacket or a stale frame from the previous track into the
+    // ambient background when the current item has no video surface.
+    if (!hasVideoFrameSource) {
+      return ColoredBox(color: Theme.of(context).scaffoldBackgroundColor);
+    }
     if (frame == null) {
-      final isVideoMode =
-          viewMode == PlayerViewMode.media &&
-          ref.read(engineProvider).videoAspectRatio != null;
-      // Never use the album/video thumbnail as a full-window blurred layer
-      // while a video frame is unavailable. That creates a ghost copy of the
-      // video below the player, with a very visible rectangular boundary.
-      // Wait for a sampled frame instead; the artwork fallback is only for
-      // audio and image playback where no moving video frame exists.
-      if (isVideoMode) {
-        // The shell becomes transparent while ambient lighting is enabled.
-        // Until the first decoded frame arrives, a transparent canvas exposes
-        // the platform's black window background; in light mode that leaves
-        // dark player text on black. Keep the themed surface visible during
-        // this brief capture gap, then let the sampled glow take over.
-        return ColoredBox(color: Theme.of(context).scaffoldBackgroundColor);
-      }
-
-      final queue = ref.watch(queueProvider);
-      final library = ref.watch(libraryProvider);
-      final media = queue.currentId == null
-          ? null
-          : library.byId(queue.currentId!);
-      if (media == null) return const SizedBox.expand();
-
-      // Audio tracks and artwork mode have no video frame to sample. Use the
-      // current cover as a soft light source so Ambient mode still responds.
-      return IgnorePointer(
-        child: Opacity(
-          opacity: (intensity * 0.4).clamp(0.0, 0.4).toDouble(),
-          child: ImageFiltered(
-            imageFilter: ImageFilter.blur(sigmaX: 144, sigmaY: 144),
-            child: Transform.scale(
-              scale: 1.35,
-              child: ThumbImage(
-                seed: media.id,
-                mediaId: media.id,
-                localPath: media.localPath,
-                useArtwork: false,
-                radius: 0,
-                expand: true,
-                highRes: true,
-              ),
-            ),
-          ),
-        ),
-      );
+      // Keep the themed surface visible until the current video's first frame
+      // is sampled, rather than exposing black or a blurred jacket image.
+      return ColoredBox(color: Theme.of(context).scaffoldBackgroundColor);
     }
     return LayoutBuilder(
       builder: (context, constraints) {

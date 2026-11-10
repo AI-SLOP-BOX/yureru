@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "example.title-cleanup",
+  "name": "Title cleanup",
+  "version": "1.0.0",
+  "description": "Removes a leading label from imported titles.",
+  "entrypoint": "main.js",
+  "hooks": ["library.write.mediaImport", "extension.action.status"],
+  "permissions": ["library.write", "ui.contribute", "theme.customize"]
+}

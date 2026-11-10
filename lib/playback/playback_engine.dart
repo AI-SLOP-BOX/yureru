@@ -28,11 +28,21 @@ class PlaybackSource {
   final String uri;
   final Duration? start;
   final Duration? end;
+
+  /// Source time hidden before the visible playback timeline begins.
+  /// Position 0 is reported at [timelineOffset], and duration is shortened by
+  /// the same amount. [end] optionally trims the source tail as well.
+  final Duration timelineOffset;
+
+  /// Still image to keep in system PiP when this source is an artwork view.
+  final String? pipArtworkPath;
   const PlaybackSource({
     required this.mediaId,
     required this.uri,
     this.start,
     this.end,
+    this.timelineOffset = Duration.zero,
+    this.pipArtworkPath,
   });
   bool get isNetwork => uri.startsWith('http://') || uri.startsWith('https://');
 }
@@ -93,7 +103,11 @@ abstract class PlaybackEngine {
   String? get pictureInPictureFailure => null;
 
   /// Start native PiP for engines that expose a platform video layer.
-  Future<bool> enterPictureInPicture({double? aspectRatio}) async => false;
+  Future<bool> enterPictureInPicture({
+    double? aspectRatio,
+    String? artworkPath,
+    Rect? sourceRect,
+  }) async => false;
 
   Future<void> dispose();
 

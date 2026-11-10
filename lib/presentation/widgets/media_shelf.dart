@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../layout_metrics.dart';
@@ -6,6 +7,7 @@ import '../theme.dart';
 import 'app_svg_icon.dart';
 import 'duration_text.dart';
 import 'thumb_image.dart';
+import 'track_actions.dart';
 
 /// A bounded preview of a collection; the caller owns its complete play order.
 class MediaShelf extends StatelessWidget {
@@ -15,6 +17,7 @@ class MediaShelf extends StatelessWidget {
     required this.items,
     required this.onPlay,
     this.onSeeAll,
+    this.enableTrackActions = false,
     required this.seeAllLabel,
   });
   final String title;
@@ -22,6 +25,7 @@ class MediaShelf extends StatelessWidget {
   final ValueChanged<MediaItem> onPlay;
   final VoidCallback? onSeeAll;
   final String seeAllLabel;
+  final bool enableTrackActions;
 
   @override
   Widget build(BuildContext context) {
@@ -85,6 +89,7 @@ class MediaShelf extends StatelessWidget {
                   media: visible[index],
                   width: cardWidth,
                   onTap: () => onPlay(visible[index]),
+                  enableTrackActions: enableTrackActions,
                 ),
               ),
             ),
@@ -96,23 +101,25 @@ class MediaShelf extends StatelessWidget {
   }
 }
 
-class _MediaShelfCard extends StatefulWidget {
+class _MediaShelfCard extends ConsumerStatefulWidget {
   final MediaItem media;
   final VoidCallback onTap;
   final double width;
+  final bool enableTrackActions;
 
   const _MediaShelfCard({
     super.key,
     required this.media,
     required this.onTap,
     required this.width,
+    required this.enableTrackActions,
   });
 
   @override
-  State<_MediaShelfCard> createState() => _MediaShelfCardState();
+  ConsumerState<_MediaShelfCard> createState() => _MediaShelfCardState();
 }
 
-class _MediaShelfCardState extends State<_MediaShelfCard> {
+class _MediaShelfCardState extends ConsumerState<_MediaShelfCard> {
   bool _hover = false;
   bool _focused = false;
 
@@ -126,7 +133,7 @@ class _MediaShelfCardState extends State<_MediaShelfCard> {
     final compact = MediaQuery.sizeOf(context).width < 600;
     final showPlay = compact || _hover || _focused;
 
-    return MouseRegion(
+    final card = MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       cursor: SystemMouseCursors.click,
@@ -275,5 +282,7 @@ class _MediaShelfCardState extends State<_MediaShelfCard> {
         ),
       ),
     );
+    if (!widget.enableTrackActions) return card;
+    return TrackContextMenuRegion(ref: ref, media: m, child: card);
   }
 }

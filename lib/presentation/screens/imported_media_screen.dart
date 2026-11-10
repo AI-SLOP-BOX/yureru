@@ -10,6 +10,8 @@ import '../widgets/thumb_image.dart';
 import '../widgets/metadata_fields.dart';
 import 'media_metadata_editor.dart';
 
+enum _MetadataListSort { unsetFirst, newest, oldest, normal }
+
 class ImportedMediaScreen extends ConsumerStatefulWidget {
   const ImportedMediaScreen({super.key});
 
@@ -21,6 +23,7 @@ class ImportedMediaScreen extends ConsumerStatefulWidget {
 class _ImportedMediaScreenState extends ConsumerState<ImportedMediaScreen> {
   final _searchController = TextEditingController();
   String _query = '';
+  _MetadataListSort _sort = _MetadataListSort.normal;
   bool _selecting = false;
   final Set<String> _selectedIds = {};
 
@@ -39,6 +42,34 @@ class _ImportedMediaScreenState extends ConsumerState<ImportedMediaScreen> {
       return media.title.toLowerCase().contains(query) ||
           (media.artist?.toLowerCase().contains(query) ?? false);
     }).toList();
+    final originalOrder = {
+      for (var i = 0; i < lib.savedMedia.length; i++) lib.savedMedia[i].id: i,
+    };
+    switch (_sort) {
+      case _MetadataListSort.unsetFirst:
+        mediaItems.sort((a, b) {
+          final aUnset = a.artist?.trim().isNotEmpty != true;
+          final bUnset = b.artist?.trim().isNotEmpty != true;
+          if (aUnset != bUnset) return aUnset ? -1 : 1;
+          return originalOrder[a.id]!.compareTo(originalOrder[b.id]!);
+        });
+      case _MetadataListSort.newest:
+        mediaItems.sort((a, b) {
+          final byDate = b.createdAt.compareTo(a.createdAt);
+          return byDate != 0
+              ? byDate
+              : originalOrder[a.id]!.compareTo(originalOrder[b.id]!);
+        });
+      case _MetadataListSort.oldest:
+        mediaItems.sort((a, b) {
+          final byDate = a.createdAt.compareTo(b.createdAt);
+          return byDate != 0
+              ? byDate
+              : originalOrder[a.id]!.compareTo(originalOrder[b.id]!);
+        });
+      case _MetadataListSort.normal:
+        break;
+    }
     final selectedVisibleCount = mediaItems
         .where((media) => _selectedIds.contains(media.id))
         .length;
@@ -52,6 +83,28 @@ class _ImportedMediaScreenState extends ConsumerState<ImportedMediaScreen> {
                     .replaceAll('{count}', '${_selectedIds.length}'),
         ),
         actions: [
+          if (!_selecting)
+            PopupMenuButton<_MetadataListSort>(
+              tooltip: ref.tr('sort'),
+              initialValue: _sort,
+              onSelected: (value) => setState(() => _sort = value),
+              itemBuilder: (_) => [
+                for (final value in _MetadataListSort.values)
+                  CheckedPopupMenuItem(
+                    value: value,
+                    checked: value == _sort,
+                    child: Text(
+                      ref.tr(switch (value) {
+                        _MetadataListSort.unsetFirst => 'unset_first',
+                        _MetadataListSort.newest => 'newest_first',
+                        _MetadataListSort.oldest => 'oldest_first',
+                        _MetadataListSort.normal => 'normal_order',
+                      }),
+                    ),
+                  ),
+              ],
+              icon: const Icon(Icons.sort_rounded),
+            ),
           if (_selecting && mediaItems.isNotEmpty)
             IconButton(
               tooltip: selectedVisibleCount == mediaItems.length
@@ -147,6 +200,35 @@ class _ImportedMediaScreenState extends ConsumerState<ImportedMediaScreen> {
                           direction: _selecting
                               ? DismissDirection.none
                               : DismissDirection.endToStart,
+                          confirmDismiss: (_) async {
+                            return await showDialog<bool>(
+                                  context: c,
+                                  builder: (dialogContext) => AlertDialog(
+                                    title: Text(ref.tr('delete_from_library')),
+                                    content: Text(
+                                      ref
+                                          .tr('remove_media_confirm')
+                                          .replaceAll(
+                                            '{title}',
+                                            displayTitle(m.title),
+                                          ),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext, false),
+                                        child: Text(ref.tr('cancel')),
+                                      ),
+                                      FilledButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext, true),
+                                        child: Text(ref.tr('delete')),
+                                      ),
+                                    ],
+                                  ),
+                                ) ??
+                                false;
+                          },
                           background: Container(
                             color: Colors.red,
                             alignment: Alignment.centerRight,
@@ -166,7 +248,9 @@ class _ImportedMediaScreenState extends ConsumerState<ImportedMediaScreen> {
                           },
                           child: ListTile(
                             selected: _selectedIds.contains(m.id),
-                            selectedTileColor: kAccent.withValues(alpha: 0.12),
+                            selectedTileColor: themeAccent(
+                              context,
+                            ).withValues(alpha: 0.12),
                             leading: ThumbImage(
                               seed: m.id,
                               mediaId: m.id,

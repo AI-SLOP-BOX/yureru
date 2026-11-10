@@ -154,6 +154,7 @@ class Sidebar extends ConsumerWidget {
                         seed: pl.id,
                         thumbMediaId: first?.id,
                         thumbPath: first?.localPath,
+                        playlistId: pl.id,
                         selected: detailPlaylistId == pl.id && !viewingPlayer,
                         onTap: () => onPlaylist(pl.id),
                       );
@@ -293,7 +294,7 @@ class _RailButton extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Material(
         color: selected
-            ? (isDark ? kCardHover : const Color(0xFFE1E2E6))
+            ? (isDark ? themeCardHover(context) : const Color(0xFFE1E2E6))
             : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
@@ -307,7 +308,7 @@ class _RailButton extends StatelessWidget {
                 icon,
                 size: 22,
                 color: selected
-                    ? (isDark ? kAccentLight : Colors.black87)
+                    ? (isDark ? themeAccentHighlight(context) : Colors.black87)
                     : (isDark ? kTextSub : Colors.black54),
               ),
             ),
@@ -341,7 +342,7 @@ class _NavItem extends StatelessWidget {
         duration: const Duration(milliseconds: 160),
         decoration: BoxDecoration(
           color: selected
-              ? (isDark ? kCardHover : const Color(0xFFE1E2E6))
+              ? (isDark ? themeCardHover(context) : const Color(0xFFE1E2E6))
               : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
@@ -409,6 +410,7 @@ class _PlaylistItem extends StatelessWidget {
   final String seed;
   final String? thumbMediaId;
   final String? thumbPath;
+  final String playlistId;
   final bool selected;
   final VoidCallback onTap;
   const _PlaylistItem({
@@ -419,6 +421,7 @@ class _PlaylistItem extends StatelessWidget {
     required this.seed,
     this.thumbMediaId,
     this.thumbPath,
+    required this.playlistId,
     required this.selected,
     required this.onTap,
   });
@@ -468,7 +471,9 @@ class _PlaylistItem extends StatelessWidget {
                       seed: seed,
                       mediaId: thumbMediaId,
                       localPath: thumbPath,
-                      imageContext: MediaImageContext.home,
+                      imageContext: MediaImageContext.playlist,
+                      playlistId: playlistId,
+                      playlistCover: true,
                       size: 38,
                       radius: 6,
                     ),

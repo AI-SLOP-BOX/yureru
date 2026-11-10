@@ -16,6 +16,10 @@ class AppDelegate: FlutterAppDelegate {
     (mainFlutterWindow as? MainFlutterWindow)?.openSettingsFromMenu()
   }
 
+  @IBAction func showSearch(_ sender: Any?) {
+    (mainFlutterWindow as? MainFlutterWindow)?.openSearchFromMenu()
+  }
+
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     return true
   }

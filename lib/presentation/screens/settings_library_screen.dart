@@ -6,7 +6,45 @@ import '../../app_state.dart';
 import '../../domain/models.dart';
 import '../i18n.dart';
 import '../widgets/app_svg_icon.dart';
-import 'imported_media_screen.dart';
+
+Future<String?> _promptImportArtist(BuildContext context, WidgetRef ref) async {
+  final controller = TextEditingController();
+  try {
+    return await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(ref.tr('import_artist_title')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: InputDecoration(
+            labelText: ref.tr('metadata_artist'),
+            hintText: ref.tr('import_artist_hint'),
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(ref.tr('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, ''),
+            child: Text(ref.tr('import_without_artist')),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: Text(ref.tr('import_artist_continue')),
+          ),
+        ],
+      ),
+    );
+  } finally {
+    controller.dispose();
+  }
+}
 
 Future<String> _storageText(List<MediaItem> media, String languageCode) async {
   int bytes = 0;
@@ -57,15 +95,6 @@ class LibraryManagementScreen extends ConsumerWidget {
                 await ref.read(libraryProvider.notifier).clearPlaybackHistory();
               }
             },
-          ),
-          ListTile(
-            leading: const AppSvgIcon('collection_edit'),
-            title: Text(ref.tr('edit_media_artwork')),
-            subtitle: Text(ref.tr('edit_media_artwork_desc')),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ImportedMediaScreen()),
-            ),
           ),
           ListTile(
             leading: const Icon(Icons.storage),
@@ -123,7 +152,6 @@ class LibraryManagementScreen extends ConsumerWidget {
   }
 
   static Future<void> importVideos(BuildContext context, WidgetRef ref) async {
-    debugPrint('import: onTap fired');
     final importer = ref.read(importerProvider);
     try {
       final items = await _withProgressDialog(
@@ -131,12 +159,12 @@ class LibraryManagementScreen extends ConsumerWidget {
         ref,
         (p) => importer.pickAndImport(
           skipSourcePaths: _existingSources(ref),
+          requestArtistOverride: () => _promptImportArtist(context, ref),
           onProgress: p,
         ),
       );
       if (!context.mounted) return;
       if (items.isEmpty) {
-        debugPrint('import: cancelled / nothing to add');
         return;
       }
       await ref.read(libraryProvider.notifier).addMedia(items);
@@ -149,18 +177,16 @@ class LibraryManagementScreen extends ConsumerWidget {
           ),
         );
       }
-    } catch (e, s) {
-      debugPrint('import: error $e\n$s');
+    } catch (_) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${ref.tr('import_failed')}: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(ref.tr('import_failed'))));
       }
     }
   }
 
   static Future<void> importFolder(BuildContext context, WidgetRef ref) async {
-    debugPrint('import: folder onTap fired');
     try {
       final importer = ref.read(importerProvider);
       final items = await _withProgressDialog(
@@ -168,16 +194,13 @@ class LibraryManagementScreen extends ConsumerWidget {
         ref,
         (p) => importer.pickAndImportFolder(
           skipSourcePaths: _existingSources(ref),
+          requestArtistOverride: () => _promptImportArtist(context, ref),
           onProgress: p,
         ),
       );
       if (!context.mounted) return;
-      if (items == null) {
-        debugPrint('import: folder cancelled');
-        return;
-      }
+      if (items == null) return;
       if (items.isEmpty) {
-        debugPrint('import: folder has nothing new');
         if (context.mounted) {
           ScaffoldMessenger.of(
             context,
@@ -195,12 +218,11 @@ class LibraryManagementScreen extends ConsumerWidget {
           ),
         );
       }
-    } catch (e, s) {
-      debugPrint('import: folder error $e\n$s');
+    } catch (_) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${ref.tr('import_failed')}: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(ref.tr('import_failed'))));
       }
     }
   }
@@ -209,7 +231,6 @@ class LibraryManagementScreen extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
   ) async {
-    debugPrint('import: folder referenced onTap fired');
     try {
       final importer = ref.read(importerProvider);
       final items = await _withProgressDialog(
@@ -218,16 +239,13 @@ class LibraryManagementScreen extends ConsumerWidget {
         (p) => importer.pickAndImportFolder(
           copyIntoApp: false,
           skipSourcePaths: _existingSources(ref),
+          requestArtistOverride: () => _promptImportArtist(context, ref),
           onProgress: p,
         ),
       );
       if (!context.mounted) return;
-      if (items == null) {
-        debugPrint('import: referenced folder cancelled');
-        return;
-      }
+      if (items == null) return;
       if (items.isEmpty) {
-        debugPrint('import: referenced folder has nothing new');
         if (context.mounted) {
           ScaffoldMessenger.of(
             context,
@@ -247,12 +265,11 @@ class LibraryManagementScreen extends ConsumerWidget {
           ),
         );
       }
-    } catch (e, s) {
-      debugPrint('import: referenced folder error $e\n$s');
+    } catch (_) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${ref.tr('reference_failed')}: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(ref.tr('reference_failed'))));
       }
     }
   }

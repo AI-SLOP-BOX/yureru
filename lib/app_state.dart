@@ -14,6 +14,7 @@ import 'playback/playback_engine.dart';
 import 'playback/media_kit_engine.dart';
 import 'playback/ios_playback_engine.dart';
 import 'playback/audio_settings.dart';
+import 'extensions/extension_runtime.dart';
 
 // Preserve existing imports while features can depend on their own modules.
 export 'library/library_notifier.dart';
@@ -38,7 +39,11 @@ final audioSettingsProvider =
 final libraryProvider = StateNotifierProvider<LibraryNotifier, LibraryState>((
   ref,
 ) {
-  return LibraryNotifier(ref.watch(repositoryProvider));
+  return LibraryNotifier(
+    ref.watch(repositoryProvider),
+    transformImports: (items) =>
+        ref.read(extensionDispatcherProvider).transformImportedItems(items),
+  );
 });
 
 // ---- Playback queue state (separate from playlist) ----
@@ -221,6 +226,11 @@ class QueueNotifier extends StateNotifier<QueueState> {
 
   void setSpeed(double s) => state = state.copyWith(speed: s);
 
+  void setRepeat(String repeat) {
+    if (repeat != 'all' && repeat != 'one' && repeat != 'off') return;
+    state = state.copyWith(repeat: repeat);
+  }
+
   /// Insert [id] right after the playing item ("次に再生").
   /// Already queued: moved there instead of duplicating.
   void playNext(String id) {
@@ -325,9 +335,48 @@ final searchQueryProvider = StateProvider<String>((_) => '');
 /// position, play state, speed, volume, queue, shuffle and repeat are kept.
 enum PlayerViewMode { media, image }
 
-final playerViewModeProvider = StateProvider<PlayerViewMode>(
-  (_) => PlayerViewMode.media,
-);
+class PlayerViewModeNotifier extends StateNotifier<PlayerViewMode> {
+  PlayerViewModeNotifier() : super(PlayerViewMode.media) {
+    ready = _load();
+  }
+
+  static const _preferenceKey = 'preferred_player_view_mode';
+  late final Future<void> ready;
+  PlayerViewMode _preferred = PlayerViewMode.media;
+  bool _changedByUser = false;
+
+  PlayerViewMode get preferred => _preferred;
+
+  Future<void> _load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(_preferenceKey);
+      final mode = PlayerViewMode.values.firstWhere(
+        (value) => value.name == saved,
+        orElse: () => PlayerViewMode.media,
+      );
+      if (_changedByUser) return;
+      _preferred = mode;
+      state = mode;
+    } catch (_) {}
+  }
+
+  void select(PlayerViewMode mode) {
+    _changedByUser = true;
+    _preferred = mode;
+    state = mode;
+    SharedPreferences.getInstance().then(
+      (prefs) => prefs.setString(_preferenceKey, mode.name),
+    );
+  }
+
+  void setEffective(PlayerViewMode mode) => state = mode;
+}
+
+final playerViewModeProvider =
+    StateNotifierProvider<PlayerViewModeNotifier, PlayerViewMode>(
+      (_) => PlayerViewModeNotifier(),
+    );
 
 /// Videos list order.
 enum VideosSort { newestFirst, oldestFirst, name, manual, recentlyPlayed }
@@ -433,6 +482,86 @@ final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((
   return ThemeModeNotifier();
 });
 
+class AppearanceColors {
+  const AppearanceColors({
+    this.accent = 0xFF9B533F,
+    this.darkBackground = 0xFF181818,
+    this.lightBackground = 0xFFF5F5F5,
+  });
+
+  final int accent;
+  final int darkBackground;
+  final int lightBackground;
+
+  AppearanceColors copyWith({
+    int? accent,
+    int? darkBackground,
+    int? lightBackground,
+  }) => AppearanceColors(
+    accent: accent ?? this.accent,
+    darkBackground: darkBackground ?? this.darkBackground,
+    lightBackground: lightBackground ?? this.lightBackground,
+  );
+}
+
+class AppearanceColorsNotifier extends StateNotifier<AppearanceColors> {
+  static const _key = 'yureru_appearance_colors_v1';
+
+  AppearanceColorsNotifier() : super(const AppearanceColors()) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final parts = prefs.getStringList(_key);
+      if (parts == null || parts.length != 3) return;
+      state = AppearanceColors(
+        accent: int.tryParse(parts[0]) ?? state.accent,
+        darkBackground: int.tryParse(parts[1]) ?? state.darkBackground,
+        lightBackground: int.tryParse(parts[2]) ?? state.lightBackground,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> setAccent(int value) => _save(state.copyWith(accent: value));
+
+  Future<void> setDarkBackground(int value) =>
+      _save(state.copyWith(darkBackground: value));
+
+  Future<void> setLightBackground(int value) =>
+      _save(state.copyWith(lightBackground: value));
+
+  Future<void> setAll({
+    required int accent,
+    required int darkBackground,
+    required int lightBackground,
+  }) => _save(
+    AppearanceColors(
+      accent: accent,
+      darkBackground: darkBackground,
+      lightBackground: lightBackground,
+    ),
+  );
+
+  Future<void> reset() => _save(const AppearanceColors());
+
+  Future<void> _save(AppearanceColors value) async {
+    state = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_key, [
+      value.accent.toString(),
+      value.darkBackground.toString(),
+      value.lightBackground.toString(),
+    ]);
+  }
+}
+
+final appearanceColorsProvider =
+    StateNotifierProvider<AppearanceColorsNotifier, AppearanceColors>(
+      (_) => AppearanceColorsNotifier(),
+    );
+
 enum MediaImageContext { home, playlist, album }
 
 enum MediaImagePriority { artworkFirst, thumbnailFirst }
@@ -504,6 +633,10 @@ final mediaImagePriorityProvider =
 /// Video bounds in normalized window coordinates for aligning ambient color
 /// continuation with the actual rendered player size and position.
 final ambientVideoApertureProvider = StateProvider<Rect?>((_) => null);
+
+/// Current player visual bounds normalized to the Flutter window. macOS uses
+/// this to anchor the system PiP transition to the video/artwork surface.
+final pictureInPictureSourceRectProvider = StateProvider<Rect?>((_) => null);
 
 final ambientFrameProvider =
     StateNotifierProvider<AmbientFrameNotifier, ui.Image?>((ref) {

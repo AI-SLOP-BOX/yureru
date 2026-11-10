@@ -135,8 +135,11 @@ enum AppLanguage {
 
 /// Lookup function with safe fallback
 String translate(String key, String langCode) {
-  final langDict = _kTranslations[langCode] ?? _kTranslations['ja']!;
-  return langDict[key] ?? _kTranslations['ja']?[key] ?? key;
+  final langDict = _kTranslations[langCode] ?? _kTranslations['en']!;
+  return langDict[key] ??
+      _kTranslations['en']?[key] ??
+      _kTranslations['ja']?[key] ??
+      key;
 }
 
 /// Strings adapter for backward compatibility

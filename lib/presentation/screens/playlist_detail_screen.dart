@@ -18,6 +18,8 @@ import '../widgets/duration_text.dart';
 import '../widgets/app_svg_icon.dart';
 import '../widgets/frosted_panel.dart';
 import '../widgets/thumb_image.dart';
+import '../widgets/track_actions.dart';
+import '../widgets/unsaved_changes_guard.dart';
 
 /// Playlist detail (center-pane body; the shell owns nav/transport chrome).
 class PlaylistDetailScreen extends ConsumerStatefulWidget {
@@ -36,6 +38,36 @@ class PlaylistDetailScreen extends ConsumerStatefulWidget {
 
 class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   static const double _desktopContentMaxWidth = 1440;
+  bool _selectionMode = false;
+  final Set<String> _selectedMediaIds = <String>{};
+
+  void _toggleSelected(String id) {
+    setState(() {
+      if (!_selectedMediaIds.add(id)) _selectedMediaIds.remove(id);
+    });
+  }
+
+  Future<void> _removeSelectedFromPlaylist(BuildContext context) async {
+    final ids = _selectedMediaIds.toList(growable: false);
+    if (ids.isEmpty) return;
+    await ref
+        .read(libraryProvider.notifier)
+        .removeMediaFromPlaylist(widget.playlistId, ids);
+    if (!context.mounted) return;
+    setState(() {
+      _selectedMediaIds.clear();
+      _selectionMode = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ref
+              .tr('playlist_items_removed')
+              .replaceAll('{count}', '${ids.length}'),
+        ),
+      ),
+    );
+  }
 
   String _sortLabel(PlaylistContentSort sort) => ref.tr(switch (sort) {
     PlaylistContentSort.playlistOrder => 'playlist_order',
@@ -95,6 +127,12 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
       ),
     );
   }
+
+  Widget _selectionButton() => TextButton.icon(
+    onPressed: () => setState(() => _selectionMode = true),
+    icon: const Icon(Icons.checklist_rounded),
+    label: Text(ref.tr('select_tracks')),
+  );
 
   Widget _contentFrame({required Widget child}) => Center(
     child: ConstrainedBox(
@@ -365,6 +403,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                   children: [
                                     // 1. Edit playlist button (dark circular icon button)
                                     _actionCircle(
+                                      context: context,
                                       tooltip: ref.tr('edit_playlist'),
                                       icon: Icons.edit_rounded,
                                       iconSize: 20,
@@ -432,11 +471,21 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                         child: FrostedPanel(
                           borderRadius: BorderRadius.circular(16),
                           padding: const EdgeInsets.all(9),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               _sortSelector(isDark: isDark, sort: sort),
+                              const SizedBox(width: 4),
+                              _selectionMode
+                                  ? Text(
+                                      ref
+                                          .tr('selected_count')
+                                          .replaceAll(
+                                            '{count}',
+                                            '${_selectedMediaIds.length}',
+                                          ),
+                                    )
+                                  : _selectionButton(),
                             ],
                           ),
                         ),
@@ -449,7 +498,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
           ],
         ),
 
-        if (screenWidth < 1200)
+        if (screenWidth < 1200 || _selectionMode)
           _contentFrame(
             child: Padding(
               padding: EdgeInsets.fromLTRB(
@@ -458,21 +507,52 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                 horizontalInset,
                 2,
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [_sortSelector(isDark: isDark, sort: sort)],
+              child: _selectionMode
+                  ? Wrap(
+                      alignment: WrapAlignment.end,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        if (screenWidth < 1200)
+                          _sortSelector(isDark: isDark, sort: sort),
+                        TextButton(
+                          onPressed: () => setState(() {
+                            _selectionMode = false;
+                            _selectedMediaIds.clear();
+                          }),
+                          child: Text(ref.tr('clear_selection')),
+                        ),
+                        if (_selectedMediaIds.isNotEmpty)
+                          FilledButton.tonalIcon(
+                            onPressed: () =>
+                                _removeSelectedFromPlaylist(context),
+                            icon: const Icon(Icons.playlist_remove_rounded),
+                            label: Text(ref.tr('remove_from_playlist')),
+                          ),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        Expanded(
+                          child: _sortSelector(isDark: isDark, sort: sort),
+                        ),
+                        const SizedBox(width: 4),
+                        _selectionButton(),
+                      ],
+                    ),
+            ),
+          ),
+        if (screenWidth < 1200 || _selectionMode)
+          _contentFrame(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: horizontalInset),
+              child: Divider(
+                height: 1,
+                color: theme.dividerColor.withValues(alpha: 0.55),
               ),
             ),
           ),
-        _contentFrame(
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: horizontalInset),
-            child: Divider(
-              height: 1,
-              color: theme.dividerColor.withValues(alpha: 0.55),
-            ),
-          ),
-        ),
 
         Expanded(
           child: pl.mediaIds.isEmpty
@@ -531,7 +611,38 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
                         final row = Dismissible(
                           key: ValueKey(m.id),
-                          direction: DismissDirection.endToStart,
+                          direction: _selectionMode
+                              ? DismissDirection.none
+                              : DismissDirection.endToStart,
+                          confirmDismiss: (_) async {
+                            return await showDialog<bool>(
+                                  context: context,
+                                  builder: (dialogContext) => AlertDialog(
+                                    title: Text(ref.tr('remove_from_playlist')),
+                                    content: Text(
+                                      ref
+                                          .tr('remove_from_playlist_confirm')
+                                          .replaceAll(
+                                            '{title}',
+                                            displayTitle(m.title),
+                                          ),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext, false),
+                                        child: Text(ref.tr('cancel')),
+                                      ),
+                                      FilledButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext, true),
+                                        child: Text(ref.tr('delete')),
+                                      ),
+                                    ],
+                                  ),
+                                ) ??
+                                false;
+                          },
                           background: Container(
                             color: Colors.red,
                             alignment: Alignment.centerRight,
@@ -544,126 +655,152 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           onDismissed: (_) => ref
                               .read(libraryProvider.notifier)
                               .removeFromPlaylist(pl.id, m.id),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: m.id == currentId
-                                  ? (isDark ? kCard : const Color(0xFFF1F1F1))
-                                  : Colors.transparent,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            clipBehavior: Clip.antiAlias,
-                            child: Material(
-                              color: Colors.transparent,
-                              child: ListTile(
-                                minLeadingWidth: 0,
-                                horizontalTitleGap: 10,
-                                leading: SizedBox(
-                                  width: 78,
-                                  child: Row(
-                                    children: [
-                                      SizedBox(
-                                        width: 22,
-                                        child: Center(
-                                          child: m.id == currentId
-                                              ? Icon(
-                                                  Icons.equalizer_rounded,
-                                                  size: 16,
-                                                  color: themeTextSub(context),
-                                                )
-                                              : Text(
-                                                  '${i + 1}'.padLeft(2, '0'),
-                                                  style: TextStyle(
-                                                    fontSize: 11,
+                          child: TrackContextMenuRegion(
+                            ref: ref,
+                            media: m,
+                            playlistId: pl.id,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: m.id == currentId
+                                    ? (isDark
+                                          ? themeCard(context)
+                                          : const Color(0xFFF1F1F1))
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: Material(
+                                color: Colors.transparent,
+                                child: ListTile(
+                                  minLeadingWidth: 0,
+                                  horizontalTitleGap: 10,
+                                  leading: SizedBox(
+                                    width: _selectionMode ? 126 : 78,
+                                    child: Row(
+                                      children: [
+                                        if (_selectionMode)
+                                          Checkbox(
+                                            value: _selectedMediaIds.contains(
+                                              m.id,
+                                            ),
+                                            onChanged: (_) =>
+                                                _toggleSelected(m.id),
+                                          ),
+                                        SizedBox(
+                                          width: 22,
+                                          child: Center(
+                                            child: m.id == currentId
+                                                ? Icon(
+                                                    Icons.equalizer_rounded,
+                                                    size: 16,
                                                     color: themeTextSub(
                                                       context,
                                                     ),
+                                                  )
+                                                : Text(
+                                                    '${i + 1}'.padLeft(2, '0'),
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: themeTextSub(
+                                                        context,
+                                                      ),
+                                                    ),
                                                   ),
-                                                ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      ThumbImage(
-                                        seed: m.id,
-                                        mediaId: m.id,
-                                        localPath: m.localPath,
-                                        imageContext:
-                                            MediaImageContext.playlist,
-                                        playlistId: pl.id,
-                                        size: 48,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                title: Text(
-                                  displayTitle(m.title),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                subtitle: m.artist?.trim().isNotEmpty == true
-                                    ? Text(
-                                        formatCreatorNames(m.artist),
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: themeTextSub(context),
-                                        ),
-                                      )
-                                    : DurationText(
-                                        mediaId: m.id,
-                                        localPath: m.localPath,
-                                        durationMs: m.durationMs,
-                                      ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      key: ValueKey(
-                                        'playlist-play-next-${m.id}',
-                                      ),
-                                      tooltip: ref.tr('add_next'),
-                                      icon: const Icon(
-                                        Icons.arrow_forward_rounded,
-                                      ),
-                                      onPressed: m.id == currentId
-                                          ? null
-                                          : () {
-                                              ref
-                                                  .read(queueProvider.notifier)
-                                                  .playNext(m.id);
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                SnackBar(
-                                                  content: Text(
-                                                    '${displayTitle(m.title)} — ${ref.tr('add_next')}',
-                                                  ),
-                                                  duration: const Duration(
-                                                    seconds: 2,
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                    ),
-                                    if (sort ==
-                                            PlaylistContentSort.playlistOrder &&
-                                        query.isEmpty)
-                                      Tooltip(
-                                        message: ref.tr('drag_to_reorder'),
-                                        child: SizedBox(
-                                          width: 52,
-                                          height: 52,
-                                          child: ReorderableDragStartListener(
-                                            index: i,
-                                            child: const AppSvgIcon(
-                                              'drag',
-                                              size: 22,
-                                              color: kTextSub,
-                                            ),
                                           ),
                                         ),
-                                      ),
-                                  ],
+                                        const SizedBox(width: 8),
+                                        ThumbImage(
+                                          seed: m.id,
+                                          mediaId: m.id,
+                                          localPath: m.localPath,
+                                          imageContext:
+                                              MediaImageContext.playlist,
+                                          playlistId: pl.id,
+                                          size: 48,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  title: Text(
+                                    displayTitle(m.title),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  subtitle: m.artist?.trim().isNotEmpty == true
+                                      ? Text(
+                                          formatCreatorNames(m.artist),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: themeTextSub(context),
+                                          ),
+                                        )
+                                      : DurationText(
+                                          mediaId: m.id,
+                                          localPath: m.localPath,
+                                          durationMs: m.durationMs,
+                                        ),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (!_selectionMode)
+                                        PopupMenuButton<String>(
+                                          tooltip: ref.tr('menu'),
+                                          icon: const AppSvgIcon(
+                                            'more_horizontal',
+                                          ),
+                                          onSelected: (action) =>
+                                              runTrackAction(
+                                                context,
+                                                ref,
+                                                m,
+                                                action,
+                                                playlistId: pl.id,
+                                              ),
+                                          itemBuilder: (_) => trackActionItems(
+                                            ref,
+                                            m,
+                                            playlistId: pl.id,
+                                          ),
+                                        ),
+                                      if (sort ==
+                                              PlaylistContentSort
+                                                  .playlistOrder &&
+                                          query.isEmpty &&
+                                          !_selectionMode)
+                                        const SizedBox(width: 12),
+                                      if (sort ==
+                                              PlaylistContentSort
+                                                  .playlistOrder &&
+                                          query.isEmpty &&
+                                          !_selectionMode)
+                                        Tooltip(
+                                          message: ref.tr('drag_to_reorder'),
+                                          child: SizedBox(
+                                            width: 52,
+                                            height: 52,
+                                            child: screenWidth < 560
+                                                ? ReorderableDelayedDragStartListener(
+                                                    index: i,
+                                                    child: const AppSvgIcon(
+                                                      'playlist_reorder',
+                                                      size: 18,
+                                                    ),
+                                                  )
+                                                : ReorderableDragStartListener(
+                                                    index: i,
+                                                    child: const AppSvgIcon(
+                                                      'playlist_reorder',
+                                                      size: 18,
+                                                    ),
+                                                  ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  onTap: _selectionMode
+                                      ? () => _toggleSelected(m.id)
+                                      : playFromHere,
                                 ),
-                                onTap: playFromHere,
                               ),
                             ),
                           ),
@@ -676,14 +813,6 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                             child: row,
                           ),
                         );
-                        if (sort == PlaylistContentSort.playlistOrder &&
-                            query.isEmpty) {
-                          return ReorderableDelayedDragStartListener(
-                            key: ValueKey('playlist-row-${m.id}'),
-                            index: i,
-                            child: centeredRow,
-                          );
-                        }
                         return KeyedSubtree(
                           key: ValueKey('playlist-row-${m.id}'),
                           child: centeredRow,
@@ -833,6 +962,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   }
 
   Widget _actionCircle({
+    required BuildContext context,
     required String tooltip,
     required IconData icon,
     required double iconSize,
@@ -855,7 +985,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             child: Icon(
               icon,
               size: iconSize,
-              color: isDark ? Colors.white : Colors.black87,
+              color: playerTransportColor(context),
             ),
           ),
         ),
@@ -882,7 +1012,6 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
       child: PopupMenuButton<String>(
         tooltip: ref.tr('menu'),
         offset: const Offset(0, 50),
-        popUpAnimationStyle: AnimationStyle.noAnimation,
         child: Material(
           color: isDark ? const Color(0xFF242424) : const Color(0xFFE4E4E4),
           shape: const CircleBorder(),
@@ -894,7 +1023,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             child: Icon(
               Icons.more_vert_rounded,
               size: 22,
-              color: isDark ? Colors.white : Colors.black87,
+              color: playerTransportColor(context),
             ),
           ),
         ),
@@ -946,6 +1075,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     final color = isDestructive
         ? Colors.redAccent
         : (isDark ? Colors.white : Colors.black87);
+    final itemColor = isDestructive ? color : playerTransportColor(context);
+    final labelColor = isDestructive ? color : themeTextSub(context);
     return PopupMenuItem<String>(
       value: value,
       height: 44,
@@ -955,7 +1086,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             iconAsset,
             width: 22,
             height: 22,
-            colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+            colorFilter: ColorFilter.mode(itemColor, BlendMode.srcIn),
             excludeFromSemantics: true,
           ),
           const SizedBox(width: 14),
@@ -964,7 +1095,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
-              color: color,
+              color: labelColor,
             ),
           ),
         ],
@@ -1062,102 +1193,129 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
     var clearArtwork = false;
     final save = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
+          final hasDraft =
+              c.text != pl.name || selectedArtworkPath != null || clearArtwork;
           final previewPath = clearArtwork
               ? null
               : selectedArtworkPath ?? pl.artworkPath;
-          return AlertDialog(
-            title: Text(ref.tr('edit_playlist')),
-            content: SizedBox(
-              width: 360,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: c,
-                    autofocus: true,
-                    decoration: InputDecoration(
-                      labelText: ref.tr('playlist_name'),
+          return PopScope<Object?>(
+            canPop: !hasDraft,
+            onPopInvokedWithResult: (didPop, _) async {
+              if (!didPop &&
+                  hasDraft &&
+                  await confirmDiscardUnsavedChanges(context, ref.tr) &&
+                  dialogContext.mounted) {
+                Navigator.pop(dialogContext, false);
+              }
+            },
+            child: AlertDialog(
+              title: Text(ref.tr('edit_playlist')),
+              content: SizedBox(
+                width: 360,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: c,
+                      autofocus: true,
+                      onChanged: (_) => setDialogState(() {}),
+                      decoration: InputDecoration(
+                        labelText: ref.tr('playlist_name'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    ref.tr('playlist_artwork'),
-                    style: Theme.of(context).textTheme.labelLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: SizedBox.square(
-                          dimension: 72,
-                          child: previewPath == null
-                              ? ColoredBox(
-                                  color: themeBorder(context),
-                                  child: const Icon(Icons.queue_music_rounded),
-                                )
-                              : Image.file(
-                                  File(previewPath),
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) =>
-                                      const Icon(Icons.broken_image_outlined),
-                                ),
+                    const SizedBox(height: 18),
+                    Text(
+                      ref.tr('playlist_artwork'),
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: SizedBox.square(
+                            dimension: 72,
+                            child: previewPath == null
+                                ? ColoredBox(
+                                    color: themeBorder(context),
+                                    child: const Icon(
+                                      Icons.queue_music_rounded,
+                                    ),
+                                  )
+                                : Image.file(
+                                    File(previewPath),
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) =>
+                                        const Icon(Icons.broken_image_outlined),
+                                  ),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Wrap(
-                          spacing: 4,
-                          children: [
-                            TextButton.icon(
-                              onPressed: () async {
-                                final result = await FilePicker.platform
-                                    .pickFiles(
-                                      type: FileType.image,
-                                      allowMultiple: false,
-                                      withData: false,
-                                    );
-                                final path = result?.files.single.path;
-                                if (path != null) {
-                                  setDialogState(() {
-                                    selectedArtworkPath = path;
-                                    clearArtwork = false;
-                                  });
-                                }
-                              },
-                              icon: const Icon(Icons.image_outlined),
-                              label: Text(ref.tr('choose_artwork')),
-                            ),
-                            if (previewPath != null)
-                              IconButton(
-                                tooltip: ref.tr('clear_artwork'),
-                                onPressed: () => setDialogState(() {
-                                  selectedArtworkPath = null;
-                                  clearArtwork = true;
-                                }),
-                                icon: const Icon(Icons.delete_outline_rounded),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Wrap(
+                            spacing: 4,
+                            children: [
+                              TextButton.icon(
+                                onPressed: () async {
+                                  final result = await FilePicker.platform
+                                      .pickFiles(
+                                        type: FileType.image,
+                                        allowMultiple: false,
+                                        withData: false,
+                                      );
+                                  final path = result?.files.single.path;
+                                  if (path != null) {
+                                    setDialogState(() {
+                                      selectedArtworkPath = path;
+                                      clearArtwork = false;
+                                    });
+                                  }
+                                },
+                                icon: const Icon(Icons.image_outlined),
+                                label: Text(ref.tr('choose_artwork')),
                               ),
-                          ],
+                              if (previewPath != null)
+                                IconButton(
+                                  tooltip: ref.tr('clear_artwork'),
+                                  onPressed: () => setDialogState(() {
+                                    selectedArtworkPath = null;
+                                    clearArtwork = true;
+                                  }),
+                                  icon: const Icon(
+                                    Icons.delete_outline_rounded,
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    if (hasDraft &&
+                        !await confirmDiscardUnsavedChanges(context, ref.tr)) {
+                      return;
+                    }
+                    if (dialogContext.mounted) {
+                      Navigator.pop(dialogContext, false);
+                    }
+                  },
+                  child: Text(ref.tr('cancel')),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: Text(ref.tr('save')),
+                ),
+              ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: Text(ref.tr('cancel')),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: Text(ref.tr('save')),
-              ),
-            ],
           );
         },
       ),
@@ -1240,8 +1398,10 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   }
 
   void _addSheet(BuildContext context, WidgetRef ref) {
-    showModalBottomSheet(
+    showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
       builder: (_) => Consumer(
         builder: (sheetContext, ref, _) {
           final lib = ref.watch(libraryProvider);
@@ -1249,35 +1409,64 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
               lib.playlistById(widget.playlistId)?.mediaIds.toSet() ??
               <String>{};
           final n = ref.read(libraryProvider.notifier);
-          return ListView(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.video_library_outlined),
-                title: Text(ref.tr('add_from_device')),
-                subtitle: Text(ref.tr('add_from_device_desc')),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _importAndAddVideos(context, ref);
-                },
-              ),
-              const Divider(height: 1),
-              for (final m in lib.savedMedia)
-                CheckboxListTile(
-                  value: ids.contains(m.id),
-                  title: Text(
-                    displayTitle(m.title),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.sizeOf(sheetContext).height * 0.78,
+              child: ListView(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.video_library_outlined),
+                    title: Text(ref.tr('add_from_device')),
+                    subtitle: Text(ref.tr('add_from_device_desc')),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      _importAndAddVideos(context, ref);
+                    },
                   ),
-                  onChanged: (_) async {
-                    if (ids.contains(m.id)) {
-                      await n.removeFromPlaylist(widget.playlistId, m.id);
-                    } else {
-                      await n.addToPlaylist(widget.playlistId, m.id);
-                    }
-                  },
-                ),
-            ],
+                  const Divider(height: 1),
+                  for (final m in lib.savedMedia)
+                    CheckboxListTile(
+                      value: ids.contains(m.id),
+                      secondary: ThumbImage(
+                        seed: m.id,
+                        mediaId: m.id,
+                        localPath: m.localPath,
+                        imageContext: MediaImageContext.playlist,
+                        playlistId: widget.playlistId,
+                        size: 52,
+                        radius: 7,
+                      ),
+                      title: Text(
+                        displayTitle(m.title),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: m.artist?.trim().isNotEmpty == true
+                          ? Text(
+                              formatCreatorNames(m.artist),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: themeTextSub(sheetContext),
+                              ),
+                            )
+                          : DurationText(
+                              mediaId: m.id,
+                              localPath: m.localPath,
+                              durationMs: m.durationMs,
+                            ),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: (_) async {
+                        if (ids.contains(m.id)) {
+                          await n.removeFromPlaylist(widget.playlistId, m.id);
+                        } else {
+                          await n.addToPlaylist(widget.playlistId, m.id);
+                        }
+                      },
+                    ),
+                ],
+              ),
+            ),
           );
         },
       ),
