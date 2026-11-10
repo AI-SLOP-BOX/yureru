@@ -16,7 +16,7 @@
     ],
     "sources": [
         {
-            "type": "archive",
+            "type": "git",
             "url": "https://github.com/mpv-player/mpv.git",
             "commit": "2c219aa822df18a1b7fd9abe3e151cd93ad67307",
             "tag": "v0.41.0"
