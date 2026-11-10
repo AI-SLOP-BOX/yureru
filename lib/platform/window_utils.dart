@@ -60,6 +60,8 @@ Future<bool> enterPictureInPictureWindow({
   PlaybackEngine? engine,
   double? aspectRatio,
   String? artworkPath,
+  double? windowWidth,
+  double? windowHeight,
 }) async {
   if (!(Platform.isMacOS ||
       Platform.isWindows ||
@@ -69,8 +71,25 @@ Future<bool> enterPictureInPictureWindow({
     return false;
   }
   try {
-    final ratio = _validAspectRatio(aspectRatio);
-    final pipSize = _pictureInPictureSize(ratio);
+    final requestedSize =
+        windowWidth != null &&
+            windowHeight != null &&
+            windowWidth.isFinite &&
+            windowHeight.isFinite &&
+            windowWidth > 0 &&
+            windowHeight > 0
+        ? Size(
+            windowWidth.clamp(240, 1000).toDouble(),
+            windowHeight.clamp(135, 1000).toDouble(),
+          )
+        : null;
+    final ratio = _validAspectRatio(
+      aspectRatio ??
+          (requestedSize == null
+              ? null
+              : requestedSize.width / requestedSize.height),
+    );
+    final pipSize = requestedSize ?? _pictureInPictureSize(ratio);
     final minSize = _pictureInPictureMinSize(ratio);
     if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
       // The compact desktop window is much smaller than the normal player.

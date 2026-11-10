@@ -485,6 +485,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                             '${_selectedMediaIds.length}',
                                           ),
                                     )
+                                  : pl.isSmart
+                                  ? const SizedBox.shrink()
                                   : _selectionButton(),
                             ],
                           ),
@@ -538,7 +540,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                           child: _sortSelector(isDark: isDark, sort: sort),
                         ),
                         const SizedBox(width: 4),
-                        _selectionButton(),
+                        if (!pl.isSmart) _selectionButton(),
                       ],
                     ),
             ),
@@ -611,7 +613,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
 
                         final row = Dismissible(
                           key: ValueKey(m.id),
-                          direction: _selectionMode
+                          direction: pl.isSmart || _selectionMode
                               ? DismissDirection.none
                               : DismissDirection.endToStart,
                           confirmDismiss: (_) async {
@@ -762,7 +764,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                                             playlistId: pl.id,
                                           ),
                                         ),
-                                      if (sort ==
+                                      if (!pl.isSmart &&
+                                          sort ==
                                               PlaylistContentSort
                                                   .playlistOrder &&
                                           query.isEmpty &&
@@ -820,7 +823,8 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                       }(),
                     ],
                     // When playlist has few items, offer quick additions from remaining library
-                    if (lib.savedMedia.length > pl.mediaIds.length) ...[
+                    if (!pl.isSmart &&
+                        lib.savedMedia.length > pl.mediaIds.length) ...[
                       const SizedBox(
                         key: ValueKey('playlist-add-gap'),
                         height: 24,
@@ -1047,12 +1051,13 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
             ref.tr('add_queue'),
             isDark,
           ),
-          _menuItem(
-            'add_videos',
-            'assets/icons/video_add.svg',
-            ref.tr('add_videos'),
-            isDark,
-          ),
+          if (!pl.isSmart)
+            _menuItem(
+              'add_videos',
+              'assets/icons/video_add.svg',
+              ref.tr('add_videos'),
+              isDark,
+            ),
           _menuItem(
             'delete',
             'assets/icons/delete.svg',
@@ -1398,6 +1403,10 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
   }
 
   void _addSheet(BuildContext context, WidgetRef ref) {
+    if (ref.read(libraryProvider).playlistById(widget.playlistId)?.isSmart ??
+        true) {
+      return;
+    }
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,

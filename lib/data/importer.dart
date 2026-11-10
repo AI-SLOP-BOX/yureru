@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../domain/models.dart';
+import 'media_tags.dart';
 
 export '../platform/window_utils.dart' show toggleFullscreen;
 
@@ -231,7 +232,8 @@ class VideoImporter {
     for (var i = 0; i < fresh.length; i++) {
       final src = fresh[i];
       final name = _baseName(src);
-      final (title, artist) = _splitTitleArtist(name);
+      final (filenameTitle, filenameArtist) = _splitTitleArtist(name);
+      final tags = await readEmbeddedMediaTags(src);
       String dest = src;
       if (copyIntoApp) {
         try {
@@ -246,16 +248,33 @@ class VideoImporter {
           continue;
         }
       }
+      final item = MediaItem(
+        title: tags.title?.trim().isNotEmpty == true
+            ? tags.title!.trim()
+            : filenameTitle,
+        artist: artistOverride?.trim().isNotEmpty == true
+            ? artistOverride!.trim()
+            : (tags.artist?.trim().isNotEmpty == true
+                  ? tags.artist!.trim()
+                  : filenameArtist),
+        album: tags.album,
+        albumArtist: tags.albumArtist,
+        trackNumber: tags.trackNumber,
+        discNumber: tags.discNumber,
+        localPath: dest,
+        durationMs: tags.durationMs,
+        origin: copyIntoApp ? 'imported' : 'referenced',
+        sourcePath: src,
+      );
+      final embeddedCover = await extractEmbeddedCover(
+        path: src,
+        mediaId: item.id,
+        streamIndex: tags.coverStreamIndex,
+      );
       out.add(
-        MediaItem(
-          title: title,
-          artist: artistOverride?.trim().isNotEmpty == true
-              ? artistOverride!.trim()
-              : artist,
-          localPath: dest,
-          origin: copyIntoApp ? 'imported' : 'referenced',
-          sourcePath: src,
-        ),
+        embeddedCover == null
+            ? item
+            : item.copyWith(artworkPath: embeddedCover),
       );
       onProgress?.call(out.length, fresh.length);
     }

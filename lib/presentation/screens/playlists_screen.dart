@@ -212,7 +212,9 @@ class PlaylistsScreen extends ConsumerWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     subtitle: Text(
-                      ref.tracksCount(pl.mediaIds.length),
+                      pl.isSmart
+                          ? '${ref.tracksCount(pl.mediaIds.length)} · ${ref.tr('smart_playlist_badge')}'
+                          : ref.tracksCount(pl.mediaIds.length),
                       style: TextStyle(
                         fontSize: 12,
                         color: themeTextSub(context),
@@ -263,7 +265,8 @@ class PlaylistsScreen extends ConsumerWidget {
 
 Future<void> _createPlaylist(BuildContext context, WidgetRef ref) async {
   final controller = TextEditingController();
-  final name = await showDialog<String>(
+  var rule = 'manual';
+  final result = await showDialog<(String, String?)>(
     context: context,
     barrierDismissible: false,
     builder: (dialogContext) => StatefulBuilder(
@@ -281,13 +284,45 @@ Future<void> _createPlaylist(BuildContext context, WidgetRef ref) async {
           },
           child: AlertDialog(
             title: Text(ref.tr('create_playlist')),
-            content: TextField(
-              controller: controller,
-              autofocus: true,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: InputDecoration(hintText: ref.tr('playlist_name')),
-              onChanged: (_) => setDialogState(() {}),
-              onSubmitted: (value) => Navigator.pop(dialogContext, value),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    hintText: ref.tr('playlist_name'),
+                  ),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: rule,
+                  decoration: InputDecoration(
+                    labelText: ref.tr('playlist_type'),
+                  ),
+                  items: [
+                    DropdownMenuItem(
+                      value: 'manual',
+                      child: Text(ref.tr('manual_playlist')),
+                    ),
+                    for (final option in const [
+                      'recently_played',
+                      'most_played',
+                      'never_played',
+                      'recently_added',
+                      'without_lyrics',
+                    ])
+                      DropdownMenuItem(
+                        value: option,
+                        child: Text(ref.tr('smart_rule_$option')),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setDialogState(() => rule = value ?? 'manual'),
+                ),
+              ],
             ),
             actions: [
               TextButton(
@@ -301,7 +336,10 @@ Future<void> _createPlaylist(BuildContext context, WidgetRef ref) async {
                 child: Text(ref.tr('cancel')),
               ),
               FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, controller.text),
+                onPressed: () => Navigator.pop(dialogContext, (
+                  controller.text,
+                  rule == 'manual' ? null : rule,
+                )),
                 child: Text(ref.tr('create')),
               ),
             ],
@@ -311,7 +349,12 @@ Future<void> _createPlaylist(BuildContext context, WidgetRef ref) async {
     ),
   );
   controller.dispose();
-  if (name != null && name.trim().isNotEmpty) {
-    await ref.read(libraryProvider.notifier).createPlaylist(name.trim());
+  if (result != null && result.$1.trim().isNotEmpty) {
+    final notifier = ref.read(libraryProvider.notifier);
+    if (result.$2 == null) {
+      await notifier.createPlaylist(result.$1.trim());
+    } else {
+      await notifier.createSmartPlaylist(result.$1.trim(), result.$2!);
+    }
   }
 }

@@ -21,6 +21,7 @@ class _FakeImporter extends VideoImporter {
     bool copyIntoApp = true,
     Set<String> skipSourcePaths = const {},
     void Function(int done, int total)? onProgress,
+    Future<String?> Function()? requestArtistOverride,
   }) {
     calls++;
     lastSkip = skipSourcePaths;
@@ -32,6 +33,7 @@ class _FakeImporter extends VideoImporter {
     bool copyIntoApp = true,
     Set<String> skipSourcePaths = const {},
     void Function(int done, int total)? onProgress,
+    Future<String?> Function()? requestArtistOverride,
   }) {
     folderCalls++;
     lastSkip = skipSourcePaths;

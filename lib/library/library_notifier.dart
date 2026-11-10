@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../data/store.dart';
+import '../data/trash_store.dart';
 import '../domain/models.dart';
 import 'media_metadata_patch.dart';
 
@@ -39,8 +40,27 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     : super(const LibraryState());
   Future<void> load() async {
     final m = await repo.loadMedia();
-    final p = await repo.loadPlaylists();
+    final savedPlaylists = await repo.loadPlaylists();
+    final p = _refreshSmartPlaylists(savedPlaylists, m);
     state = LibraryState(media: m, playlists: p, loaded: true);
+    if (_playlistContentsChanged(savedPlaylists, p)) {
+      await repo.savePlaylists(p);
+    }
+    await TrashStore().purgeExpired({
+      for (final item in m)
+        for (final path in [
+          item.localPath,
+          item.artworkPath,
+          item.thumbnailPath,
+          item.lyricsPath,
+          item.translatedLyricsPath,
+          item.videoLyricsPath,
+          item.artworkLyricsPath,
+          item.artworkAudioPath,
+        ])
+          ?path,
+      for (final playlist in p) ?playlist.artworkPath,
+    });
   }
 
   Future<void> addMedia(List<MediaItem> items) async {
@@ -63,6 +83,62 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         : await transformImports!(fresh);
     final m = [...state.media, ...transformed];
     await _setMedia(m);
+  }
+
+  /// Repoints a missing library entry while preserving its metadata and IDs.
+  /// Imported files are copied back into Yureru-managed storage; referenced
+  /// items keep using the selected path directly.
+  Future<void> relinkMediaFile(String id, String replacementPath) async {
+    final current = state.byId(id);
+    if (current == null || current.isTemporary) return;
+    var localPath = replacementPath;
+    var origin = current.origin;
+    if (current.origin == 'imported') {
+      final docs = await getApplicationDocumentsDirectory();
+      final dir = Directory('${docs.path}/yureru_media');
+      await dir.create(recursive: true);
+      final name = replacementPath.split(RegExp(r'[/\\]')).last;
+      localPath = '${dir.path}/${DateTime.now().microsecondsSinceEpoch}_$name';
+      await File(replacementPath).copy(localPath);
+      origin = 'imported';
+    } else {
+      origin = 'referenced';
+    }
+    await _updateMedia(
+      id,
+      (item) => item.copyWith(
+        localPath: localPath,
+        sourcePath: replacementPath,
+        origin: origin,
+      ),
+    );
+  }
+
+  /// Merges a restored backup by stable media/playlist IDs, updating matching
+  /// entries and retaining items that are already present in the library.
+  Future<void> mergeBackup({
+    required List<MediaItem> media,
+    required List<Playlist> playlists,
+  }) async {
+    final mediaById = {for (final item in state.media) item.id: item};
+    for (final item in media) {
+      mediaById[item.id] = item;
+    }
+    final playlistById = {for (final item in state.playlists) item.id: item};
+    for (final item in playlists) {
+      playlistById[item.id] = item;
+    }
+    await _setMedia(mediaById.values.toList());
+    final mergedPlaylists = _refreshSmartPlaylists(
+      playlistById.values.toList(),
+      state.media,
+    );
+    state = LibraryState(
+      media: state.media,
+      playlists: mergedPlaylists,
+      loaded: true,
+    );
+    await repo.savePlaylists(state.playlists);
   }
 
   /// Adds a playable session-only item without writing it to the repository.
@@ -101,12 +177,77 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
 
   /// One update path keeps persistence rules consistent for every media field.
   Future<void> _setMedia(List<MediaItem> media) async {
-    state = LibraryState(
-      media: media,
-      playlists: state.playlists,
-      loaded: true,
-    );
+    final previousPlaylists = state.playlists;
+    final playlists = _refreshSmartPlaylists(previousPlaylists, media);
+    state = LibraryState(media: media, playlists: playlists, loaded: true);
     await repo.saveMedia(state.savedMedia);
+    if (_playlistContentsChanged(previousPlaylists, playlists)) {
+      await repo.savePlaylists(playlists);
+    }
+  }
+
+  List<Playlist> _refreshSmartPlaylists(
+    List<Playlist> playlists,
+    List<MediaItem> media,
+  ) => [
+    for (final playlist in playlists)
+      if (!playlist.isSmart)
+        playlist
+      else
+        playlist.copyWith(
+          mediaIds: _smartPlaylistIds(playlist.smartRule!, media),
+        ),
+  ];
+
+  List<String> _smartPlaylistIds(String rule, List<MediaItem> media) {
+    final items = media.where((item) => !item.isTemporary).toList();
+    switch (rule) {
+      case 'recently_played':
+        items.removeWhere((item) => item.lastPlayedAt == null);
+        items.sort((a, b) => b.lastPlayedAt!.compareTo(a.lastPlayedAt!));
+        break;
+      case 'most_played':
+        items.removeWhere((item) => item.playCount <= 0);
+        items.sort(
+          (a, b) => b.recommendationScore.compareTo(a.recommendationScore),
+        );
+        break;
+      case 'never_played':
+        items.removeWhere((item) => item.playCount > 0);
+        items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        break;
+      case 'recently_added':
+        items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        break;
+      case 'without_lyrics':
+        items.removeWhere(
+          (item) => [
+            item.lyricsPath,
+            item.videoLyricsPath,
+            item.artworkLyricsPath,
+          ].any((path) => path != null && path.isNotEmpty),
+        );
+        items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        break;
+      default:
+        return const [];
+    }
+    return items.map((item) => item.id).toList(growable: false);
+  }
+
+  bool _playlistContentsChanged(List<Playlist> before, List<Playlist> after) {
+    if (before.length != after.length) return true;
+    for (var i = 0; i < before.length; i++) {
+      if (before[i].id != after[i].id ||
+          before[i].smartRule != after[i].smartRule ||
+          before[i].mediaIds.length != after[i].mediaIds.length) {
+        return true;
+      }
+      for (var j = 0; j < before[i].mediaIds.length; j++) {
+        if (before[i].mediaIds[j] != after[i].mediaIds[j]) return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _updateMedia(
@@ -246,7 +387,10 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   ) async {
     if (oldPath == null ||
         oldPath == newPath ||
-        !oldPath.contains('yureru_audio_sources')) {
+        !_isManagedPath(oldPath, const {'yureru_audio_sources'})) {
+      return;
+    }
+    if (state.savedMedia.any((item) => item.artworkAudioPath == oldPath)) {
       return;
     }
     try {
@@ -260,8 +404,10 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     String? newPath,
   ) async {
     if (oldPath == null || oldPath == newPath) return;
-    if (!oldPath.contains('yureru_artwork') &&
-        !oldPath.contains('yureru_thumbnails')) {
+    if (!_isManagedPath(oldPath, const {
+      'yureru_artwork',
+      'yureru_thumbnails',
+    })) {
       return;
     }
     if (state.savedMedia.any(
@@ -273,6 +419,9 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       await File(oldPath).delete();
     } catch (_) {}
   }
+
+  bool _isManagedPath(String path, Set<String> folders) =>
+      RegExp('[\\\\/](${folders.join('|')})[\\\\/]').hasMatch(path);
 
   /// One save for the complete selection. Session-only media is never edited.
   Future<void> updateMediaMetadataBatch(
@@ -376,24 +525,14 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     final current = state.byId(id);
     if (current == null || current.artworkPath == path) return;
     await _updateMedia(id, (item) => item.copyWith(artworkPath: path));
-    final oldPath = current.artworkPath;
-    if (oldPath != null && oldPath.contains('yureru_artwork')) {
-      try {
-        await File(oldPath).delete();
-      } catch (_) {}
-    }
+    await _deleteManagedImageIfReplaced(current.artworkPath, path);
   }
 
   Future<void> updateMediaThumbnail(String id, String? path) async {
     final current = state.byId(id);
     if (current == null || current.thumbnailPath == path) return;
     await _updateMedia(id, (item) => item.copyWith(thumbnailPath: path));
-    final oldPath = current.thumbnailPath;
-    if (oldPath != null && oldPath.contains('yureru_thumbnails')) {
-      try {
-        await File(oldPath).delete();
-      } catch (_) {}
-    }
+    await _deleteManagedImageIfReplaced(current.thumbnailPath, path);
   }
 
   Future<void> updateMediaLyrics(String id, String? path) async {
@@ -410,6 +549,48 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         lyricsButtonHidden: path == null ? item.lyricsButtonHidden : false,
       ),
     );
+    await _deleteManagedLyricsIfReplaced(current.lyricsPath, path);
+  }
+
+  Future<void> _deleteManagedLyricsIfReplaced(
+    String? oldPath,
+    String? newPath,
+  ) async {
+    if (oldPath == null ||
+        oldPath == newPath ||
+        !_isManagedPath(oldPath, const {'yureru_lyrics'})) {
+      return;
+    }
+    bool referencesPath(Iterable<Object?> paths) =>
+        paths.any((path) => path == oldPath);
+    const lyricFields = [
+      'lyricsPath',
+      'translatedLyricsPath',
+      'videoLyricsPath',
+      'artworkLyricsPath',
+    ];
+    if (state.savedMedia.any(
+      (item) => referencesPath([
+        item.lyricsPath,
+        item.translatedLyricsPath,
+        item.videoLyricsPath,
+        item.artworkLyricsPath,
+      ]),
+    )) {
+      return;
+    }
+    // Deleted media remains recoverable from Trash for 30 days, so keep any
+    // lyrics file still referenced by a trash entry as well.
+    final trash = await TrashStore().load();
+    if (trash.any(
+      (entry) => lyricFields.any((field) => entry.data[field] == oldPath),
+    )) {
+      return;
+    }
+    try {
+      final file = File(oldPath);
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
   }
 
   Future<void> updateTranslatedLyrics(String id, String? path) async {
@@ -486,6 +667,10 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
                   : false,
             ),
     );
+    await _deleteManagedLyricsIfReplaced(
+      artwork ? current.artworkLyricsPath : current.videoLyricsPath,
+      path,
+    );
   }
 
   Future<void> updateMediaLyricsOffsetForView(
@@ -535,6 +720,15 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
 
   Future<void> removeMedia(String id) async {
     final removed = state.media.where((e) => e.id == id).toList();
+    if (removed.isEmpty || removed.first.isTemporary) return;
+    final playlistPositions = <String, int>{};
+    for (final playlist in state.playlists) {
+      final index = playlist.mediaIds.indexOf(id);
+      if (index >= 0 && !playlist.isSmart) {
+        playlistPositions[playlist.id] = index;
+      }
+    }
+    await TrashStore().saveMedia(removed.first, playlistPositions);
     final m = state.media.where((e) => e.id != id).toList();
     final p = state.playlists
         .map(
@@ -542,32 +736,10 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
               pl.copyWith(mediaIds: pl.mediaIds.where((x) => x != id).toList()),
         )
         .toList();
-    state = LibraryState(media: m, playlists: p, loaded: true);
+    final updatedPlaylists = _refreshSmartPlaylists(p, m);
+    state = LibraryState(media: m, playlists: updatedPlaylists, loaded: true);
     await repo.saveMedia(state.savedMedia);
-    await repo.savePlaylists(p);
-    // Best-effort: delete app-managed copies so disk doesn't leak.
-    // Referenced (non-copied) files are never touched.
-    for (final r in removed) {
-      if (r.origin == 'imported' && r.localPath.contains('yureru_media')) {
-        try {
-          await File(r.localPath).delete();
-        } catch (_) {}
-      }
-      final art = r.artworkPath;
-      if (art != null &&
-          art.contains('yureru_artwork') &&
-          !state.savedMedia.any((item) => item.artworkPath == art)) {
-        try {
-          await File(art).delete();
-        } catch (_) {}
-      }
-      final thumbnail = r.thumbnailPath;
-      if (thumbnail != null && thumbnail.contains('yureru_thumbnails')) {
-        try {
-          await File(thumbnail).delete();
-        } catch (_) {}
-      }
-    }
+    await repo.savePlaylists(updatedPlaylists);
   }
 
   Future<Playlist> createPlaylist(String name) async {
@@ -578,6 +750,32 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     state = LibraryState(media: state.media, playlists: p, loaded: true);
     await repo.savePlaylists(p);
     return pl;
+  }
+
+  Future<Playlist> createSmartPlaylist(String name, String rule) async {
+    const supportedRules = {
+      'recently_played',
+      'most_played',
+      'never_played',
+      'recently_added',
+      'without_lyrics',
+    };
+    if (!supportedRules.contains(rule)) {
+      throw ArgumentError.value(rule, 'rule', 'Unknown smart playlist rule');
+    }
+    final playlist = Playlist(
+      name: name.trim().isEmpty ? 'Smart Playlist' : name.trim(),
+      smartRule: rule,
+      mediaIds: _smartPlaylistIds(rule, state.savedMedia),
+    );
+    final playlists = [...state.playlists, playlist];
+    state = LibraryState(
+      media: state.media,
+      playlists: playlists,
+      loaded: true,
+    );
+    await repo.savePlaylists(playlists);
+    return playlist;
   }
 
   Future<void> renamePlaylist(String id, String name) async {
@@ -646,16 +844,63 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
 
   Future<void> deletePlaylist(String id) async {
     final removed = state.playlistById(id);
+    if (removed != null) await TrashStore().savePlaylist(removed);
     final p = state.playlists.where((e) => e.id != id).toList();
     state = LibraryState(media: state.media, playlists: p, loaded: true);
     await repo.savePlaylists(p);
-    final path = removed?.artworkPath;
-    if (path != null && path.contains('yureru_playlist_artwork')) {
-      try {
-        final file = File(path);
-        if (await file.exists()) await file.delete();
-      } catch (_) {}
+  }
+
+  Future<void> restoreTrashEntry(TrashEntry entry) async {
+    if (entry.type == 'media') {
+      final media = MediaItem.fromJson(entry.data);
+      if (state.byId(media.id) != null) {
+        await TrashStore().remove(entry.id);
+        return;
+      }
+      await _setMedia([...state.media, media]);
+      final playlists = [
+        for (final playlist in state.playlists)
+          if (entry.playlistPositions.containsKey(playlist.id) &&
+              !playlist.isSmart)
+            playlist.copyWith(
+              mediaIds: _insertAt(
+                playlist.mediaIds,
+                media.id,
+                entry.playlistPositions[playlist.id]!,
+              ),
+            )
+          else
+            playlist,
+      ];
+      state = LibraryState(
+        media: state.media,
+        playlists: playlists,
+        loaded: true,
+      );
+      await repo.savePlaylists(playlists);
+    } else if (entry.type == 'playlist') {
+      final playlist = Playlist.fromJson(entry.data);
+      if (state.playlistById(playlist.id) == null) {
+        final playlists = _refreshSmartPlaylists([
+          ...state.playlists,
+          playlist,
+        ], state.media);
+        state = LibraryState(
+          media: state.media,
+          playlists: playlists,
+          loaded: true,
+        );
+        await repo.savePlaylists(playlists);
+      }
     }
+    await TrashStore().remove(entry.id);
+  }
+
+  List<String> _insertAt(List<String> source, String value, int index) {
+    if (source.contains(value)) return source;
+    final result = [...source];
+    result.insert(index.clamp(0, result.length), value);
+    return result;
   }
 
   Future<void> addToPlaylist(String playlistId, String mediaId) async {
@@ -666,6 +911,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     String playlistId,
     List<String> mediaIds,
   ) async {
+    if (state.playlistById(playlistId)?.isSmart ?? true) return;
     final toAdd = mediaIds.toSet();
     final p = state.playlists.map((pl) {
       if (pl.id != playlistId) return pl;
@@ -684,6 +930,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     String playlistId,
     Iterable<String> mediaIds,
   ) async {
+    if (state.playlistById(playlistId)?.isSmart ?? true) return;
     final toRemove = mediaIds.toSet();
     final p = state.playlists
         .map(
@@ -702,7 +949,10 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
 
   Future<void> reorderPlaylist(String playlistId, int from, int to) async {
     final playlist = state.playlistById(playlistId);
-    if (playlist == null || from < 0 || from >= playlist.mediaIds.length) {
+    if (playlist == null ||
+        playlist.isSmart ||
+        from < 0 ||
+        from >= playlist.mediaIds.length) {
       return;
     }
     final ids = [...playlist.mediaIds];

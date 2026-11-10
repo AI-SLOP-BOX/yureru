@@ -6,6 +6,8 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Yureru は同じネットワーク上のYureruサーバーを探し、メディアを再生するためにローカルネットワークへ接続します。</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

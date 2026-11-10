@@ -7,6 +7,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../app_state.dart';
 import '../../domain/models.dart';
+import '../../extensions/extension_manifest.dart';
+import '../../extensions/extension_registry.dart';
 import '../../library/media_order.dart';
 import '../../domain/creator_names.dart';
 import '../../playback/playback_controller.dart';
@@ -17,6 +19,7 @@ import '../widgets/app_svg_icon.dart';
 import '../widgets/page_header.dart';
 import '../widgets/thumb_image.dart';
 import '../widgets/track_actions.dart';
+import '../widgets/extension_track_actions.dart';
 import '../widgets/unsaved_changes_guard.dart';
 
 bool _sharesCreator(String? mediaCredit, String selectedCredit) {
@@ -80,6 +83,7 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
     ref.read(searchQueryProvider.notifier).state = '';
     ref.read(videoCreatorFilterProvider.notifier).state = null;
     ref.read(favoritesOnlyProvider.notifier).state = false;
+    ref.read(videosQuickFilterProvider.notifier).state = VideosQuickFilter.all;
   }
 
   final ScrollController _scrollController = ScrollController();
@@ -132,7 +136,10 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
   ) async {
     final library = ref.read(libraryProvider);
     if (_selectedMediaIds.isEmpty) return;
-    if (library.playlists.isEmpty) {
+    final manualPlaylists = library.playlists
+        .where((playlist) => !playlist.isSmart)
+        .toList();
+    if (manualPlaylists.isEmpty) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(ref.tr('empty_playlist'))));
@@ -154,7 +161,7 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
-            for (final item in library.playlists)
+            for (final item in manualPlaylists)
               ListTile(
                 leading: const Icon(Icons.playlist_play_rounded),
                 title: Text(displayTitle(item.name)),
@@ -377,12 +384,59 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
     }
   }
 
+  Future<void> _editSelectionArtist(BuildContext context, WidgetRef ref) async {
+    if (_selectedMediaIds.isEmpty) return;
+    final controller = TextEditingController();
+    final artist = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(ref.tr('batch_edit_artist')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: ref.tr('metadata_artist'),
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(ref.tr('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: Text(ref.tr('save')),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (artist == null || !context.mounted) return;
+    final ids = _selectedMediaIds.toList(growable: false);
+    await ref.read(libraryProvider.notifier).updateMediaArtists(ids, artist);
+    _leaveSelectionMode();
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ref.tr('batch_count').replaceAll('{count}', '${ids.length}'),
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _addMediaToPlaylist(
     BuildContext context,
     WidgetRef ref,
     MediaItem media,
   ) async {
-    final playlists = ref.read(libraryProvider).playlists;
+    final playlists = ref
+        .read(libraryProvider)
+        .playlists
+        .where((playlist) => !playlist.isSmart)
+        .toList();
     if (playlists.isEmpty) {
       ScaffoldMessenger.of(
         context,
@@ -438,12 +492,27 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
     final creatorFilter = ref.watch(videoCreatorFilterProvider)?.trim();
     final sort = ref.watch(videosSortProvider);
     final favoritesOnly = ref.watch(favoritesOnlyProvider);
+    final quickFilter = ref.watch(videosQuickFilterProvider);
     final currentId = ref.watch(queueProvider.select((q) => q.currentId));
     if (!lib.loaded) return const Center(child: CircularProgressIndicator());
     final items = _uniqueLibraryTracks(lib.savedMedia)
         .where(
           (m) =>
               (!favoritesOnly || m.isFavorite) &&
+              switch (quickFilter) {
+                VideosQuickFilter.all => true,
+                VideosQuickFilter.withLyrics => [
+                  m.lyricsPath,
+                  m.videoLyricsPath,
+                  m.artworkLyricsPath,
+                ].any((path) => path != null && path.isNotEmpty),
+                VideosQuickFilter.withoutLyrics => [
+                  m.lyricsPath,
+                  m.videoLyricsPath,
+                  m.artworkLyricsPath,
+                ].every((path) => path == null || path.isEmpty),
+                VideosQuickFilter.notPlayed => m.playCount == 0,
+              } &&
               (creatorFilter == null ||
                   _sharesCreator(m.artist, creatorFilter)) &&
               (query.isEmpty ||
@@ -483,6 +552,7 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
           final reorderable =
               sort == VideosSort.manual &&
               !favoritesOnly &&
+              quickFilter == VideosQuickFilter.all &&
               query.isEmpty &&
               creatorFilter == null;
           final offset =
@@ -505,7 +575,11 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
       });
     }
     final ids = [for (final m in items) m.id];
-    final filtered = query.isNotEmpty || creatorFilter != null || favoritesOnly;
+    final filtered =
+        query.isNotEmpty ||
+        creatorFilter != null ||
+        favoritesOnly ||
+        quickFilter != VideosQuickFilter.all;
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 560;
@@ -536,6 +610,61 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
                       onSelected: (value) =>
                           ref.read(favoritesOnlyProvider.notifier).state =
                               value,
+                    ),
+                  ),
+                  PopupMenuButton<VideosQuickFilter>(
+                    tooltip: ref.tr('filter'),
+                    initialValue: quickFilter,
+                    onSelected: (value) =>
+                        ref.read(videosQuickFilterProvider.notifier).state =
+                            value,
+                    itemBuilder: (_) => [
+                      for (final value in VideosQuickFilter.values)
+                        CheckedPopupMenuItem(
+                          value: value,
+                          checked: value == quickFilter,
+                          child: Text(
+                            ref.tr(switch (value) {
+                              VideosQuickFilter.all => 'filter_all',
+                              VideosQuickFilter.withLyrics =>
+                                'filter_with_lyrics',
+                              VideosQuickFilter.withoutLyrics =>
+                                'filter_without_lyrics',
+                              VideosQuickFilter.notPlayed =>
+                                'filter_not_played',
+                            }),
+                          ),
+                        ),
+                    ],
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: themeBorder(context)),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.filter_list_rounded, size: 18),
+                          const SizedBox(width: 6),
+                          Text(
+                            ref.tr(switch (quickFilter) {
+                              VideosQuickFilter.all => 'filter_all',
+                              VideosQuickFilter.withLyrics =>
+                                'filter_with_lyrics',
+                              VideosQuickFilter.withoutLyrics =>
+                                'filter_without_lyrics',
+                              VideosQuickFilter.notPlayed =>
+                                'filter_not_played',
+                            }),
+                          ),
+                          const SizedBox(width: 4),
+                          const AppSvgIcon('chevron_down', size: 14),
+                        ],
+                      ),
                     ),
                   ),
                   PopupMenuButton<VideosSort>(
@@ -637,6 +766,13 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
                           : () => _addSelectionToAlbum(context, ref),
                       icon: const Icon(Icons.album_outlined, size: 18),
                       label: Text(ref.tr('add_to_album')),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: _selectedMediaIds.isEmpty
+                          ? null
+                          : () => _editSelectionArtist(context, ref),
+                      icon: const Icon(Icons.person_outline_rounded, size: 18),
+                      label: Text(ref.tr('batch_edit_artist')),
                     ),
                     TextButton(
                       onPressed: _leaveSelectionMode,
@@ -1182,6 +1318,12 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                             ref
                                 .read(libraryProvider.notifier)
                                 .toggleFavorite(widget.media.id);
+                          } else if (v == 'extension_actions') {
+                            showTrackExtensionActions(
+                              context,
+                              ref,
+                              widget.media,
+                            );
                           }
                         },
                         itemBuilder: (_) => [
@@ -1244,6 +1386,27 @@ class _TrackRowState extends ConsumerState<_TrackRow> {
                                 ],
                               ),
                             ),
+                          if (ref
+                              .read(extensionRegistryProvider)
+                              .any(
+                                (extension) =>
+                                    extension.enabled &&
+                                    extension.grantedPermissions.contains(
+                                      YureruExtensionPermission.uiContribution,
+                                    ),
+                              )) ...[
+                            const PopupMenuDivider(),
+                            PopupMenuItem(
+                              value: 'extension_actions',
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.extension_rounded, size: 20),
+                                  const SizedBox(width: 10),
+                                  Text(ref.tr('extension_track_actions')),
+                                ],
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ],

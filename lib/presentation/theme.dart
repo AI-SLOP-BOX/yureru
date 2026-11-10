@@ -24,18 +24,56 @@ const kLightText = Color(0xFF242424);
 const kLightSub = Color(0xFF626262);
 
 ThemeData yureruTheme({bool isDark = true}) => _theme(isDark);
-ThemeData yureruDarkTheme({Color? accentColor, Color? backgroundColor}) =>
-    _theme(true, accentColor: accentColor, backgroundColor: backgroundColor);
-ThemeData yureruLightTheme({Color? accentColor, Color? backgroundColor}) =>
-    _theme(false, accentColor: accentColor, backgroundColor: backgroundColor);
+ThemeData yureruDarkTheme({
+  Color? accentColor,
+  Color? backgroundColor,
+  Color? surfaceColor,
+  Color? textColor,
+  double cornerRadius = 16,
+  double fontScale = 1,
+}) => _theme(
+  true,
+  accentColor: accentColor,
+  backgroundColor: backgroundColor,
+  surfaceColor: surfaceColor,
+  textColor: textColor,
+  cornerRadius: cornerRadius,
+  fontScale: fontScale,
+);
+ThemeData yureruLightTheme({
+  Color? accentColor,
+  Color? backgroundColor,
+  Color? surfaceColor,
+  Color? textColor,
+  double cornerRadius = 16,
+  double fontScale = 1,
+}) => _theme(
+  false,
+  accentColor: accentColor,
+  backgroundColor: backgroundColor,
+  surfaceColor: surfaceColor,
+  textColor: textColor,
+  cornerRadius: cornerRadius,
+  fontScale: fontScale,
+);
 
-ThemeData _theme(bool dark, {Color? accentColor, Color? backgroundColor}) {
+ThemeData _theme(
+  bool dark, {
+  Color? accentColor,
+  Color? backgroundColor,
+  Color? surfaceColor,
+  Color? textColor,
+  double cornerRadius = 16,
+  double fontScale = 1,
+}) {
   final bg = backgroundColor ?? (dark ? kBg : kLightBg);
   final accent = accentColor ?? kAccent;
   final accentHighlight = accent == kAccent
       ? kAccentLight
       : Color.lerp(accent, Colors.white, dark ? 0.34 : 0)!;
-  final panel = dark ? Color.lerp(bg, Colors.white, 0.045)! : kLightPanel;
+  final panel =
+      surfaceColor ??
+      (dark ? Color.lerp(bg, Colors.white, 0.045)! : kLightPanel);
   final panelAlt = dark ? Color.lerp(bg, Colors.white, 0.074)! : kLightPanel;
   final card = dark ? Color.lerp(bg, Colors.white, 0.104)! : kLightCard;
   final cardHover = dark
@@ -65,15 +103,16 @@ ThemeData _theme(bool dark, {Color? accentColor, Color? backgroundColor}) {
         surfaceContainer: panelAlt,
         surfaceContainerHigh: card,
         surfaceContainerHighest: cardHover,
-        onSurface: dark ? kTextPrimary : kLightText,
+        onSurface: textColor ?? (dark ? kTextPrimary : kLightText),
         onSurfaceVariant: dark ? kTextSub : kLightSub,
         outline: dark ? const Color(0xFF787878) : const Color(0xFF858585),
         outlineVariant: dark ? kGlassBorder : kLightBorder,
         surfaceTint: Colors.transparent,
       );
   final base = ThemeData(useMaterial3: true, colorScheme: scheme);
+  final radius = cornerRadius.clamp(0, 48).toDouble();
   final rounded = RoundedRectangleBorder(
-    borderRadius: BorderRadius.circular(12),
+    borderRadius: BorderRadius.circular(radius),
   );
   return base.copyWith(
     scaffoldBackgroundColor: bg,
@@ -87,15 +126,14 @@ ThemeData _theme(bool dark, {Color? accentColor, Color? backgroundColor}) {
       ),
     ],
     dividerColor: scheme.outlineVariant,
-    textTheme: base.textTheme.apply(
-      bodyColor: scheme.onSurface,
-      displayColor: scheme.onSurface,
-    ),
+    textTheme: base.textTheme
+        .apply(bodyColor: scheme.onSurface, displayColor: scheme.onSurface)
+        .apply(fontSizeFactor: fontScale.clamp(0.75, 1.5).toDouble()),
     cardTheme: CardThemeData(
       color: card,
       elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(radius),
         side: BorderSide(color: scheme.outlineVariant),
       ),
     ),
@@ -103,7 +141,7 @@ ThemeData _theme(bool dark, {Color? accentColor, Color? backgroundColor}) {
       backgroundColor: scheme.surface,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(radius),
         side: BorderSide(color: scheme.outlineVariant),
       ),
     ),

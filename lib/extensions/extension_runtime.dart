@@ -198,16 +198,17 @@ class YureruExtensionRuntime {
       if (id == null ||
           title == null ||
           blocks is! List ||
-          !RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(id))
+          !RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(id)) {
         continue;
+      }
       final safeBlocks = <Map<String, Object?>>[];
       for (final block in blocks.take(80)) {
         if (block is! Map) continue;
         final type = text(block['type'], max: 20);
-        if (type == 'text') {
+        if (type == 'text' || type == 'heading') {
           final value = text(block['text'], max: 2000);
           if (value != null) safeBlocks.add({'type': type, 'text': value});
-        } else if (type == 'input' || type == 'toggle') {
+        } else if (type == 'input' || type == 'multiline' || type == 'toggle') {
           final id = text(block['id'], max: 64);
           final label = text(block['label']);
           if (id == null ||
@@ -215,7 +216,7 @@ class YureruExtensionRuntime {
               !RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(id)) {
             continue;
           }
-          if (type == 'input') {
+          if (type == 'input' || type == 'multiline') {
             final value = block['value'];
             safeBlocks.add({
               'type': type,
@@ -231,6 +232,32 @@ class YureruExtensionRuntime {
               'value': block['value'] == true,
             });
           }
+        } else if (type == 'select') {
+          final id = text(block['id'], max: 64);
+          final label = text(block['label']);
+          final rawOptions = block['options'];
+          if (id == null ||
+              label == null ||
+              !RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(id) ||
+              rawOptions is! List) {
+            continue;
+          }
+          final options = rawOptions
+              .whereType<String>()
+              .where((option) => option.isNotEmpty && option.length <= 120)
+              .take(40)
+              .toList(growable: false);
+          if (options.isEmpty) continue;
+          final requested = block['value'];
+          safeBlocks.add({
+            'type': type,
+            'id': id,
+            'label': label,
+            'options': options,
+            'value': requested is String && options.contains(requested)
+                ? requested
+                : options.first,
+          });
         } else if (type == 'slider') {
           final id = text(block['id'], max: 64);
           final label = text(block['label']);
@@ -271,9 +298,114 @@ class YureruExtensionRuntime {
           }
         } else if (type == 'divider') {
           safeBlocks.add({'type': type});
+        } else if (type == 'image') {
+          final src = text(block['src'], max: 200);
+          final alt = text(block['alt'], max: 200) ?? '';
+          if (src != null &&
+              src.startsWith('assets/') &&
+              !src.split('/').any((part) => part == '..' || part.isEmpty)) {
+            safeBlocks.add({'type': type, 'src': src, 'alt': alt});
+          }
         }
       }
       pages.add({'id': id, 'title': title, 'blocks': safeBlocks});
+    }
+    final settings = <Map<String, Object?>>[];
+    for (final item in canContributeUi ? entries('settings', 80) : const []) {
+      final type = text(item['type'], max: 20);
+      final label = text(item['label'] ?? item['title']);
+      if (type == 'section') {
+        if (label != null) settings.add({'type': 'section', 'label': label});
+        continue;
+      }
+      final id = text(item['id'], max: 64);
+      final description = text(item['description'], max: 500);
+      if (id == null ||
+          label == null ||
+          type == null ||
+          !RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(id) ||
+          !const {
+            'toggle',
+            'select',
+            'slider',
+            'number',
+            'text',
+            'multiline',
+            'color',
+          }.contains(type)) {
+        continue;
+      }
+      final setting = <String, Object?>{
+        'id': id,
+        'label': label,
+        'type': type,
+        'description': ?description,
+      };
+      if (type == 'toggle') {
+        setting['default'] = item['default'] == true;
+      } else if (type == 'select') {
+        final rawOptions = item['options'];
+        if (rawOptions is! List) continue;
+        final options = rawOptions
+            .whereType<String>()
+            .where((option) => option.isNotEmpty && option.length <= 120)
+            .take(40)
+            .toList(growable: false);
+        if (options.isEmpty) continue;
+        setting['options'] = options;
+        final value = item['default'];
+        setting['default'] = value is String && options.contains(value)
+            ? value
+            : options.first;
+      } else if (type == 'slider') {
+        final min = item['min'];
+        final max = item['max'];
+        final value = item['default'];
+        if (min is! num ||
+            max is! num ||
+            value is! num ||
+            !min.isFinite ||
+            !max.isFinite ||
+            !value.isFinite ||
+            max <= min) {
+          continue;
+        }
+        final lower = min.toDouble().clamp(-1000000, 1000000).toDouble();
+        final upper = max.toDouble().clamp(lower, 1000000).toDouble();
+        if (upper <= lower) continue;
+        setting['min'] = lower;
+        setting['max'] = upper;
+        setting['default'] = value.toDouble().clamp(lower, upper).toDouble();
+      } else if (type == 'number') {
+        final value = item['default'];
+        final min = item['min'];
+        final max = item['max'];
+        if (value is! num || !value.isFinite) continue;
+        final lower = min is num && min.isFinite
+            ? min.toDouble().clamp(-1000000, 1000000).toDouble()
+            : -1000000.0;
+        final upper = max is num && max.isFinite
+            ? max.toDouble().clamp(lower, 1000000).toDouble()
+            : 1000000.0;
+        if (upper < lower) continue;
+        setting['min'] = lower;
+        setting['max'] = upper;
+        setting['default'] = value.toDouble().clamp(lower, upper).toDouble();
+      } else {
+        final value = item['default'];
+        final fallback = type == 'color' ? '#FF9B533F' : '';
+        if (type == 'color' &&
+            value is String &&
+            !RegExp(r'^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$').hasMatch(value)) {
+          setting['default'] = fallback;
+          settings.add(setting);
+          continue;
+        }
+        setting['default'] = value is String && value.length <= 2000
+            ? value
+            : fallback;
+      }
+      settings.add(setting);
     }
     final themes = <Map<String, Object?>>[];
     for (final item in canCustomizeTheme ? entries('themes', 16) : const []) {
@@ -282,6 +414,10 @@ class YureruExtensionRuntime {
       final accent = _parseColor(item['accent']);
       final dark = _parseColor(item['darkBackground']);
       final light = _parseColor(item['lightBackground']);
+      final darkSurface = _parseColor(item['darkSurface']);
+      final lightSurface = _parseColor(item['lightSurface']);
+      final darkText = _parseColor(item['darkText']);
+      final lightText = _parseColor(item['lightText']);
       if (id == null ||
           name == null ||
           accent == null ||
@@ -290,15 +426,38 @@ class YureruExtensionRuntime {
           !RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(id)) {
         continue;
       }
-      themes.add({
+      final safeTheme = <String, Object?>{
         'id': id,
         'name': name,
         'accent': accent,
         'darkBackground': dark,
         'lightBackground': light,
-      });
+      };
+      if (darkSurface != null) safeTheme['darkSurface'] = darkSurface;
+      if (lightSurface != null) safeTheme['lightSurface'] = lightSurface;
+      if (darkText != null) safeTheme['darkText'] = darkText;
+      if (lightText != null) safeTheme['lightText'] = lightText;
+      if (item['cornerRadius'] is num &&
+          (item['cornerRadius'] as num).isFinite) {
+        safeTheme['cornerRadius'] = (item['cornerRadius'] as num)
+            .toDouble()
+            .clamp(0, 48)
+            .toDouble();
+      }
+      if (item['fontScale'] is num && (item['fontScale'] as num).isFinite) {
+        safeTheme['fontScale'] = (item['fontScale'] as num)
+            .toDouble()
+            .clamp(0.75, 1.5)
+            .toDouble();
+      }
+      themes.add(safeTheme);
     }
-    return {'commands': commands, 'pages': pages, 'themes': themes};
+    return {
+      'commands': commands,
+      'pages': pages,
+      'settings': settings,
+      'themes': themes,
+    };
   }
 
   int? _parseColor(Object? value) {
@@ -354,15 +513,29 @@ class YureruExtensionDispatcher {
     final canStore = extension.grantedPermissions.contains(
       YureruExtensionPermission.extensionStorage,
     );
-    if (canStore) payload['storage'] = await _readStorage(extension);
+    if (canStore) {
+      payload['storage'] = await _readStorage(extension);
+      payload['settings'] = await readSettings(extension);
+    }
     final result = await _runtime.invoke(
       extension,
       'extension.action.$action',
       payload,
     );
     if (canStore && result is Map && result['storage'] is Map) {
-      await _writeStorage(extension, result['storage'] as Map);
-      return result['result'];
+      final updatedStorage = Map<String, Object?>.from(
+        result['storage'] as Map,
+      );
+      // Settings belong to the host UI and cannot be overwritten through the
+      // extension's general-purpose storage response.
+      updatedStorage['_settings'] = await readSettings(extension);
+      await _writeStorage(extension, updatedStorage);
+      final actionResult = Map<String, Object?>.from(result)..remove('storage');
+      final legacyMessage = actionResult.remove('result');
+      if (legacyMessage is String && actionResult['message'] == null) {
+        actionResult['message'] = legacyMessage;
+      }
+      return actionResult;
     }
     return result;
   }
@@ -377,6 +550,85 @@ class YureruExtensionDispatcher {
     } catch (_) {
       return const {};
     }
+  }
+
+  Future<Map<String, Object?>> readSettings(YureruExtension extension) async {
+    if (!extension.grantedPermissions.contains(
+      YureruExtensionPermission.extensionStorage,
+    )) {
+      return const {};
+    }
+    final storage = await _readStorage(extension);
+    final settings = storage['_settings'];
+    return settings is Map ? Map<String, Object?>.from(settings) : const {};
+  }
+
+  Future<void> writeSetting(
+    YureruExtension extension,
+    String id,
+    Object? value,
+  ) async {
+    if (!extension.enabled ||
+        !extension.grantedPermissions.contains(
+          YureruExtensionPermission.extensionStorage,
+        ) ||
+        !RegExp(r'^[a-zA-Z0-9._-]{1,80}$').hasMatch(id)) {
+      return;
+    }
+    final storage = await _readStorage(extension);
+    final rawSettings = storage['_settings'];
+    final settings = rawSettings is Map
+        ? Map<String, Object?>.from(rawSettings)
+        : <String, Object?>{};
+    settings[id] = value;
+    storage['_settings'] = settings;
+    await _writeStorage(extension, storage);
+  }
+
+  Future<void> resetSettings(YureruExtension extension) async {
+    if (!extension.enabled ||
+        !extension.grantedPermissions.contains(
+          YureruExtensionPermission.extensionStorage,
+        )) {
+      return;
+    }
+    final storage = await _readStorage(extension);
+    storage.remove('_settings');
+    await _writeStorage(extension, storage);
+  }
+
+  Future<List<({YureruExtension extension, Object? result})>> dispatchEvent(
+    String event,
+    Map<String, Object?> payload,
+  ) async {
+    await registry.ready;
+    final outcomes = <({YureruExtension extension, Object? result})>[];
+    for (final extension in registry.extensions) {
+      if (!extension.enabled || !extension.manifest.hooks.contains(event)) {
+        continue;
+      }
+      try {
+        final eventPayload = Map<String, Object?>.of(payload);
+        if (extension.grantedPermissions.contains(
+          YureruExtensionPermission.extensionStorage,
+        )) {
+          eventPayload['settings'] = await readSettings(extension);
+          eventPayload['storage'] = await _readStorage(extension);
+        }
+        final result = await _runtime.invoke(extension, event, eventPayload);
+        if (result is Map && result['storage'] is Map) {
+          final updatedStorage = Map<String, Object?>.from(
+            result['storage'] as Map,
+          );
+          updatedStorage['_settings'] = await readSettings(extension);
+          await _writeStorage(extension, updatedStorage);
+        }
+        outcomes.add((extension: extension, result: result));
+      } catch (_) {
+        // Isolate a failed extension from playback and other listeners.
+      }
+    }
+    return outcomes;
   }
 
   Future<void> _writeStorage(YureruExtension extension, Map value) async {
@@ -403,12 +655,18 @@ class YureruExtensionDispatcher {
       for (final item in items)
         {'title': item.title, 'artist': item.artist, 'album': item.album},
     ];
-    for (final extension in registry.state) {
+    for (final extension in registry.extensions) {
       try {
+        final payload = <String, Object?>{'items': metadata};
+        if (extension.grantedPermissions.contains(
+          YureruExtensionPermission.extensionStorage,
+        )) {
+          payload['settings'] = await readSettings(extension);
+        }
         final result = await _runtime.invoke(
           extension,
           'library.write.mediaImport',
-          {'items': metadata},
+          payload,
         );
         if (result is! List || result.length != metadata.length) continue;
         metadata = [

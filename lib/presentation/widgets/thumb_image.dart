@@ -199,22 +199,29 @@ class _ThumbImageState extends ConsumerState<ThumbImage> {
       return _playlistCollage(context, playlistMedia);
     }
     if (imagePath != null) {
-      final art = Image.file(
-        File(imagePath),
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) {
-          if (widget.forceArtwork &&
-              secondaryImagePath != null &&
-              secondaryImagePath != imagePath) {
-            return Image.file(
-              File(secondaryImagePath),
+      final art =
+          imagePath.startsWith('http://') || imagePath.startsWith('https://')
+          ? Image.network(
+              imagePath,
               fit: BoxFit.cover,
               errorBuilder: (_, _, _) => fallback,
+            )
+          : Image.file(
+              File(imagePath),
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) {
+                if (widget.forceArtwork &&
+                    secondaryImagePath != null &&
+                    secondaryImagePath != imagePath) {
+                  return Image.file(
+                    File(secondaryImagePath),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => fallback,
+                  );
+                }
+                return fallback;
+              },
             );
-          }
-          return fallback;
-        },
-      );
       return ClipRRect(
         borderRadius: BorderRadius.circular(widget.radius),
         child: widget.expand

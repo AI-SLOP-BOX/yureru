@@ -409,6 +409,12 @@ final playlistContentSortProvider = StateProvider<PlaylistContentSort>(
 /// Session-only view filter; favorite marks themselves are persisted on media.
 final favoritesOnlyProvider = StateProvider<bool>((_) => false);
 
+enum VideosQuickFilter { all, withLyrics, withoutLyrics, notPlayed }
+
+final videosQuickFilterProvider = StateProvider<VideosQuickFilter>(
+  (_) => VideosQuickFilter.all,
+);
+
 /// Optional exact creator filter for the all-videos view.
 final videoCreatorFilterProvider = StateProvider<String?>((_) => null);
 
@@ -487,20 +493,44 @@ class AppearanceColors {
     this.accent = 0xFF9B533F,
     this.darkBackground = 0xFF181818,
     this.lightBackground = 0xFFF5F5F5,
+    this.darkSurface,
+    this.lightSurface,
+    this.darkText,
+    this.lightText,
+    this.cornerRadius = 16,
+    this.fontScale = 1,
   });
 
   final int accent;
   final int darkBackground;
   final int lightBackground;
+  final int? darkSurface;
+  final int? lightSurface;
+  final int? darkText;
+  final int? lightText;
+  final double cornerRadius;
+  final double fontScale;
 
   AppearanceColors copyWith({
     int? accent,
     int? darkBackground,
     int? lightBackground,
+    int? darkSurface,
+    int? lightSurface,
+    int? darkText,
+    int? lightText,
+    double? cornerRadius,
+    double? fontScale,
   }) => AppearanceColors(
     accent: accent ?? this.accent,
     darkBackground: darkBackground ?? this.darkBackground,
     lightBackground: lightBackground ?? this.lightBackground,
+    darkSurface: darkSurface ?? this.darkSurface,
+    lightSurface: lightSurface ?? this.lightSurface,
+    darkText: darkText ?? this.darkText,
+    lightText: lightText ?? this.lightText,
+    cornerRadius: cornerRadius ?? this.cornerRadius,
+    fontScale: fontScale ?? this.fontScale,
   );
 }
 
@@ -515,11 +545,21 @@ class AppearanceColorsNotifier extends StateNotifier<AppearanceColors> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final parts = prefs.getStringList(_key);
-      if (parts == null || parts.length != 3) return;
+      if (parts == null || parts.length < 3) return;
       state = AppearanceColors(
         accent: int.tryParse(parts[0]) ?? state.accent,
         darkBackground: int.tryParse(parts[1]) ?? state.darkBackground,
         lightBackground: int.tryParse(parts[2]) ?? state.lightBackground,
+        darkSurface: parts.length > 3 ? int.tryParse(parts[3]) : null,
+        lightSurface: parts.length > 4 ? int.tryParse(parts[4]) : null,
+        darkText: parts.length > 5 ? int.tryParse(parts[5]) : null,
+        lightText: parts.length > 6 ? int.tryParse(parts[6]) : null,
+        cornerRadius: parts.length > 7
+            ? double.tryParse(parts[7]) ?? state.cornerRadius
+            : state.cornerRadius,
+        fontScale: parts.length > 8
+            ? double.tryParse(parts[8]) ?? state.fontScale
+            : state.fontScale,
       );
     } catch (_) {}
   }
@@ -536,11 +576,23 @@ class AppearanceColorsNotifier extends StateNotifier<AppearanceColors> {
     required int accent,
     required int darkBackground,
     required int lightBackground,
+    int? darkSurface,
+    int? lightSurface,
+    int? darkText,
+    int? lightText,
+    double? cornerRadius,
+    double? fontScale,
   }) => _save(
     AppearanceColors(
       accent: accent,
       darkBackground: darkBackground,
       lightBackground: lightBackground,
+      darkSurface: darkSurface,
+      lightSurface: lightSurface,
+      darkText: darkText,
+      lightText: lightText,
+      cornerRadius: cornerRadius ?? 16,
+      fontScale: fontScale ?? 1,
     ),
   );
 
@@ -553,6 +605,12 @@ class AppearanceColorsNotifier extends StateNotifier<AppearanceColors> {
       value.accent.toString(),
       value.darkBackground.toString(),
       value.lightBackground.toString(),
+      value.darkSurface?.toString() ?? '',
+      value.lightSurface?.toString() ?? '',
+      value.darkText?.toString() ?? '',
+      value.lightText?.toString() ?? '',
+      value.cornerRadius.toString(),
+      value.fontScale.toString(),
     ]);
   }
 }

@@ -404,6 +404,11 @@ class Playlist {
   final String? imagePriority;
   final String? artworkPath;
 
+  /// Optional automatic rule. When set, [mediaIds] is maintained from the
+  /// current library instead of manual edits.
+  final String? smartRule;
+  bool get isSmart => smartRule != null;
+
   Playlist({
     String? id,
     required this.name,
@@ -411,6 +416,7 @@ class Playlist {
     DateTime? createdAt,
     this.imagePriority,
     this.artworkPath,
+    this.smartRule,
   }) : id = id ?? _uuid.v4(),
        mediaIds = List.unmodifiable(mediaIds ?? const []),
        createdAt = createdAt ?? DateTime.now();
@@ -420,6 +426,7 @@ class Playlist {
     List<String>? mediaIds,
     Object? imagePriority = _unchanged,
     Object? artworkPath = _unchanged,
+    Object? smartRule = _unchanged,
   }) => Playlist(
     id: id,
     name: name ?? this.name,
@@ -431,6 +438,9 @@ class Playlist {
     artworkPath: identical(artworkPath, _unchanged)
         ? this.artworkPath
         : artworkPath as String?,
+    smartRule: identical(smartRule, _unchanged)
+        ? this.smartRule
+        : smartRule as String?,
   );
 
   factory Playlist.fromJson(Map<String, dynamic> j) {
@@ -447,6 +457,7 @@ class Playlist {
           : DateTime.now(),
       imagePriority: j['imagePriority'] as String?,
       artworkPath: j['artworkPath'] as String?,
+      smartRule: j['smartRule'] as String?,
     );
   }
 
@@ -457,6 +468,7 @@ class Playlist {
     'createdAt': createdAt.toIso8601String(),
     'imagePriority': imagePriority,
     'artworkPath': artworkPath,
+    'smartRule': smartRule,
   };
 }
 

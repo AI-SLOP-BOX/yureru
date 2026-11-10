@@ -189,6 +189,7 @@ class ExtensionRegistryNotifier extends StateNotifier<List<YureruExtension>> {
 
   late final Future<void> _ready;
   Future<void> get ready => _ready;
+  List<YureruExtension> get extensions => List.unmodifiable(state);
 
   Future<void> _load() async {
     final preferences = await SharedPreferences.getInstance();

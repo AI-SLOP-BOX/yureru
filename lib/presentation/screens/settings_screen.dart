@@ -10,6 +10,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../app_state.dart';
 import '../../ambient/video_lyrics_settings.dart';
 import '../../domain/models.dart';
+import '../../extensions/extension_manifest.dart';
+import '../../extensions/extension_registry.dart';
 import '../../platform/keyboard_shortcuts.dart';
 import '../i18n.dart';
 import '../theme.dart';
@@ -21,7 +23,9 @@ import 'settings_library_screen.dart';
 import 'settings_lyrics_screen.dart';
 import 'licenses_screen.dart';
 import 'extensions_screen.dart';
+import 'extension_settings_controls.dart';
 import 'appearance_colors_screen.dart';
+import 'yureru_connect_screen.dart';
 
 /// Settings page (center-pane body; shell owns chrome).
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -210,6 +214,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final library = ref.watch(libraryProvider);
     final language = ref.watch(languageProvider);
     final normalization = ref.watch(audioSettingsProvider);
+    final extensions = ref.watch(extensionRegistryProvider);
     final supportsNormalization = ref
         .watch(engineProvider)
         .supportsVolumeNormalization;
@@ -401,6 +406,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             trailing: const AppSvgIcon('chevron_right', size: 20),
             contentPadding: const EdgeInsets.symmetric(horizontal: 16),
             onTap: () => SettingsScreenActions.openLibraryManagement(context),
+          ),
+          ListTile(
+            leading: const Icon(Icons.devices_rounded),
+            title: Text(ref.tr('yureru_connect')),
+            subtitle: Text(ref.tr('yureru_connect_desc')),
+            trailing: const AppSvgIcon('chevron_right', size: 20),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            onTap: () => SettingsScreenActions.openYureruConnect(context),
           ),
           ListTile(
             leading: const AppSvgIcon('collection_edit'),
@@ -905,6 +918,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
           ],
+        ),
+      if (extensions.any(
+        (extension) =>
+            extension.enabled &&
+            extension.grantedPermissions.contains(
+              YureruExtensionPermission.uiContribution,
+            ),
+      ))
+        _SettingsGroup(
+          id: 'settings_extension_preferences',
+          icon: 'settings_tune',
+          description: ref.tr('extension_settings_hint'),
+          title: ref.tr('extension_settings'),
+          children: const [ExtensionSettingsCatalog()],
         ),
       _SettingsGroup(
         id: 'settings_app',
@@ -1583,6 +1610,12 @@ class SettingsScreenActions {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const LibraryManagementScreen()));
+  }
+
+  static void openYureruConnect(BuildContext context) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const YureruConnectScreen()));
   }
 
   static void openMediaEditor(BuildContext context) {

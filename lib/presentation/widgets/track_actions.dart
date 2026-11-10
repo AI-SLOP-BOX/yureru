@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_state.dart';
 import '../../domain/models.dart';
+import '../../extensions/extension_manifest.dart';
+import '../../extensions/extension_registry.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import 'app_svg_icon.dart';
+import 'extension_track_actions.dart';
 
 List<PopupMenuEntry<String>> trackActionItems(
   WidgetRef ref,
@@ -43,6 +46,21 @@ List<PopupMenuEntry<String>> trackActionItems(
       'remove_from_playlist',
       ref.tr('remove_from_playlist'),
       const Icon(Icons.playlist_remove_rounded, size: 20),
+    ),
+  if (ref
+      .read(extensionRegistryProvider)
+      .any(
+        (extension) =>
+            extension.enabled &&
+            extension.grantedPermissions.contains(
+              YureruExtensionPermission.uiContribution,
+            ),
+      ))
+    _item(
+      ref,
+      'extension_actions',
+      ref.tr('extension_track_actions'),
+      const Icon(Icons.extension_rounded, size: 20),
     ),
 ];
 
@@ -131,7 +149,11 @@ Future<void> runTrackAction(
       }
       break;
     case 'add_playlist':
-      final playlists = ref.read(libraryProvider).playlists;
+      final playlists = ref
+          .read(libraryProvider)
+          .playlists
+          .where((playlist) => !playlist.isSmart)
+          .toList();
       if (playlists.isEmpty) {
         ScaffoldMessenger.of(
           context,
@@ -193,6 +215,9 @@ Future<void> runTrackAction(
             .read(libraryProvider.notifier)
             .removeFromPlaylist(playlistId, media.id);
       }
+      break;
+    case 'extension_actions':
+      await showTrackExtensionActions(context, ref, media);
       break;
   }
 }

@@ -5,7 +5,10 @@ const extensionApiVersion = 1;
 enum YureruExtensionPermission {
   libraryRead('library.read'),
   libraryWrite('library.write'),
+  libraryDelete('library.delete'),
+  playlistManage('playlist.manage'),
   playerControl('player.control'),
+  pictureInPicture('pip.control'),
   uiContribution('ui.contribute'),
   themeCustomize('theme.customize'),
   extensionStorage('extension.storage');

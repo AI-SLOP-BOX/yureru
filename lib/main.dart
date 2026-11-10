@@ -34,10 +34,26 @@ class YureruApp extends ConsumerWidget {
       theme: yureruLightTheme(
         accentColor: Color(appearance.accent),
         backgroundColor: Color(appearance.lightBackground),
+        surfaceColor: appearance.lightSurface == null
+            ? null
+            : Color(appearance.lightSurface!),
+        textColor: appearance.lightText == null
+            ? null
+            : Color(appearance.lightText!),
+        cornerRadius: appearance.cornerRadius,
+        fontScale: appearance.fontScale,
       ),
       darkTheme: yureruDarkTheme(
         accentColor: Color(appearance.accent),
         backgroundColor: Color(appearance.darkBackground),
+        surfaceColor: appearance.darkSurface == null
+            ? null
+            : Color(appearance.darkSurface!),
+        textColor: appearance.darkText == null
+            ? null
+            : Color(appearance.darkText!),
+        cornerRadius: appearance.cornerRadius,
+        fontScale: appearance.fontScale,
       ),
       themeMode: currentThemeMode,
       themeAnimationDuration: Duration.zero,

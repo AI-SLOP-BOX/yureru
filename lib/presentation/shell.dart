@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import '../app_state.dart';
+import '../extensions/extension_runtime.dart';
 import '../data/thumbnails.dart';
 import '../data/importer.dart' show isVideoPath;
 import '../data/session.dart';
@@ -36,6 +37,7 @@ import 'widgets/desktop_menu_bar.dart';
 import 'widgets/transport_bar.dart';
 import 'widgets/thumb_image.dart';
 import 'widgets/yureru_logo.dart';
+import 'widgets/extension_track_actions.dart';
 
 /// 3-pane desktop shell (sidebar / center / queue) + bottom transport bar.
 /// Wide (>=1000px): target design layout. Narrow: nav bar + mini player.
@@ -68,7 +70,11 @@ class _AppShellState extends ConsumerState<AppShell>
   Timer? _desktopQueueHideTimer;
   PlaybackController? _playbackController;
   ProviderSubscription<LibraryState>? _thumbnailLibrarySubscription;
-  final Set<String> _thumbnailGenerationAttempted = <String>{};
+  ProviderSubscription<QueueState>? _extensionQueueSubscription;
+  StreamSubscription<dynamic>? _extensionPlaybackSubscription;
+  final Set<String> _activeExtensionEvents = <String>{};
+  bool _lastExtensionPlayingState = false;
+  final Map<String, String> _thumbnailGenerationAttempted = <String, String>{};
 
   @override
   void initState() {
@@ -81,6 +87,30 @@ class _AppShellState extends ConsumerState<AppShell>
       fireImmediately: true,
     );
     _playbackController = ref.read(playbackControllerProvider);
+    _lastExtensionPlayingState = _playbackController!.engine.snapshot.isPlaying;
+    _extensionQueueSubscription = ref.listenManual<QueueState>(queueProvider, (
+      previous,
+      next,
+    ) {
+      if (previous?.currentId == next.currentId) return;
+      unawaited(
+        _dispatchExtensionEvent('player.trackChanged', {
+          'mediaId': next.currentId,
+          'isPlaying': _playbackController?.engine.snapshot.isPlaying ?? false,
+        }),
+      );
+    });
+    _extensionPlaybackSubscription = _playbackController!.engine.snapshots
+        .listen((snapshot) {
+          if (snapshot.isPlaying == _lastExtensionPlayingState) return;
+          _lastExtensionPlayingState = snapshot.isPlaying;
+          unawaited(
+            _dispatchExtensionEvent('player.playbackChanged', {
+              'mediaId': ref.read(queueProvider).currentId,
+              'isPlaying': snapshot.isPlaying,
+            }),
+          );
+        });
     ref.read(systemMediaSessionProvider);
     HardwareKeyboard.instance.addHandler(_handleGlobalKeyboardEvent);
     WidgetsBinding.instance.addObserver(this);
@@ -167,6 +197,8 @@ class _AppShellState extends ConsumerState<AppShell>
   @override
   void dispose() {
     _thumbnailLibrarySubscription?.close();
+    _extensionQueueSubscription?.close();
+    _extensionPlaybackSubscription?.cancel();
     _desktopSidebarHideTimer?.cancel();
     _desktopQueueHideTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyboardEvent);
@@ -179,16 +211,60 @@ class _AppShellState extends ConsumerState<AppShell>
     super.dispose();
   }
 
+  Future<void> _dispatchExtensionEvent(
+    String event,
+    Map<String, Object?> payload,
+  ) async {
+    if (!_activeExtensionEvents.add(event)) return;
+    try {
+      final outcomes = await ref
+          .read(extensionDispatcherProvider)
+          .dispatchEvent(event, payload);
+      for (final outcome in outcomes) {
+        if (!mounted) return;
+        final result = outcome.result;
+        final commands = <Map>[];
+        if (result is Map && result['command'] is Map) {
+          commands.add(result['command'] as Map);
+        }
+        if (result is Map && result['commands'] is List) {
+          commands.addAll(
+            (result['commands'] as List).whereType<Map>().take(50),
+          );
+        }
+        final currentId = ref.read(queueProvider).currentId;
+        final media = currentId == null
+            ? null
+            : ref.read(libraryProvider).byId(currentId);
+        for (final command in commands) {
+          await executeExtensionTrackCommand(
+            ref,
+            outcome.extension,
+            media,
+            command,
+          );
+        }
+      }
+    } finally {
+      _activeExtensionEvents.remove(event);
+    }
+  }
+
   void _scheduleMissingThumbnails(List<MediaItem> media) {
     final missing = media
         .where((item) {
           final path = item.localPath;
-          return !item.isTemporary &&
+          final eligible =
+              !item.isTemporary &&
               isVideoPath(path) &&
               item.thumbnailPath == null &&
               !path.startsWith('http://') &&
-              !path.startsWith('https://') &&
-              _thumbnailGenerationAttempted.add(item.id);
+              !path.startsWith('https://');
+          if (!eligible || _thumbnailGenerationAttempted[item.id] == path) {
+            return false;
+          }
+          _thumbnailGenerationAttempted[item.id] = path;
+          return true;
         })
         .toList(growable: false);
     if (missing.isNotEmpty) unawaited(_generateMissingThumbnails(missing));
@@ -198,13 +274,22 @@ class _AppShellState extends ConsumerState<AppShell>
     for (final item in media) {
       if (!mounted) return;
       try {
-        await ThumbnailService.forMedia(
+        final generated = await ThumbnailService.forMedia(
           mediaId: item.id,
           localPath: item.localPath,
         );
+        if (generated == null &&
+            _thumbnailGenerationAttempted[item.id] == item.localPath) {
+          // Let a later library update retry; thumbnail generation can fail
+          // transiently while a file is being imported or its decoder starts.
+          _thumbnailGenerationAttempted.remove(item.id);
+        }
       } catch (_) {
         // A missing, unsupported, or temporarily unavailable file keeps the
         // normal placeholder; one failure must not stop the rest of the scan.
+        if (_thumbnailGenerationAttempted[item.id] == item.localPath) {
+          _thumbnailGenerationAttempted.remove(item.id);
+        }
       }
     }
   }

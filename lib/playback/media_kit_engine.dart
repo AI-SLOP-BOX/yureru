@@ -720,18 +720,18 @@ class MediaKitPlaybackEngine implements PlaybackEngine {
             'width': sourceRect.width,
             'height': sourceRect.height,
           };
+    final arguments = <String, Object?>{
+      'playing': playing,
+      'uri': uri,
+      'position':
+          _sourcePosition.inMicroseconds / Duration.microsecondsPerSecond,
+      'duration':
+          _sourceDuration.inMicroseconds / Duration.microsecondsPerSecond,
+      'rate': _rate,
+    };
+    if (sourceRectMap != null) arguments['sourceRect'] = sourceRectMap;
     final started =
-        await _nativePipChannel.invokeMethod<bool>('start', {
-          'playing': playing,
-          'uri': uri,
-          'position':
-              _sourcePosition.inMicroseconds / Duration.microsecondsPerSecond,
-          'duration':
-              _sourceDuration.inMicroseconds / Duration.microsecondsPerSecond,
-          'rate': _rate,
-          if (sourceRectMap != null) 'sourceRect': sourceRectMap,
-        }) ??
-        false;
+        await _nativePipChannel.invokeMethod<bool>('start', arguments) ?? false;
     if (!started) {
       _pictureInPictureFailure = await _nativePipChannel.invokeMethod<String>(
         'lastStartFailure',

@@ -21,9 +21,6 @@ class _ImmersiveLyricsScrollBehavior extends MaterialScrollBehavior {
   const _ImmersiveLyricsScrollBehavior();
 
   @override
-  bool get scrollbars => false;
-
-  @override
   Widget buildScrollbar(
     BuildContext context,
     Widget child,

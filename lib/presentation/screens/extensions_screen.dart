@@ -8,6 +8,8 @@ import '../../app_state.dart';
 import '../../extensions/extension_manifest.dart';
 import '../../extensions/extension_registry.dart';
 import '../../extensions/extension_runtime.dart';
+import '../../data/thumbnails.dart';
+import '../../platform/window_utils.dart';
 import '../../playback/playback_controller.dart';
 import '../i18n.dart';
 
@@ -251,8 +253,17 @@ class ExtensionsScreen extends ConsumerWidget {
     YureruExtensionPermission.libraryWrite => ref.tr(
       'extension_permission_library_write',
     ),
+    YureruExtensionPermission.libraryDelete => ref.tr(
+      'extension_permission_library_delete',
+    ),
+    YureruExtensionPermission.playlistManage => ref.tr(
+      'extension_permission_playlist_manage',
+    ),
     YureruExtensionPermission.playerControl => ref.tr(
       'extension_permission_player_control',
+    ),
+    YureruExtensionPermission.pictureInPicture => ref.tr(
+      'extension_permission_pip_control',
     ),
     YureruExtensionPermission.uiContribution => ref.tr(
       'extension_permission_ui_contribution',
@@ -297,18 +308,76 @@ class _ExtensionContributionsState
     Map<String, Object?> contextData = const {},
   }) async {
     try {
-      final result = await ref.read(extensionDispatcherProvider).runAction(
-        extension,
-        action,
-        {'source': 'extensions', ...contextData},
-      );
-      if (result is Map && result['command'] is Map) {
-        await _executeHostCommand(
-          context,
-          ref,
-          extension,
-          result['command'] as Map,
-        );
+      final contextPayload = <String, Object?>{
+        'source': 'extensions',
+        ...contextData,
+      };
+      final permissions = extension.grantedPermissions;
+      if (permissions.contains(YureruExtensionPermission.libraryRead)) {
+        final library = ref.read(libraryProvider);
+        final media = library.savedMedia;
+        contextPayload['library'] = {
+          'media': [
+            for (final item in media.take(1000))
+              {
+                'id': item.id,
+                'title': item.title,
+                'artist': item.artist,
+                'album': item.album,
+                'durationMs': item.durationMs,
+                'playCount': item.playCount,
+                'isFavorite': item.isFavorite,
+              },
+          ],
+          'mediaCount': media.length,
+          'truncated': media.length > 1000,
+          'playlists': [
+            for (final playlist in library.playlists.take(200))
+              {
+                'id': playlist.id,
+                'name': playlist.name,
+                'mediaIds': playlist.mediaIds.take(500).toList(),
+                'truncated': playlist.mediaIds.length > 500,
+              },
+          ],
+          'playlistCount': library.playlists.length,
+          'playlistsTruncated': library.playlists.length > 200,
+        };
+      }
+      if (permissions.contains(YureruExtensionPermission.playerControl)) {
+        final queue = ref.read(queueProvider);
+        final snapshot = ref.read(playbackControllerProvider).engine.snapshot;
+        contextPayload['player'] = {
+          'currentId': queue.currentId,
+          'isPlaying': snapshot.isPlaying,
+          'positionMs': snapshot.position.inMilliseconds,
+          'durationMs': snapshot.duration.inMilliseconds,
+          'volume': ref.read(volumeProvider),
+          'speed': queue.speed,
+          'shuffle': queue.shuffle,
+          'repeat': queue.repeat,
+          'queueIds': queue.queue.take(500).toList(),
+          'queueTruncated': queue.queue.length > 500,
+        };
+      }
+      final result = await ref
+          .read(extensionDispatcherProvider)
+          .runAction(extension, action, contextPayload);
+      if (!context.mounted) return;
+      if (result is Map) {
+        final single = result['command'];
+        final batch = result['commands'];
+        if (single is Map) {
+          await _executeHostCommand(context, ref, extension, single);
+        }
+        if (batch is List) {
+          for (final command in batch.take(50)) {
+            if (!context.mounted) return;
+            if (command is Map) {
+              await _executeHostCommand(context, ref, extension, command);
+            }
+          }
+        }
       }
       if (!context.mounted) return;
       final message = result is String
@@ -344,11 +413,24 @@ class _ExtensionContributionsState
     final controller = ref.read(playbackControllerProvider);
     final queue = ref.read(queueProvider.notifier);
     if (type == 'player.toggle' ||
+        type == 'player.play' ||
+        type == 'player.pause' ||
         type == 'player.next' ||
         type == 'player.previous' ||
-        type == 'player.seek') {
+        type == 'player.seek' ||
+        type == 'player.seekRelative' ||
+        type == 'player.volume' ||
+        type == 'player.speed' ||
+        type == 'player.shuffle' ||
+        type == 'player.repeat') {
       if (!grants.contains(YureruExtensionPermission.playerControl)) return;
       if (type == 'player.toggle') await controller.toggle();
+      if (type == 'player.play' && !controller.engine.snapshot.isPlaying) {
+        await controller.toggle();
+      }
+      if (type == 'player.pause' && controller.engine.snapshot.isPlaying) {
+        await controller.toggle();
+      }
       if (type == 'player.next') await controller.playNext();
       if (type == 'player.previous') {
         queue.previous();
@@ -356,15 +438,155 @@ class _ExtensionContributionsState
       }
       if (type == 'player.seek') {
         final ms = command['positionMs'];
-        if (ms is int && ms >= 0) {
+        if (ms is num && ms.isFinite && ms >= 0) {
           final duration = controller.engine.snapshot.duration;
-          final position = Duration(milliseconds: ms);
+          final position = Duration(milliseconds: ms.round());
           await controller.seekTo(
             duration > Duration.zero && position > duration
                 ? duration
                 : position,
           );
         }
+      }
+      if (type == 'player.seekRelative') {
+        final ms = command['deltaMs'];
+        if (ms is num && ms.isFinite) {
+          await controller.seekBy(Duration(milliseconds: ms.round()));
+        }
+      }
+      if (type == 'player.volume') {
+        final volume = command['value'];
+        if (volume is num && volume.isFinite) {
+          await controller.setVolume(volume.toDouble());
+        }
+      }
+      if (type == 'player.speed') {
+        final speed = command['value'];
+        if (speed is num && speed.isFinite && speed >= 0.25 && speed <= 3.0) {
+          await controller.setSpeed(speed.toDouble());
+        }
+      }
+      if (type == 'player.shuffle') {
+        final enabled = command['enabled'];
+        if (enabled is bool && enabled != ref.read(queueProvider).shuffle) {
+          queue.toggleShuffle();
+        }
+      }
+      if (type == 'player.repeat') {
+        final repeat = command['mode'];
+        if (repeat is String) queue.setRepeat(repeat);
+      }
+      return;
+    }
+    if (type == 'queue.clear') {
+      if (grants.contains(YureruExtensionPermission.playerControl)) {
+        queue.clear();
+      }
+      return;
+    }
+    if (type == 'queue.start') {
+      if (!grants.contains(YureruExtensionPermission.playerControl)) return;
+      final rawIds = command['mediaIds'];
+      if (rawIds is! List) return;
+      final library = ref.read(libraryProvider);
+      final ids = rawIds
+          .whereType<String>()
+          .where((id) => library.byId(id) != null)
+          .take(500)
+          .toList(growable: false);
+      if (ids.isEmpty) return;
+      final shuffle = command['shuffle'] == true;
+      queue.start(ids, shuffle: shuffle);
+      await controller.openCurrent();
+      return;
+    }
+    if (type == 'pip.start' || type == 'pip.restore') {
+      if (!grants.contains(YureruExtensionPermission.pictureInPicture)) return;
+      final isStarting = type == 'pip.start';
+      final pipState = ref.read(pictureInPictureProvider.notifier);
+      final isDesktopPip = Platform.isWindows || Platform.isLinux;
+      final changesSurface = isDesktopPip || Platform.isAndroid;
+      if (!isStarting) {
+        pipState.state = false;
+        await WidgetsBinding.instance.endOfFrame;
+        await restorePictureInPictureWindow(engine: controller.engine);
+        return;
+      }
+      final mode = ref.read(playerViewModeProvider);
+      final mediaId = ref.read(queueProvider).currentId;
+      final media = mediaId == null
+          ? null
+          : ref.read(libraryProvider).byId(mediaId);
+      String? artworkPath;
+      if (mode == PlayerViewMode.image && media != null) {
+        for (final candidate in [media.artworkPath, media.thumbnailPath]) {
+          if (candidate != null && await File(candidate).exists()) {
+            artworkPath = candidate;
+            break;
+          }
+        }
+        artworkPath ??= (await ThumbnailService.forMedia(
+          mediaId: media.id,
+          localPath: media.localPath,
+          highRes: true,
+        ))?.path;
+      }
+      if (changesSurface) {
+        pipState.state = true;
+        await WidgetsBinding.instance.endOfFrame;
+      }
+      final aspectRatio =
+          command['aspectRatio'] is num &&
+              (command['aspectRatio'] as num).isFinite
+          ? (command['aspectRatio'] as num).toDouble().clamp(0.5, 2.5)
+          : command['width'] is num &&
+                command['height'] is num &&
+                (command['width'] as num).isFinite &&
+                (command['height'] as num).isFinite &&
+                (command['height'] as num) > 0
+          ? ((command['width'] as num) / (command['height'] as num))
+                .toDouble()
+                .clamp(0.5, 2.5)
+          : mode == PlayerViewMode.image
+          ? 1.0
+          : controller.engine.videoAspectRatio ?? 16 / 9;
+      final started = isDesktopPip
+          ? await enterPictureInPictureWindow(
+              engine: controller.engine,
+              aspectRatio: aspectRatio,
+              artworkPath: artworkPath,
+              windowWidth: command['width'] is num
+                  ? (command['width'] as num).toDouble()
+                  : null,
+              windowHeight: command['height'] is num
+                  ? (command['height'] as num).toDouble()
+                  : null,
+            )
+          : Platform.isAndroid
+          ? await enterPictureInPictureWindow(
+              engine: controller.engine,
+              aspectRatio: aspectRatio,
+              artworkPath: artworkPath,
+            )
+          : await controller.engine.enterPictureInPicture(
+              aspectRatio: aspectRatio,
+              artworkPath: artworkPath,
+              sourceRect: ref.read(pictureInPictureSourceRectProvider),
+            );
+      if (!started && changesSurface) pipState.state = false;
+      if (!started && context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(ref.tr('pip_unavailable'))));
+      }
+      return;
+    }
+    if (type == 'queue.remove' || type == 'queue.move') {
+      if (!grants.contains(YureruExtensionPermission.playerControl)) return;
+      final from = command['from'];
+      if (type == 'queue.remove' && from is int) queue.removeAt(from);
+      if (type == 'queue.move' && from is int && command['to'] is int) {
+        queue.move(from, command['to'] as int);
       }
       return;
     }
@@ -384,10 +606,19 @@ class _ExtensionContributionsState
     if (!grants.contains(YureruExtensionPermission.libraryWrite)) return;
     final library = ref.read(libraryProvider);
     final notifier = ref.read(libraryProvider.notifier);
-    if (type == 'library.favorite') {
+    if (type == 'library.favorite' || type == 'library.setFavorite') {
+      final id = command['mediaId'];
+      final item = id is String ? library.byId(id) : null;
+      if (item != null &&
+          (type == 'library.favorite' || command['value'] is bool) &&
+          (type == 'library.favorite' || item.isFavorite != command['value'])) {
+        await notifier.toggleFavorite(item.id);
+      }
+    } else if (type == 'library.remove') {
+      if (!grants.contains(YureruExtensionPermission.libraryDelete)) return;
       final id = command['mediaId'];
       if (id is String && library.byId(id) != null) {
-        await notifier.toggleFavorite(id);
+        await notifier.removeMedia(id);
       }
     } else if (type == 'library.metadata') {
       final id = command['mediaId'];
@@ -412,19 +643,72 @@ class _ExtensionContributionsState
             ? cleanArtist.substring(0, 500)
             : cleanArtist,
       );
-    } else if (type == 'playlist.add' || type == 'playlist.remove') {
+      final album = command['album'];
+      final albumArtist = command['albumArtist'];
+      if (album is String || albumArtist is String) {
+        await notifier.updateMediaAlbum(
+          item.id,
+          album: album is String ? album : item.album,
+          albumArtist: albumArtist is String ? albumArtist : item.albumArtist,
+          trackNumber: item.trackNumber,
+          discNumber: item.discNumber,
+        );
+      }
+    } else if (type == 'playlist.create') {
+      final name = command['name'];
+      if (name is String && name.trim().isNotEmpty) {
+        final cleanName = name.trim();
+        await notifier.createPlaylist(
+          cleanName.length > 120 ? cleanName.substring(0, 120) : cleanName,
+        );
+      }
+    } else if (type == 'playlist.createSmart') {
+      final name = command['name'];
+      final rule = command['rule'];
+      if (name is String && rule is String) {
+        await notifier.createSmartPlaylist(name.trim(), rule);
+      }
+    } else if (type == 'playlist.rename') {
       final playlistId = command['playlistId'];
-      final mediaId = command['mediaId'];
-      if (playlistId is! String ||
-          mediaId is! String ||
-          library.byId(mediaId) == null ||
-          !library.playlists.any((playlist) => playlist.id == playlistId)) {
+      final name = command['name'];
+      if (playlistId is String && name is String) {
+        final cleanName = name.trim();
+        if (cleanName.isNotEmpty) {
+          await notifier.renamePlaylist(
+            playlistId,
+            cleanName.length > 120 ? cleanName.substring(0, 120) : cleanName,
+          );
+        }
+      }
+    } else if (type == 'playlist.delete') {
+      if (!grants.contains(YureruExtensionPermission.playlistManage)) return;
+      final playlistId = command['playlistId'];
+      if (playlistId is String && library.playlistById(playlistId) != null) {
+        await notifier.deletePlaylist(playlistId);
+      }
+    } else if (type == 'playlist.add' ||
+        type == 'playlist.remove' ||
+        type == 'playlist.addMany' ||
+        type == 'playlist.removeMany') {
+      final playlistId = command['playlistId'];
+      final playlist = playlistId is String
+          ? library.playlistById(playlistId)
+          : null;
+      if (playlist == null || playlist.isSmart) {
         return;
       }
-      if (type == 'playlist.add') {
-        await notifier.addToPlaylist(playlistId, mediaId);
+      final rawIds = command['mediaIds'];
+      final mediaIds = type.endsWith('Many') && rawIds is List
+          ? rawIds.whereType<String>().take(500).toList()
+          : [if (command['mediaId'] is String) command['mediaId'] as String];
+      final validIds = mediaIds
+          .where((id) => library.byId(id) != null)
+          .toList(growable: false);
+      if (validIds.isEmpty) return;
+      if (type == 'playlist.add' || type == 'playlist.addMany') {
+        await notifier.addMediaToPlaylist(playlistId as String, validIds);
       } else {
-        await notifier.removeFromPlaylist(playlistId, mediaId);
+        await notifier.removeMediaFromPlaylist(playlistId as String, validIds);
       }
     }
   }
@@ -483,6 +767,12 @@ class _ExtensionContributionsState
                         accent: raw['accent'] as int,
                         darkBackground: raw['darkBackground'] as int,
                         lightBackground: raw['lightBackground'] as int,
+                        darkSurface: raw['darkSurface'] as int?,
+                        lightSurface: raw['lightSurface'] as int?,
+                        darkText: raw['darkText'] as int?,
+                        lightText: raw['lightText'] as int?,
+                        cornerRadius: (raw['cornerRadius'] as num?)?.toDouble(),
+                        fontScale: (raw['fontScale'] as num?)?.toDouble(),
                       );
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -501,93 +791,152 @@ class _ExtensionContributionsState
       if (block is! Map || block['id'] is! String) continue;
       final id = block['id'] as String;
       if (block['type'] == 'input') form[id] = block['value'] as String;
+      if (block['type'] == 'multiline') form[id] = block['value'] as String;
       if (block['type'] == 'toggle') form[id] = block['value'] == true;
       if (block['type'] == 'slider') form[id] = block['value'] as double;
+      if (block['type'] == 'select') form[id] = block['value'] as String;
     }
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(raw['title'] as String? ?? ''),
-          content: SizedBox(
-            width: 520,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final block in raw['blocks'] as List? ?? const [])
-                    if (block is Map && block['type'] == 'text')
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: Text(block['text'] as String),
-                      )
-                    else if (block is Map && block['type'] == 'divider')
-                      const Divider()
-                    else if (block is Map && block['type'] == 'input')
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                        child: TextFormField(
-                          initialValue: form[block['id']] as String,
-                          decoration: InputDecoration(
-                            labelText: block['label'] as String,
-                          ),
-                          onChanged: (value) =>
-                              form[block['id'] as String] = value,
-                        ),
-                      )
-                    else if (block is Map && block['type'] == 'toggle')
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(block['label'] as String),
-                        value: form[block['id']] == true,
-                        onChanged: (value) => setDialogState(
-                          () => form[block['id'] as String] = value,
-                        ),
-                      )
-                    else if (block is Map && block['type'] == 'slider')
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '${block['label']} · ${(form[block['id']] as double).toStringAsFixed(2)}',
-                          ),
-                          Slider(
-                            min: block['min'] as double,
-                            max: block['max'] as double,
-                            value: form[block['id']] as double,
-                            onChanged: (value) => setDialogState(
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (pageContext) => StatefulBuilder(
+          builder: (context, setPageState) => Scaffold(
+            appBar: AppBar(
+              title: Text(raw['title'] as String? ?? ''),
+              leading: IconButton(
+                tooltip: ref.tr('close'),
+                onPressed: () => Navigator.pop(pageContext),
+                icon: const Icon(Icons.arrow_back_rounded),
+              ),
+            ),
+            body: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final block in raw['blocks'] as List? ?? const [])
+                        if (block is Map && block['type'] == 'text')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Text(block['text'] as String),
+                          )
+                        else if (block is Map && block['type'] == 'heading')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Text(
+                              block['text'] as String,
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                          )
+                        else if (block is Map && block['type'] == 'divider')
+                          const Divider()
+                        else if (block is Map &&
+                            (block['type'] == 'input' ||
+                                block['type'] == 'multiline'))
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: TextFormField(
+                              initialValue: form[block['id']] as String,
+                              minLines: block['type'] == 'multiline' ? 3 : 1,
+                              maxLines: block['type'] == 'multiline' ? 8 : 1,
+                              decoration: InputDecoration(
+                                labelText: block['label'] as String,
+                              ),
+                              onChanged: (value) =>
+                                  form[block['id'] as String] = value,
+                            ),
+                          )
+                        else if (block is Map && block['type'] == 'select')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: DropdownButtonFormField<String>(
+                              initialValue: form[block['id']] as String,
+                              decoration: InputDecoration(
+                                labelText: block['label'] as String,
+                              ),
+                              items: [
+                                for (final option
+                                    in block['options'] as List<String>)
+                                  DropdownMenuItem(
+                                    value: option,
+                                    child: Text(option),
+                                  ),
+                              ],
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setPageState(
+                                    () => form[block['id'] as String] = value,
+                                  );
+                                }
+                              },
+                            ),
+                          )
+                        else if (block is Map && block['type'] == 'image')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.file(
+                                File(
+                                  '${extension.directoryPath}/${block['src']}',
+                                ),
+                                semanticLabel: block['alt'] as String?,
+                                fit: BoxFit.contain,
+                                errorBuilder: (_, _, _) =>
+                                    const SizedBox.shrink(),
+                              ),
+                            ),
+                          )
+                        else if (block is Map && block['type'] == 'toggle')
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(block['label'] as String),
+                            value: form[block['id']] == true,
+                            onChanged: (value) => setPageState(
                               () => form[block['id'] as String] = value,
                             ),
+                          )
+                        else if (block is Map && block['type'] == 'slider')
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${block['label']} · ${(form[block['id']] as double).toStringAsFixed(2)}',
+                              ),
+                              Slider(
+                                min: block['min'] as double,
+                                max: block['max'] as double,
+                                value: form[block['id']] as double,
+                                onChanged: (value) => setPageState(
+                                  () => form[block['id'] as String] = value,
+                                ),
+                              ),
+                            ],
+                          )
+                        else if (block is Map && block['type'] == 'button')
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: FilledButton.tonal(
+                              onPressed: () => _run(
+                                pageContext,
+                                ref,
+                                block['action'] as String,
+                                contextData: {
+                                  'pageId': raw['id'],
+                                  'form': Map<String, Object?>.of(form),
+                                },
+                              ),
+                              child: Text(block['label'] as String),
+                            ),
                           ),
-                        ],
-                      )
-                    else if (block is Map && block['type'] == 'button')
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: FilledButton.tonal(
-                          onPressed: () => _run(
-                            dialogContext,
-                            ref,
-                            block['action'] as String,
-                            contextData: {
-                              'pageId': raw['id'],
-                              'form': Map<String, Object?>.of(form),
-                            },
-                          ),
-                          child: Text(block['label'] as String),
-                        ),
-                      ),
-                ],
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: Text(ref.tr('close')),
-            ),
-          ],
         ),
       ),
     );

@@ -656,7 +656,11 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   }
 
   void _showAddToPlaylist(BuildContext context, MediaItem media) {
-    final playlists = ref.read(libraryProvider).playlists;
+    final playlists = ref
+        .read(libraryProvider)
+        .playlists
+        .where((playlist) => !playlist.isSmart)
+        .toList();
     if (playlists.isEmpty) {
       ScaffoldMessenger.of(
         context,
