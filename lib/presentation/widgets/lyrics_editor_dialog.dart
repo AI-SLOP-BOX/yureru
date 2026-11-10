@@ -2030,10 +2030,10 @@ class _LyricsEditorDialogState extends ConsumerState<LyricsEditorDialog> {
                                                                 child: Center(
                                                                   child: Container(
                                                                     height: 1,
-                                                                    color: Theme.of(context)
-                                                                        .colorScheme
-                                                                        .onSurface
-                                                                        .withValues(
+                                                                    color:
+                                                                        Theme.of(
+                                                                          context,
+                                                                        ).colorScheme.onSurface.withValues(
                                                                           alpha:
                                                                               0.24,
                                                                         ),

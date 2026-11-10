@@ -1427,51 +1427,45 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'desktop PiP action stays visible at phone-sized widths',
-    (tester) async {
-      tester.view.physicalSize = const Size(600, 900);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.reset);
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [activeLanguageCodeProvider.overrideWithValue('ja')],
-          child: MaterialApp(
-            theme: yureruTheme(),
-            home: Scaffold(
-              body: TopBar(onOpenSearch: () {}, onSubmitSearch: (_) {}),
-            ),
+  testWidgets('desktop PiP action stays visible at phone-sized widths', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [activeLanguageCodeProvider.overrideWithValue('ja')],
+        child: MaterialApp(
+          theme: yureruTheme(),
+          home: Scaffold(
+            body: TopBar(onOpenSearch: () {}, onSubmitSearch: (_) {}),
           ),
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      expect(
-        find.descendant(
-          of: find.byType(TopBar),
-          matching: find.byTooltip('ピクチャ・イン・ピクチャ'),
-        ),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-    },
-    variant: const TargetPlatformVariant({TargetPlatform.macOS}),
-  );
+    expect(
+      find.descendant(
+        of: find.byType(TopBar),
+        matching: find.byTooltip('ピクチャ・イン・ピクチャ'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  }, variant: const TargetPlatformVariant({TargetPlatform.macOS}));
 
-  testWidgets(
-    'compact player keeps a desktop PiP action',
-    (tester) async {
-      final media = MediaItem(title: '小画面テスト', localPath: '/tmp/compact.mp4');
-      final c = await pumpHomeWithMedia(tester, media);
-      tester.view.physicalSize = const Size(600, 900);
-      c.read(queueProvider.notifier).start([media.id], shuffle: false);
-      await tester.pumpAndSettle();
+  testWidgets('compact player keeps a desktop PiP action', (tester) async {
+    final media = MediaItem(title: '小画面テスト', localPath: '/tmp/compact.mp4');
+    final c = await pumpHomeWithMedia(tester, media);
+    tester.view.physicalSize = const Size(600, 900);
+    c.read(queueProvider.notifier).start([media.id], shuffle: false);
+    await tester.pumpAndSettle();
 
-      expect(find.byTooltip('ピクチャ・イン・ピクチャ'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    },
-    variant: const TargetPlatformVariant({TargetPlatform.macOS}),
-  );
+    expect(find.byTooltip('ピクチャ・イン・ピクチャ'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  }, variant: const TargetPlatformVariant({TargetPlatform.macOS}));
 
   testWidgets('desktop sidebar can be pinned and follows its panel', (
     tester,
