@@ -134,7 +134,7 @@ jobs:
           flatpak install --user --noninteractive -y flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08
           rm -rf packaging/flatpak/bundle build/flatpak
           cp -R build/linux/x64/release/bundle packaging/flatpak/bundle
-          flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=build/flatpak/repo build/flatpak/app packaging/flatpak/dev.yureru.yureru.yml
+          flatpak-builder --user --force-clean --disable-rofiles-fuse --default-branch=stable --repo=build/flatpak/repo build/flatpak/app packaging/flatpak/dev.yureru.yureru.yml
           flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo build/flatpak/repo build/yureru-linux-x86_64.flatpak dev.yureru.yureru stable
 
       - name: Prepare version-pinned Homebrew formula
