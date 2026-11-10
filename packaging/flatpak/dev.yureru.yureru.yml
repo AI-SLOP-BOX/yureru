@@ -17,7 +17,7 @@ finish-args:
   - --env=GTK_USE_PORTAL=1
   - --env=LD_LIBRARY_PATH=/app/lib:/app/lib/yureru/lib
 modules:
-  - packaging/flatpak/modules/mpv.json
+  - modules/mpv.json
   - name: yureru
     buildsystem: simple
     build-commands:
@@ -30,10 +30,10 @@ modules:
       - cp -a share/licenses/dev.yureru.yureru/. /app/share/licenses/dev.yureru.yureru/
     sources:
       - type: dir
-        path: packaging/flatpak/bundle
+        path: bundle
       - type: file
-        path: packaging/flatpak/dev.yureru.yureru.desktop
+        path: dev.yureru.yureru.desktop
       - type: file
-        path: packaging/flatpak/dev.yureru.yureru.metainfo.xml
+        path: dev.yureru.yureru.metainfo.xml
       - type: file
-        path: packaging/flatpak/icons/dev.yureru.yureru.png
+        path: icons/dev.yureru.yureru.png
