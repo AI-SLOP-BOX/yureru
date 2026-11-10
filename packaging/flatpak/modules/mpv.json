@@ -131,6 +131,9 @@
         {
             "name": "libplacebo",
             "buildsystem": "meson",
+  "config-opts": [
+    "-Dvulkan=disabled"
+  ],
             "cleanup": [
                 "/include",
                 "/lib/pkgconfig"
