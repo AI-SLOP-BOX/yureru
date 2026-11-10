@@ -325,6 +325,7 @@ class _QueuePanelState extends ConsumerState<QueuePanel> {
                       buildDefaultDragHandles: false,
                       padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
                       itemCount: displayIndices.length,
+                      // ignore: deprecated_member_use
                       onReorder: (oldIndex, newIndex) {
                         if (newIndex > oldIndex) newIndex -= 1;
                         final fromQueueIndex = displayIndices[oldIndex];

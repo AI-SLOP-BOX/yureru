@@ -579,6 +579,7 @@ class _PlaylistDetailScreenState extends ConsumerState<PlaylistDetailScreen> {
                 )
               : ReorderableListView(
                   buildDefaultDragHandles: false,
+                  // ignore: deprecated_member_use
                   onReorder: (from, to) {
                     if (sort != PlaylistContentSort.playlistOrder ||
                         query.isNotEmpty) {

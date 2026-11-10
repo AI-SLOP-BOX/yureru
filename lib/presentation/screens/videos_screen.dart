@@ -934,6 +934,7 @@ class _VideosScreenState extends ConsumerState<VideosScreen> {
                       buildDefaultDragHandles: false,
                       padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
                       itemCount: items.length,
+                      // ignore: deprecated_member_use
                       onReorder: (oldIndex, newIndex) {
                         if (newIndex > oldIndex) newIndex--;
                         ref

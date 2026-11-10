@@ -277,7 +277,7 @@ class ThumbnailService {
       }
       if (Platform.isMacOS && _isWebm(localPath)) {
         // Avoid the crash-prone mpv screenshot path for WebM on macOS.
-        return _throttled(
+        return await _throttled(
           () => _generateWithFfmpeg(
             mediaId,
             localPath,
@@ -286,7 +286,7 @@ class ThumbnailService {
           ),
         );
       }
-      return _throttled(() async {
+      return await _throttled(() async {
         final native = await _generate(
           mediaId,
           localPath,
