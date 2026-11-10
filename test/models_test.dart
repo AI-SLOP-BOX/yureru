@@ -94,6 +94,7 @@ void main() {
       videoLyricsOffsetMs: -1000,
       artworkLyricsPath: '/artwork.lrc',
       artworkLyricsOffsetMs: 250,
+      artworkLyricsOffsetFollowsVideo: false,
     );
     final restored = MediaItem.fromJson(split.toJson());
     expect(restored.lyricsPathForView(artwork: false), '/video.lrc');

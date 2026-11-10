@@ -58,7 +58,12 @@ persistence. Run `flutter analyze` and `flutter test` after changes.
 
 ## Tests
 
-`flutter test`
+`flutter test` runs the full test suite locally.
+
+Pull requests and pushes to `main` run format checks, `flutter analyze`, and
+the stable core behavior tests in GitHub Actions. The broader widget suite is
+not yet a merge gate; several UI tests still expect older screen layouts and
+need to be updated before the full suite can gate merges.
 
 ## Release builds
 

@@ -13,7 +13,7 @@ void main() {
 
   test('formats co-creator separators with a middle dot', () {
     expect(formatCreatorNames('作者A、作者B'), '作者A・作者B');
-    expect(formatCreatorNames('作者A / 作者B'), '作者A・作者B');
     expect(splitCreatorNames('作者A・作者B'), ['作者A', '作者B']);
+    expect(splitCreatorNames('作者A / 作者B'), ['作者A / 作者B']);
   });
 }

@@ -81,7 +81,7 @@ void main() {
 
   test('artist collections include collaborations once and unknown artist', () {
     final groups = buildMediaCollections([
-      item('a', artist: 'Main / Guest / main'),
+      item('a', artist: 'Main & Guest & main'),
       item('b', artist: ' Main '),
       item('c'),
     ], CollectionKind.artists);

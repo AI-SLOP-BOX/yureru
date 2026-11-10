@@ -64,6 +64,7 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   final GlobalKey _compactPlayerVisualKey = GlobalKey();
   final GlobalKey _compactPlayerTitleKey = GlobalKey();
   late StateController<Rect?> _ambientApertureController;
+  late StateController<Rect?> _pictureInPictureSourceRectController;
   late PlaybackEngine _engine;
   Rect? _lastAmbientAperture;
   bool _ambientBoundsReportScheduled = false;
@@ -303,6 +304,9 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
   @override
   void initState() {
     super.initState();
+    _pictureInPictureSourceRectController = ref.read(
+      pictureInPictureSourceRectProvider.notifier,
+    );
     _ambientApertureController = ref.read(
       ambientVideoApertureProvider.notifier,
     );
@@ -722,7 +726,15 @@ class _PlayerCardState extends ConsumerState<PlayerCard> {
       _trackGlobalMousePosition,
     );
     _clearAmbientVideoBounds();
-    ref.read(pictureInPictureSourceRectProvider.notifier).state = null;
+    final pictureInPictureSourceRect =
+        _pictureInPictureSourceRectController.state;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_pictureInPictureSourceRectController.mounted &&
+          _pictureInPictureSourceRectController.state ==
+              pictureInPictureSourceRect) {
+        _pictureInPictureSourceRectController.state = null;
+      }
+    });
     _engine.setAmbientFrameSource(null);
     super.dispose();
   }

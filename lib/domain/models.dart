@@ -119,9 +119,9 @@ class MediaItem {
     this.lyricsOffsetMs = 0,
     this.separateLyricsByView = false,
     this.videoLyricsPath,
-    this.videoLyricsOffsetMs = 0,
+    int? videoLyricsOffsetMs,
     this.artworkLyricsPath,
-    this.artworkLyricsOffsetMs = 0,
+    int? artworkLyricsOffsetMs,
     this.artworkLyricsOffsetFollowsVideo = true,
     this.artworkAudioMediaId,
     this.artworkAudioPath,
@@ -129,7 +129,11 @@ class MediaItem {
     this.artworkAudioEndMs = 0,
     this.lyricsButtonHidden = false,
   }) : id = id ?? _uuid.v4(),
-       createdAt = createdAt ?? DateTime.now();
+       createdAt = createdAt ?? DateTime.now(),
+       videoLyricsOffsetMs =
+           videoLyricsOffsetMs ?? (separateLyricsByView ? lyricsOffsetMs : 0),
+       artworkLyricsOffsetMs =
+           artworkLyricsOffsetMs ?? (separateLyricsByView ? lyricsOffsetMs : 0);
 
   String? lyricsPathForView({required bool artwork}) {
     if (!separateLyricsByView) return lyricsPath;

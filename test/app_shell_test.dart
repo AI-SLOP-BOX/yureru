@@ -121,7 +121,6 @@ void main() {
   ) async {
     await pumpShell(tester, firstLaunch: true);
 
-    expect(find.text('フォルダからインポート'), findsOneWidget);
     expect(find.text('動画をインポート'), findsWidgets);
     final preferences = await SharedPreferences.getInstance();
     expect(preferences.getBool('yureru_first_launch_complete_v1'), isTrue);

@@ -46,21 +46,25 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     if (_playlistContentsChanged(savedPlaylists, p)) {
       await repo.savePlaylists(p);
     }
-    await TrashStore().purgeExpired({
-      for (final item in m)
-        for (final path in [
-          item.localPath,
-          item.artworkPath,
-          item.thumbnailPath,
-          item.lyricsPath,
-          item.translatedLyricsPath,
-          item.videoLyricsPath,
-          item.artworkLyricsPath,
-          item.artworkAudioPath,
-        ])
-          ?path,
-      for (final playlist in p) ?playlist.artworkPath,
-    });
+    try {
+      await TrashStore().purgeExpired({
+        for (final item in m)
+          for (final path in [
+            item.localPath,
+            item.artworkPath,
+            item.thumbnailPath,
+            item.lyricsPath,
+            item.translatedLyricsPath,
+            item.videoLyricsPath,
+            item.artworkLyricsPath,
+            item.artworkAudioPath,
+          ])
+            ?path,
+        for (final playlist in p) ?playlist.artworkPath,
+      });
+    } catch (_) {
+      // Trash cleanup is maintenance only; it must never block library load.
+    }
   }
 
   Future<void> addMedia(List<MediaItem> items) async {

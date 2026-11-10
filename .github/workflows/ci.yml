@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Analyze and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Check Dart formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze
+        run: flutter analyze --no-pub
+
+      - name: Run core behavior tests
+        run: >-
+          flutter test --no-pub --concurrency=1
+          test/models_test.dart
+          test/queue_test.dart
+          test/playback_controller_test.dart
+          test/lyrics_test.dart
+          test/media_collections_test.dart
+          test/creator_names_test.dart
