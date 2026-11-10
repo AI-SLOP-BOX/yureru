@@ -12,7 +12,7 @@
         "-Dgpl=false"
     ],
     "post-install": [
-        "install -Dm644 LICENSE.LGPL /app/share/licenses/dev.yureru.yureru/libmpv.LICENSE"
+        "install -Dm644 ../LICENSE.LGPL /app/share/licenses/dev.yureru.yureru/libmpv.LICENSE"
     ],
     "sources": [
         {
