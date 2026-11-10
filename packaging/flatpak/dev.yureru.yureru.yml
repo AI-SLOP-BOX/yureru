@@ -4,11 +4,6 @@ runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 command: yureru
 separate-locales: false
-add-extensions:
-  org.freedesktop.Platform.ffmpeg-full:
-    directory: lib/ffmpeg
-    version: '26.08'
-    add-ld-path: .
 finish-args:
   - --share=ipc
   - --socket=wayland
@@ -20,7 +15,7 @@ finish-args:
   - --filesystem=xdg-music:ro
   - --filesystem=xdg-pictures:ro
   - --env=GTK_USE_PORTAL=1
-  - --env=LD_LIBRARY_PATH=/app/lib:/app/lib/ffmpeg:/app/lib/yureru/lib
+  - --env=LD_LIBRARY_PATH=/app/lib:/app/lib/yureru/lib
 modules:
   - packaging/flatpak/modules/mpv.json
   - name: yureru

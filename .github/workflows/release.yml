@@ -131,7 +131,7 @@ jobs:
       - name: Build cross-distro Flatpak
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user --noninteractive -y flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08 org.freedesktop.Platform.ffmpeg-full//26.08
+          flatpak install --user --noninteractive -y flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08
           rm -rf packaging/flatpak/bundle build/flatpak
           cp -R build/linux/x64/release/bundle packaging/flatpak/bundle
           flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=build/flatpak/repo build/flatpak/app packaging/flatpak/dev.yureru.yureru.yml
@@ -172,6 +172,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
